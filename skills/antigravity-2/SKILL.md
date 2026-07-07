@@ -1,6 +1,6 @@
 ---
 name: antigravity-2
-description: Connect Codex to a local Antigravity 2.0 desktop app for setup checks, model limits, live project/chat inspection, project creation, chat creation, and safe conversation handoff.
+description: Connect Codex to local Antigravity 2.0, Claude Code, and Cursor workers for mobile-started Codex workflows, with CLI-first routing and UI fallback when visible state is needed.
 license: MIT
 ---
 
@@ -23,6 +23,7 @@ Core jobs:
 - Create durable bridge jobs and read compact artifacts instead of inspecting full Antigravity chats.
 - Use Antigravity CLI (`agy`) for low-RAM Antigravity work when visible desktop UI/project/chat state is not required.
 - Use local Claude Code CLI as an optional headless worker for coding/review bridge jobs when Antigravity UI context is not needed.
+- Use local Cursor as an optional UI worker for Cursor workspace/chat workflows, and use `cursor-agent` headlessly only when a true `cursor-agent` binary is installed.
 
 Primary operating model:
 
@@ -35,17 +36,20 @@ Primary operating model:
 - Codex should not duplicate Antigravity's file reading, broad search, browser operation, or long reasoning unless Antigravity is blocked, unavailable, or the task is tiny.
 - For Antigravity tasks that do not need visible desktop UI/project/chat state, Codex should delegate through `submit-agy-job` first and then read the same compact bridge artifacts.
 - For local coding/review tasks that do not need Antigravity context, Codex may delegate to Claude Code through `submit-claude-job` and then read the same compact bridge artifacts.
+- For Cursor workflows, Codex should run `cursor-status` first. Use `open-cursor` for UI workflows. Use `submit-cursor-job` only when `HeadlessAgentFound: true`.
 
 ## MCP Tool Surfaces
 
 This plugin exposes two MCP servers:
 
-- `antigravity-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
+- `antigravity-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
 - `antigravity-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
 
 Prefer `antigravity-local.submit-job` for nontrivial coding/workspace work. It creates a durable `.antigravity-bridge/jobs/<jobId>/` folder, asks Antigravity to write compact artifacts, verifies/switches the selected model, submits once, and lets Codex stop watching the UI. Use `antigravity-local.read-job` later to read only the artifact files. Use `antigravity-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted, do not wait for the user to say so: call `antigravity-local.switch-model` with `modelPreference=flash-medium` or pass `modelPreference=flash-medium` to `submit-job` / `submit-offload`. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper equivalents before falling back to DevTools choreography. Use `antigravity-local.prepare-offload` when Codex should first show the plan or when the selected chat is uncertain. For any nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, or job-application task, default to Antigravity for exploration and long reasoning, while Codex stays the planner, safety gate, patch reviewer, and final summarizer. Use `antigravity-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false or `PageCount` is zero, call `antigravity-local.repair-live` once before using DevTools. If `repair-live` restarts Antigravity, do not keep using an already-started stale DevTools MCP connection; let it reconnect to the new port before UI calls. If `antigravity-devtools` fails with `Transport closed`, do not repeatedly call `list_pages` in that session. Call `antigravity-local.devtools-health`; if it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for a manual paste this turn. Use `limits-summary` for normal quota checks and full `limits` only when complete per-model JSON is needed. Use `antigravity-devtools` for project/chat selection only when the selected chat is not already correct. If this skill file cannot be read in a Codex session, run the PowerShell helper fast path.
 
 Use `antigravity-local.claude-status` and `antigravity-local.submit-claude-job` for headless local coding/review jobs when the user has Claude Code installed and the task does not need Antigravity's visible UI/chat context. `submit-claude-job` creates `.antigravity-bridge/jobs/<jobId>/`, starts Claude Code in non-interactive mode, and returns immediately. Codex should later call `read-job` and inspect only compact artifacts. Do not use Claude Code as a hidden substitute for Antigravity project/chat work; use it as a local worker for code review, patching, and repository analysis.
+
+Use `antigravity-local.cursor-status` before any Cursor workflow. If it reports `HeadlessAgentFound: true`, Codex may use `submit-cursor-job` for durable compact artifacts. If only the Cursor UI launcher is available, use `open-cursor` for a visual Cursor workspace/chat and do not call it a headless job. On Windows, this plugin treats `cursor.cmd agent -p` as UI-only unless a separate `cursor-agent` binary is found.
 
 Use `antigravity-local.agy-status`, `antigravity-local.agy-models`, and `antigravity-local.submit-agy-job` for low-RAM Antigravity work. `submit-agy-job` uses official Antigravity CLI print mode and does not open the desktop app. Prefer it before desktop UI tools unless the user explicitly asks to inspect/continue a visible Antigravity project/chat or use Manager/Editor UI state.
 
@@ -165,11 +169,21 @@ Call antigravity-local.submit-claude-job with goal, workspace, mode, nextStep, m
 Call antigravity-local.read-job with workspace and the returned jobId.
 ```
 
+Use Cursor for Cursor-specific workflows:
+
+```text
+Call antigravity-local.cursor-status.
+If HeadlessAgentFound is true, call antigravity-local.submit-cursor-job with goal, workspace, mode, nextStep, and start=true.
+If HeadlessAgentFound is false but UiFound is true, call antigravity-local.open-cursor with workspace and chat=true only when a visible Cursor UI workflow is needed.
+```
+
 PowerShell fallback:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" claude-status
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" submit-claude-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -ClaudeModel sonnet
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" cursor-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" open-cursor -Workspace "<path>" -CursorChat true
 ```
 
 Use `-Start false` to validate job creation without starting Claude Code. The helper does not use `--dangerously-skip-permissions` by default; review mode defaults to Claude Code `plan`, and patch/fast/deep default to `acceptEdits`.
@@ -385,6 +399,7 @@ Core rule:
 - Antigravity CLI is the default low-RAM Antigravity worker.
 - Antigravity desktop UI is the visual project/chat worker only when UI state matters.
 - Claude Code is the headless local worker when UI/project chat context is unnecessary.
+- Cursor is a UI worker unless `cursor-status` reports a true headless `cursor-agent`.
 - Files are the compact memory between them.
 
 Do not copy large files, long logs, full source, or full Antigravity chat transcripts into Codex. Savings happen only when Codex sends compact instructions, lets Antigravity inspect the workspace locally, and reads back a small artifact or status checkpoint.
@@ -394,12 +409,13 @@ Fast preferred flow:
 1. If the task is Antigravity-capable but does not require visible desktop UI/project/chat state, call `antigravity-local.agy-status`, `agy-models`, then `submit-agy-job`; read artifacts with `read-job`.
 2. If the correct desktop project/chat is already selected and visible UI context matters, call `antigravity-local.submit-job` with `submit=true`, `modelPreference=auto`, and expected visible project/chat text.
 3. If the task is pure repository code/review work and does not require Antigravity context, call `antigravity-local.claude-status` and then `antigravity-local.submit-claude-job`; read artifacts with `read-job`.
-4. If a quota warning is visible or the user mentions Sonnet/Opus/GPT-OSS exhaustion in the desktop UI, call `antigravity-local.switch-model` with `modelPreference=flash-medium` first.
-5. If MCP job/model tools are not visible, run `antigravity.ps1 submit-agy-job` / `antigravity.ps1 submit-job` / `antigravity.ps1 submit-claude-job` / `antigravity.ps1 switch-model` with the same fields.
-6. If the selected desktop chat is uncertain, call `antigravity-local.prepare-offload`, then use DevTools only to select the project/chat; use `switch-model` for the model.
-7. If the decision is `codex-direct`, do not open or drive Antigravity.
-8. After a successful `submit-agy-job`, `submit-job`, or `submit-claude-job`, stop watching every step. Read only the job artifacts with `read-job`.
-9. If the artifact is weak, issue another compact Antigravity/Claude follow-up or retry with the exact missing point. Do not pull broad context back into Codex unless needed for final verification.
+4. If the task belongs in Cursor, call `antigravity-local.cursor-status`; use `submit-cursor-job` only when a true headless agent is available, otherwise use `open-cursor` for visible UI handoff.
+5. If a quota warning is visible or the user mentions Sonnet/Opus/GPT-OSS exhaustion in the desktop UI, call `antigravity-local.switch-model` with `modelPreference=flash-medium` first.
+6. If MCP job/model tools are not visible, run `antigravity.ps1 submit-agy-job` / `antigravity.ps1 submit-job` / `antigravity.ps1 submit-claude-job` / `antigravity.ps1 cursor-status` / `antigravity.ps1 switch-model` with the same fields.
+7. If the selected desktop chat is uncertain, call `antigravity-local.prepare-offload`, then use DevTools only to select the project/chat; use `switch-model` for the model.
+8. If the decision is `codex-direct`, do not open or drive Antigravity.
+9. After a successful `submit-agy-job`, `submit-job`, `submit-claude-job`, or `submit-cursor-job`, stop watching every step. Read only the job artifacts with `read-job`.
+10. If the artifact is weak, issue another compact Antigravity/Claude/Cursor follow-up or retry with the exact missing point. Do not pull broad context back into Codex unless needed for final verification.
 
 Detailed fallback flow:
 

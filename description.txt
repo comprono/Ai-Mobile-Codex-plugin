@@ -1,1 +1,1 @@
-AI Mobile is a community Codex plugin for connecting mobile-started OpenAI Codex sessions to local Antigravity 2.0 and Claude Code workers on Windows.
+AI Mobile is a community Codex plugin for connecting mobile-started OpenAI Codex sessions to local Antigravity 2.0, Claude Code, and Cursor workers on Windows.

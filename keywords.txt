@@ -3,6 +3,9 @@ mobile codex desktop bridge
 openai codex antigravity
 antigravity 2.0 codex plugin
 claude code codex bridge
+cursor codex bridge
+cursor agent codex
+cursor ui handoff
 codex mcp plugin
 devtools mcp antigravity
 codex windows bridge

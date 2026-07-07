@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added Cursor bridge support through `cursor-status`, `open-cursor`, and fail-closed `submit-cursor-job`.
+- Documented that the Windows `cursor.cmd` launcher is UI-only unless a separate true `cursor-agent` binary is available.
 - Added optional Claude Code headless bridge support through `claude-status` and `submit-claude-job`.
 - Added PowerShell helper commands for Claude Code bridge jobs with safe defaults and `-Start false` dry-run support.
 - Reused `.antigravity-bridge/jobs/<jobId>/` artifacts for Claude Code so Codex can read the same compact outputs without watching another chat.

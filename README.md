@@ -2,19 +2,19 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for mobile-started OpenAI Codex workflows that need to reach local desktop AI workers on Windows. It connects Codex to Google Antigravity / Antigravity 2.0 through the lightweight `agy` CLI, MCP, Chromium DevTools, and local PowerShell helper commands, and it can also dispatch coding/review jobs to a local Claude Code CLI headless worker.
+AI Mobile is a community Codex MCP plugin for mobile-started OpenAI Codex workflows that need to reach local desktop AI workers on Windows. It connects Codex to Google Antigravity / Antigravity 2.0 through the lightweight `agy` CLI, MCP, Chromium DevTools, and local PowerShell helper commands, and it can also dispatch coding/review jobs to local Claude Code and Cursor workers when their CLIs are available.
 
-Use this repo for the combined bridge: ChatGPT mobile or Codex can hand work to the Windows desktop, then use Antigravity CLI for low-RAM Antigravity work, Antigravity desktop only for visible project/chat/UI workflows, and Claude Code for headless local coding or review jobs.
+Use this repo for the combined bridge: ChatGPT mobile or Codex can hand work to the Windows desktop, then use Antigravity CLI for low-RAM Antigravity work, Antigravity desktop only for visible project/chat/UI workflows, Claude Code for headless local coding or review jobs, and Cursor UI when a visible Cursor workspace/chat is the right surface.
 
 The Antigravity-only project remains in the separate `antigravity-2-codex-plugin` repository.
 
-After setup, you can start from the ChatGPT mobile app, open Codex, and use this local plugin as the bridge into your Windows Antigravity and Claude Code desktop session.
+After setup, you can start from the ChatGPT mobile app, open Codex, and use this local plugin as the bridge into your Windows Antigravity, Claude Code, and Cursor desktop session.
 
 ## AI Mobile Bridge
 
-This is a community Codex plugin for connecting OpenAI Codex to local AI desktop workers. It provides an Antigravity 2.0 Codex bridge for visible Antigravity project/chat workflows and an optional Claude Code headless bridge for local repository work. Both worker paths write compact `.antigravity-bridge/jobs/<jobId>/` artifacts so Codex can save tokens by reading results instead of watching full chats or logs.
+This is a community Codex plugin for connecting OpenAI Codex to local AI desktop workers. It provides an Antigravity 2.0 Codex bridge for visible Antigravity project/chat workflows, an optional Claude Code headless bridge for local repository work, and Cursor UI/headless-agent detection for Cursor-based workflows. Worker paths write compact `.antigravity-bridge/jobs/<jobId>/` artifacts so Codex can save tokens by reading results instead of watching full chats or logs.
 
-Keywords: AI Mobile Codex plugin, OpenAI Codex Antigravity, Antigravity 2.0 Codex bridge, Claude Code Codex bridge, Codex MCP plugin, DevTools MCP Antigravity, mobile Codex desktop bridge.
+Keywords: AI Mobile Codex plugin, OpenAI Codex Antigravity, Antigravity 2.0 Codex bridge, Claude Code Codex bridge, Cursor Codex bridge, Codex MCP plugin, DevTools MCP Antigravity, mobile Codex desktop bridge.
 ## What It Does
 
 - Launches the local Antigravity desktop app.
@@ -25,6 +25,7 @@ Keywords: AI Mobile Codex plugin, OpenAI Codex Antigravity, Antigravity 2.0 Code
 - Creates durable `.antigravity-bridge/jobs/<jobId>/` folders so Codex can submit work once and later read compact result artifacts.
 - Runs low-RAM Antigravity CLI bridge jobs with `agy -p` when visible UI state is not required.
 - Optionally dispatches durable bridge jobs to local Claude Code headless mode when the `claude` CLI is installed.
+- Detects local Cursor, opens Cursor workspaces or standalone chat only when needed, and uses a true `cursor-agent` binary for headless jobs when one is installed.
 - Helps Codex inspect live project/chat context from the UI.
 - Supports safe handoff to continue an existing chat, start a new chat in an existing project, or start a new project.
 - Provides a local privacy scan for sensitive data before publishing changes.
@@ -37,6 +38,7 @@ Keywords: AI Mobile Codex plugin, OpenAI Codex Antigravity, Antigravity 2.0 Code
 - Codex plugins loaded from `%USERPROFILE%\plugins`.
 - Node.js available on `PATH` for the DevTools MCP bridge.
 - Optional: Claude Code CLI available as `claude` on `PATH` and logged in for headless Claude bridge jobs.
+- Optional: Cursor installed at `%LOCALAPPDATA%\Programs\cursor`; a true `cursor-agent` binary is required for headless Cursor jobs. The normal `cursor.cmd` launcher is treated as UI-only on Windows.
 
 ## Install
 
@@ -60,7 +62,7 @@ The setup report tells Codex whether Antigravity is installed, whether Node.js i
 
 The plugin registers two MCP servers:
 
-- `antigravity-local`: direct local tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
+- `antigravity-local`: direct local tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
 - `antigravity-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
 
 Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity. The DevTools MCP server only connects when Antigravity is already running and inspectable; use `antigravity-local.open` or `antigravity-local.repair-live` only after the user asks to use Antigravity.
@@ -70,6 +72,8 @@ Codex should call `antigravity-local.submit-job` first for nontrivial workspace 
 When Antigravity work does not require visible desktop project/chat state, Codex should call `antigravity-local.agy-status`, `antigravity-local.agy-models`, and `antigravity-local.submit-agy-job` before opening the desktop UI. This uses Antigravity CLI print mode, creates the same durable job folder, and avoids desktop RAM overhead. Use the Antigravity desktop UI only for visual project/chat state, model picker work, or workflows that require the Manager/Editor interface.
 
 When the task is local coding or review work and Antigravity context is not needed, Codex can call `antigravity-local.claude-status` and then `antigravity-local.submit-claude-job`. This uses Claude Code's non-interactive CLI mode, creates the same durable job folder, and returns immediately so Codex can later call `read-job` instead of watching a chat.
+
+When the task belongs in Cursor, Codex should call `antigravity-local.cursor-status` first. If `HeadlessAgentFound` is true, Codex may use `submit-cursor-job`. If only the Cursor UI launcher is available, Codex should use `open-cursor` for the visual workflow and must not pretend that `cursor.cmd agent -p` is headless.
 
 Existing-chat submissions are strict. If `expectedChat` is provided, it must match the active Antigravity document title, not merely a sidebar item or previous message. The helper refuses to submit in a new chat and records `submit_failed` when Antigravity does not accept the prompt. Codex must not wait for artifacts unless the helper returns `Submitted: true`.
 
@@ -237,6 +241,16 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Cod
 Use `-Start false` to create and inspect the job without starting Claude Code. `submit-claude-job` writes into `.antigravity-bridge/jobs/<jobId>/` and returns immediately; call `read-job` later to inspect the compact artifacts. It does not use `--dangerously-skip-permissions` by default. Review mode defaults to Claude Code `plan`; other modes default to `acceptEdits`.
 
 If Claude Code returns `Not logged in`, run Claude Code locally and complete `/login`, then retry the bridge job.
+
+For Cursor workflows through the PowerShell helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" cursor-status
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" open-cursor -Workspace "<path>" -CursorChat true
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" submit-cursor-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>"
+```
+
+Use `submit-cursor-job` only when `cursor-status` reports `HeadlessAgentFound: true`. On Windows, the normal `cursor.cmd` launcher opens UI and is not treated as a reliable headless job runner.
 
 If UI submission is blocked by a stale DevTools port, use `antigravity-local.handoff-template` to generate the compact prompt and avoid repeated CDP probing. Restart Codex or paste the generated handoff manually so the next session attaches to the current Antigravity port.
 

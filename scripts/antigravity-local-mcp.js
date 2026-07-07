@@ -171,6 +171,43 @@ const tools = [
     },
   },
   {
+    name: "cursor-status",
+    description: "Report whether Cursor is installed and whether a true headless cursor-agent binary is available. Does not open Cursor.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "open-cursor",
+    description: "Open Cursor UI for a workspace or standalone chat when a visual Cursor workflow is needed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string", description: "Optional local workspace path to open in Cursor." },
+        chat: { type: "boolean", description: "Open Cursor standalone chat UI.", default: false },
+        newWindow: { type: "boolean", description: "Open in a new Cursor window.", default: false },
+        reuseWindow: { type: "boolean", description: "Reuse the last active Cursor window.", default: true },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "submit-cursor-job",
+    description: "Create a durable bridge job and run a true headless Cursor agent when cursor-agent is installed. Fails closed if only the Cursor UI launcher is available.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Task goal for Cursor agent." },
+        workspace: { type: "string", description: "Local workspace path where .antigravity-bridge/jobs will be created." },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
+        nextStep: { type: "string", description: "Specific next action.", default: "Inspect the relevant files and write compact artifacts." },
+        model: { type: "string", description: "Optional Cursor agent model id or alias." },
+        start: { type: "boolean", description: "Set false to create the job without starting Cursor agent.", default: true },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Cursor worker may run.", default: 30 },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "list-jobs",
     description: "List durable Antigravity bridge jobs from a workspace without reading chats or logs.",
     inputSchema: {
@@ -880,6 +917,137 @@ function getClaudeStatusText() {
   ].join("\n");
 }
 
+function quoteCmdArg(value) {
+  const text = String(value || "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function runWindowsFriendly(command, args = [], options = {}) {
+  const safeArgs = args.map((arg) => String(arg));
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    const commandLine = [quoteCmdArg(command), ...safeArgs.map(quoteCmdArg)].join(" ");
+    return spawnSync(commandLine, {
+      ...options,
+      input: options.input || undefined,
+      encoding: "utf8",
+      timeout: options.timeout || 10000,
+      windowsHide: true,
+      shell: true,
+    });
+  }
+  return spawnSync(command, safeArgs, {
+    ...options,
+    input: options.input || undefined,
+    encoding: "utf8",
+    timeout: options.timeout || 10000,
+    windowsHide: true,
+  });
+}
+
+function findCursorApp() {
+  const candidates = [];
+  if (process.platform === "win32") {
+    const where = spawnSync("where.exe", ["cursor"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+    for (const line of String(where.stdout || "").split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) candidates.push(trimmed);
+    }
+    if (process.env.LOCALAPPDATA) {
+      candidates.push(path.join(process.env.LOCALAPPDATA, "Programs", "cursor", "resources", "app", "bin", "cursor.cmd"));
+    }
+    candidates.push("cursor.cmd", "cursor");
+  } else {
+    candidates.push("cursor");
+  }
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const check = runWindowsFriendly(candidate, ["--version"], { timeout: 10000 });
+    if (check.status === 0) {
+      return { found: true, command: candidate, version: String(check.stdout || check.stderr || "").trim() };
+    }
+  }
+  return { found: false, command: "", version: "", message: "Cursor launcher was not found on PATH or in %LOCALAPPDATA%\\Programs\\cursor." };
+}
+
+function findCursorAgent() {
+  const candidates = [];
+  if (process.platform === "win32") {
+    const where = spawnSync("where.exe", ["cursor-agent"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+    for (const line of String(where.stdout || "").split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) candidates.push(trimmed);
+    }
+    candidates.push("cursor-agent.cmd", "cursor-agent");
+  } else {
+    candidates.push("cursor-agent");
+  }
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const check = runWindowsFriendly(candidate, ["--version"], { timeout: 10000 });
+    if (check.status === 0) {
+      return { found: true, command: candidate, version: String(check.stdout || check.stderr || "").trim() };
+    }
+  }
+  return {
+    found: false,
+    command: "",
+    version: "",
+    message: "A true headless cursor-agent binary was not found. This Cursor install exposes cursor.cmd for UI workflows, but cursor.cmd agent -p is not a reliable headless interface on this machine.",
+  };
+}
+
+function getCursorStatusText() {
+  const app = findCursorApp();
+  const agent = findCursorAgent();
+  return [
+    "CursorStatus:",
+    `UiFound: ${app.found}`,
+    `UiCommand: ${app.command || "<not found>"}`,
+    `UiVersion: ${app.version || "<unknown>"}`,
+    `HeadlessAgentFound: ${agent.found}`,
+    `HeadlessAgentCommand: ${agent.command || "<not found>"}`,
+    `HeadlessAgentVersion: ${agent.version || "<unknown>"}`,
+    `HeadlessAgentNote: ${agent.found ? "cursor-agent can be used for durable bridge jobs." : agent.message}`,
+    "Startup: passive; no Cursor window or agent job is started by this status check.",
+  ].join("\n");
+}
+
+function openCursorUi(args = {}) {
+  const app = findCursorApp();
+  if (!app.found) return `OpenCursorResult:\nOk: false\nBlocker: ${app.message}`;
+  const cliArgs = [];
+  if (args.chat === true) cliArgs.push("--chat");
+  if (args.newWindow === true) cliArgs.push("--new-window");
+  else if (args.reuseWindow !== false) cliArgs.push("--reuse-window");
+  if (args.workspace) cliArgs.push(safeWorkspacePath(args.workspace));
+
+  const child = spawn(app.command, cliArgs, {
+    cwd: args.workspace ? safeWorkspacePath(args.workspace) : pluginRoot,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+    shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(app.command),
+  });
+  child.unref();
+  return [
+    "OpenCursorResult:",
+    "Ok: true",
+    `Command: ${app.command}`,
+    `Pid: ${child.pid}`,
+    `Chat: ${args.chat === true}`,
+    args.workspace ? `Workspace: ${safeWorkspacePath(args.workspace)}` : null,
+    "Next: use Cursor UI directly for visual workflows; use submit-cursor-job only when cursor-agent is installed.",
+  ].filter(Boolean).join("\n");
+}
+
 function commandCheck(command, args = ["--version"], options = {}) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -1325,6 +1493,189 @@ function submitClaudeJob(args = {}) {
 
   return [
     "SubmitClaudeJobResult:",
+    `JobId: ${created.jobId}`,
+    `JobFolder: ${created.jobDir}`,
+    "State: running",
+    "Started: true",
+    `WorkerPid: ${child.pid}`,
+    "Next: call read-job with this jobId; Codex should read only compact artifacts.",
+  ].join("\n");
+}
+
+function safeCursorFlag(value, name) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (!/^[A-Za-z0-9._:/@()+ -]+$/.test(text)) {
+    throw new Error(`Unsafe Cursor agent ${name} value. Use a simple model or mode id.`);
+  }
+  return text;
+}
+
+function buildCursorJobPrompt(workspace, jobId, args = {}) {
+  const jobDir = jobDirFor(workspace, jobId);
+  const request = summarizeFile(path.join(jobDir, "request.md"), 18000);
+  return [
+    "You are Cursor Agent running as a local worker for Codex.",
+    "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
+    "",
+    request,
+    "",
+    "Artifact rules:",
+    `- Write the final compact result to: ${path.join(jobDir, "result.md")}`,
+    `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
+    `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
+    "- If blocked, write one concise blocker and the next smallest action.",
+    "- Keep result.md to max 10 bullets.",
+    "",
+    `Current next step: ${String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim()}`,
+  ].join("\n");
+}
+
+function runCursorJobWorker(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const jobId = resolveJobId(workspace, args.jobId);
+  const jobDir = jobDirFor(workspace, jobId);
+  const status = findCursorAgent();
+  if (!status.found) {
+    const blocker = status.message;
+    fs.writeFileSync(path.join(jobDir, "result.md"), `${blocker}\n`, "utf8");
+    fs.writeFileSync(path.join(jobDir, "changed-files.txt"), "NONE\n", "utf8");
+    fs.writeFileSync(path.join(jobDir, "test-output-summary.md"), "CursorAgentExitCode: <not started>\n", "utf8");
+    updateJobStatus(workspace, jobId, {
+      state: "failed",
+      currentStep: "cursor-agent-not-found",
+      blocker,
+    });
+    return `CursorJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${blocker}`;
+  }
+
+  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 30)));
+  const prompt = buildCursorJobPrompt(workspace, jobId, args);
+  const cliArgs = ["-p", "--output-format", "text"];
+  if (args.model) cliArgs.push("--model", safeCursorFlag(args.model, "model"));
+
+  updateJobStatus(workspace, jobId, {
+    state: "running",
+    worker: "cursor-agent",
+    currentStep: "cursor-agent-running",
+    startedAt: utcStamp(),
+    cursorCommand: status.command,
+    cursorVersion: status.version,
+    cursorModel: args.model || "",
+  });
+
+  const result = runWindowsFriendly(status.command, cliArgs, {
+    cwd: workspace,
+    input: prompt,
+    timeout: maxMinutes * 60 * 1000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+
+  const stdout = String(result.stdout || "");
+  const stderr = String(result.stderr || "");
+  fs.writeFileSync(path.join(jobDir, "cursor-output.txt"), truncateText(stdout, 80000), "utf8");
+  fs.writeFileSync(path.join(jobDir, "cursor-error.txt"), truncateText(stderr, 30000), "utf8");
+
+  const resultPath = path.join(jobDir, "result.md");
+  if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
+    fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Cursor agent produced no output>", 24000), "utf8");
+  }
+
+  const testsPath = path.join(jobDir, "test-output-summary.md");
+  if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
+    fs.writeFileSync(
+      testsPath,
+      [
+        `CursorAgentExitCode: ${result.status ?? "<unknown>"}`,
+        `TimedOut: ${Boolean(result.error && result.error.code === "ETIMEDOUT")}`,
+        stderr.trim() ? `Stderr: ${truncateText(stderr.trim(), 4000)}` : "Stderr: <empty>",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+  }
+
+  writeGitArtifacts(workspace, jobDir);
+
+  const failed = result.status !== 0 || Boolean(result.error);
+  updateJobStatus(workspace, jobId, {
+    state: failed ? "failed" : "completed",
+    currentStep: failed ? "cursor-agent-failed" : "cursor-agent-completed",
+    completedAt: utcStamp(),
+    exitCode: result.status,
+    blocker: failed ? truncateText(result.error?.message || stderr || stdout || "Cursor agent exited non-zero.", 1000) : "",
+  });
+
+  return [
+    "CursorJobWorkerResult:",
+    `JobId: ${jobId}`,
+    `State: ${failed ? "failed" : "completed"}`,
+    `JobFolder: ${jobDir}`,
+  ].join("\n");
+}
+
+function submitCursorJob(args = {}) {
+  const created = createJob({ ...args, worker: "cursor-agent" });
+  const start = args.start !== false;
+  updateJobStatus(created.workspace, created.jobId, {
+    worker: "cursor-agent",
+    currentStep: start ? "cursor-agent-queued" : "cursor-agent-created-not-started",
+  });
+
+  if (!start) {
+    return [
+      "SubmitCursorJobResult:",
+      `JobId: ${created.jobId}`,
+      `JobFolder: ${created.jobDir}`,
+      "State: queued",
+      "Started: false",
+      "Next: call submit-cursor-job again with start=true or run the worker from this job folder.",
+    ].join("\n");
+  }
+
+  const status = findCursorAgent();
+  if (!status.found) {
+    updateJobStatus(created.workspace, created.jobId, {
+      state: "failed",
+      currentStep: "cursor-agent-not-found",
+      blocker: status.message,
+    });
+    fs.writeFileSync(path.join(created.jobDir, "result.md"), `${status.message}\n`, "utf8");
+    fs.writeFileSync(path.join(created.jobDir, "changed-files.txt"), "NONE\n", "utf8");
+    fs.writeFileSync(path.join(created.jobDir, "test-output-summary.md"), "CursorAgentExitCode: <not started>\n", "utf8");
+    return [
+      "SubmitCursorJobResult:",
+      `JobId: ${created.jobId}`,
+      `JobFolder: ${created.jobDir}`,
+      "State: failed",
+      `Blocker: ${status.message}`,
+      "Fallback: call open-cursor for the visual Cursor UI path.",
+    ].join("\n");
+  }
+
+  const payloadPath = path.join(created.jobDir, "cursor-worker-payload.json");
+  writeJsonFile(payloadPath, {
+    ...args,
+    workspace: created.workspace,
+    jobId: created.jobId,
+  });
+  const child = spawn(process.execPath, [__filename, "cursor-job-worker-cli", "--json-file", payloadPath], {
+    cwd: pluginRoot,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+
+  updateJobStatus(created.workspace, created.jobId, {
+    state: "running",
+    currentStep: "cursor-agent-background-started",
+    workerPid: child.pid,
+    cursorCommand: status.command,
+    cursorVersion: status.version,
+  });
+
+  return [
+    "SubmitCursorJobResult:",
     `JobId: ${created.jobId}`,
     `JobFolder: ${created.jobDir}`,
     "State: running",
@@ -2000,6 +2351,23 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "cursor-status") {
+        sendResult(id, { content: [{ type: "text", text: getCursorStatusText() }] });
+        return;
+      }
+
+      if (name === "open-cursor") {
+        const text = openCursorUi(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "submit-cursor-job") {
+        const text = submitCursorJob(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "list-jobs") {
         const text = listJobs(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
@@ -2057,7 +2425,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -2085,6 +2453,10 @@ if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli
     "claude-status-cli": async () => getClaudeStatusText(),
     "submit-claude-job-cli": async (value) => submitClaudeJob(value),
     "claude-job-worker-cli": async (value) => runClaudeJobWorker(value),
+    "cursor-status-cli": async () => getCursorStatusText(),
+    "open-cursor-cli": async (value) => openCursorUi(value),
+    "submit-cursor-job-cli": async (value) => submitCursorJob(value),
+    "cursor-job-worker-cli": async (value) => runCursorJobWorker(value),
     "list-jobs-cli": async (value) => listJobs(value),
     "read-job-cli": async (value) => readJob(value),
     "cancel-job-cli": async (value) => cancelJob(value),

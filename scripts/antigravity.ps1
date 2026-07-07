@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "create-job", "submit-job", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "create-job", "submit-job", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -20,6 +20,10 @@ param(
   [string] $ClaudeFallbackModel = "",
   [string] $ClaudePermissionMode = "",
   [string] $ClaudeMaxBudgetUsd = "",
+  [string] $CursorModel = "",
+  [object] $CursorChat = $false,
+  [object] $CursorNewWindow = $false,
+  [object] $CursorReuseWindow = $true,
   [string] $Mode = "fast",
   [string] $JobId = "latest",
   [string] $Reason = "Cancelled by Codex.",
@@ -1063,6 +1067,46 @@ function Invoke-AgyBridgeCommand {
   }
 }
 
+function Invoke-CursorBridgeCommand {
+  param(
+    [string] $CliCommand
+  )
+
+  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  if (-not (Test-Path -LiteralPath $localMcpScript)) {
+    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+  }
+
+  $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
+  $chatValue = ConvertTo-BooleanValue -Value $CursorChat -Default $false
+  $newWindowValue = ConvertTo-BooleanValue -Value $CursorNewWindow -Default $false
+  $reuseWindowValue = ConvertTo-BooleanValue -Value $CursorReuseWindow -Default $true
+  $payload = [PSCustomObject]@{
+    goal = $Goal
+    workspace = $Workspace
+    mode = $Mode
+    nextStep = $NextStep
+    model = $CursorModel
+    chat = $chatValue
+    newWindow = $newWindowValue
+    reuseWindow = $reuseWindowValue
+    start = $startValue
+    jobId = $JobId
+    maxMinutes = 30
+  } | ConvertTo-Json -Compress
+
+  $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-cursor-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    & node $localMcpScript $CliCommand --json-file $payloadFile
+    if ($LASTEXITCODE -ne 0) {
+      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Write-Status {
   $processes = @(Get-AntigravityProcess)
   $devToolsPort = Get-DevToolsPort
@@ -1192,6 +1236,18 @@ switch ($Command) {
 
   "submit-claude-job" {
     Invoke-ClaudeBridgeCommand -CliCommand "submit-claude-job-cli"
+  }
+
+  "cursor-status" {
+    Invoke-CursorBridgeCommand -CliCommand "cursor-status-cli"
+  }
+
+  "open-cursor" {
+    Invoke-CursorBridgeCommand -CliCommand "open-cursor-cli"
+  }
+
+  "submit-cursor-job" {
+    Invoke-CursorBridgeCommand -CliCommand "submit-cursor-job-cli"
   }
 
   "list-jobs" {
