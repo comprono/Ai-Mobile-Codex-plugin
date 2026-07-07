@@ -112,6 +112,19 @@ const tools = [
     },
   },
   {
+    name: "select-chat",
+    description: "Select an existing visible Antigravity project/chat and verify it before model switching or submission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        expectedProject: { type: "string", description: "Optional visible project text that should be present before selection." },
+        expectedChat: { type: "string", description: "Required visible chat/conversation title to activate." },
+      },
+      required: ["expectedChat"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "agy-status",
     description: "Report whether the official Antigravity CLI (agy) is installed for low-RAM terminal agent work. Does not start the desktop UI.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -1744,6 +1757,151 @@ function choosePreferredModelCandidates(limitsSummary, preference = "auto") {
   return [requested];
 }
 
+async function selectAntigravityChat(args = {}) {
+  const expectedProject = String(args.expectedProject || "").trim();
+  const expectedChat = String(args.expectedChat || "").trim();
+  if (!expectedChat) {
+    return "SelectChatResult:\nOk: false\nStage: input\nMessage: expectedChat is required.";
+  }
+
+  const { port, page } = await getAntigravityPage();
+  const client = await createCdpClient(page.webSocketDebuggerUrl);
+  const expression = `
+(async () => {
+  const expectedProject = ${jsString(expectedProject)};
+  const expectedChat = ${jsString(expectedChat)};
+  const expectedChatLower = expectedChat.toLowerCase();
+  const visibleText = document.body ? document.body.innerText || "" : "";
+  const activeTitle = document.title || "";
+  const isVisible = (el) => {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  };
+  const labelFor = (el) => [el.ariaLabel, el.title, el.innerText, el.textContent].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
+  const activeContextText = () => Array.from(document.querySelectorAll('body *'))
+    .filter((el) => {
+      if (el.closest('nav,aside,[role="navigation"]')) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.top < 260 && style.visibility !== "hidden" && style.display !== "none";
+    })
+    .map((el) => el.innerText || el.textContent || "")
+    .join(" ")
+    .replace(/\\s+/g, " ");
+  if (expectedProject && !visibleText.includes(expectedProject)) {
+    return { ok: false, stage: "verify-project", missing: ["expectedProject"], activeTitle };
+  }
+  if ((activeTitle + " " + activeContextText()).toLowerCase().includes(expectedChatLower) && !/new conversation|new chat/i.test(activeTitle)) {
+    return { ok: true, stage: "already-active", activeTitle };
+  }
+
+  const collectCandidates = () => Array.from(document.querySelectorAll('button,[role="button"],[role="treeitem"],[role="listitem"],a,[tabindex],div,span'))
+    .filter(isVisible)
+    .map((el) => ({ el, label: labelFor(el), rect: el.getBoundingClientRect() }))
+    .filter((item) => item.label && item.label.toLowerCase().includes(expectedChatLower))
+    .sort((a, b) => {
+      const aExact = a.label.trim().toLowerCase() === expectedChatLower ? 0 : 1;
+      const bExact = b.label.trim().toLowerCase() === expectedChatLower ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      return a.rect.left - b.rect.left || a.rect.top - b.rect.top;
+    });
+  let candidates = collectCandidates();
+  if (!candidates.length) {
+    const openers = Array.from(document.querySelectorAll('button,[role="button"],a,[tabindex]'))
+      .filter(isVisible)
+      .map((el) => ({ el, label: labelFor(el) }))
+      .filter((item) => /conversation history|search|show more/i.test(item.label));
+    const opener = openers.find((item) => /conversation history/i.test(item.label)) || openers[0];
+    if (opener) {
+      opener.el.click();
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      candidates = collectCandidates();
+      if (!candidates.length) {
+        const searchBox = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"],[role="textbox"],[role="combobox"]'))
+          .filter(isVisible)
+          .filter((el) => {
+            const rect = el.getBoundingClientRect();
+            const label = labelFor(el);
+            return rect.top < Math.max(520, window.innerHeight * 0.7)
+              && rect.bottom < window.innerHeight - 120
+              && (/search|filter|conversation|chat/i.test(label) || rect.left < window.innerWidth * 0.45);
+          })
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+        if (searchBox) {
+          searchBox.focus();
+          if (searchBox.matches('textarea,input')) {
+            const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(searchBox), "value")?.set;
+            if (setter) setter.call(searchBox, expectedChat);
+            else searchBox.value = expectedChat;
+            searchBox.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: expectedChat }));
+            searchBox.dispatchEvent(new Event("change", { bubbles: true }));
+          } else {
+            document.execCommand("selectAll", false, null);
+            const inserted = document.execCommand("insertText", false, expectedChat);
+            if (!inserted) searchBox.textContent = expectedChat;
+            searchBox.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: expectedChat }));
+          }
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          candidates = collectCandidates();
+        }
+      }
+    }
+  }
+  if (!candidates.length) {
+    const visibleChatLike = Array.from(document.querySelectorAll('button,[role="button"],[role="treeitem"],[role="listitem"],a,[tabindex]'))
+      .filter(isVisible)
+      .map(labelFor)
+      .filter(Boolean)
+      .slice(0, 30);
+    return { ok: false, stage: "find-chat", activeTitle, visibleChatLike };
+  }
+
+  const target = candidates[0].el;
+  target.scrollIntoView({ block: "center", inline: "nearest" });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  target.click();
+  await new Promise((resolve) => setTimeout(resolve, 900));
+
+  const afterTitle = document.title || "";
+  const afterText = activeContextText();
+  const ok = (afterTitle + " " + afterText).toLowerCase().includes(expectedChatLower) && !/new conversation|new chat/i.test(afterTitle);
+  return {
+    ok,
+    stage: ok ? "selected" : "selected-unverified",
+    activeTitle: afterTitle,
+    clickedLabel: candidates[0].label.slice(0, 160)
+  };
+})()
+`;
+
+  try {
+    const result = await client.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    const value = result?.result?.value || {};
+    return [
+      "SelectChatResult:",
+      `DevToolsPort: ${port}`,
+      `PageTitle: ${page.title || "<unknown>"}`,
+      `ExpectedChat: ${expectedChat}`,
+      expectedProject ? `ExpectedProject: ${expectedProject}` : null,
+      `Ok: ${value.ok === true}`,
+      `Stage: ${value.stage || "<unknown>"}`,
+      value.activeTitle ? `ActiveTitle: ${value.activeTitle}` : null,
+      value.clickedLabel ? `ClickedLabel: ${value.clickedLabel}` : null,
+      value.missing?.length ? `Missing: ${value.missing.join(", ")}` : null,
+      value.visibleChatLike?.length ? `VisibleCandidates: ${value.visibleChatLike.slice(0, 10).join(" | ")}` : null,
+      "Next: only call switch-model or submit-job if Ok is true.",
+    ].filter(Boolean).join("\n");
+  } finally {
+    client.close();
+  }
+}
+
 async function switchModelInCurrentChat(args = {}) {
   const expectedProject = String(args.expectedProject || "").trim();
   const expectedChat = String(args.expectedChat || "").trim();
@@ -2392,6 +2550,12 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "select-chat") {
+        const text = await selectAntigravityChat(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "submit-offload") {
         const text = await submitOffloadToCurrentChat(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
@@ -2425,7 +2589,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -2441,6 +2605,7 @@ if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli
   const actions = {
     "submit-offload-cli": submitOffloadToCurrentChat,
     "switch-model-cli": switchModelInCurrentChat,
+    "select-chat-cli": selectAntigravityChat,
     "create-job-cli": async (value) => {
       const created = createJob(value);
       return `CreateJobResult:\nJobId: ${created.jobId}\nJobFolder: ${created.jobDir}\nState: queued`;
