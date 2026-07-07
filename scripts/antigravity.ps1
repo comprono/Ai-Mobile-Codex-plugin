@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -9,6 +9,7 @@ param(
   [string] $NextStep = "Inspect the relevant files and write a compact status checkpoint.",
   [string] $ExpectedProject = "",
   [string] $ExpectedChat = "",
+  [string] $CodexBudgetState = "unknown",
   [string] $ModelPreference = "auto",
   [string] $AgyModel = "gemini-3.5-flash-low",
   [string] $AgyProject = "",
@@ -975,6 +976,38 @@ function Invoke-SelectChat {
   }
 }
 
+function Invoke-OrchestrationPlan {
+  $hasWorkspaceWorkValue = ConvertTo-BooleanValue -Value $HasWorkspaceWork -Default $true
+  $needsVisibleChatValue = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
+  if (-not (Test-Path -LiteralPath $localMcpScript)) {
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
+  }
+
+  $payload = [PSCustomObject]@{
+    goal = $Goal
+    workspace = $Workspace
+    codexBudgetState = $CodexBudgetState
+    estimatedCodexInputTokens = $EstimatedCodexInputTokens
+    hasWorkspaceWork = $hasWorkspaceWorkValue
+    needsVisibleAntigravityChat = $needsVisibleChatValue
+    needsUi = $needsVisibleChatValue
+    expectedProject = $ExpectedProject
+    expectedChat = $ExpectedChat
+  } | ConvertTo-Json -Compress
+
+  $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-orchestration-plan-{0}.json" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    & node $localMcpScript orchestration-plan-cli --json-file $payloadFile
+    if ($LASTEXITCODE -ne 0) {
+      throw "orchestration-plan failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-BridgeJobCommand {
   param(
     [string] $CliCommand
@@ -1231,6 +1264,10 @@ switch ($Command) {
 
   "prepare-offload" {
     Get-PrepareOffloadText
+  }
+
+  "orchestration-plan" {
+    Invoke-OrchestrationPlan
   }
 
   "create-job" {

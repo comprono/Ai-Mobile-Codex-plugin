@@ -78,6 +78,26 @@ const tools = [
     },
   },
   {
+    name: "orchestration-plan",
+    description: "Plan how Codex should orchestrate Codex, Antigravity CLI/UI, Claude Code, and Cursor based on task shape, visible budget state, Antigravity limits, and local worker availability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "User goal to route." },
+        workspace: { type: "string", description: "Local workspace path or project name." },
+        codexBudgetState: { type: "string", description: "Caller-observed Codex budget state, such as healthy, medium, low, critical, unknown, or exact visible text.", default: "unknown" },
+        estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled directly.", default: 2000 },
+        hasWorkspaceWork: { type: "boolean", description: "Whether the task needs files, diffs, logs, browser state, or project context.", default: true },
+        needsVisibleAntigravityChat: { type: "boolean", description: "Whether the task must continue/select a visible Antigravity project/chat.", default: false },
+        needsUi: { type: "boolean", description: "Whether the task needs visual desktop UI state.", default: false },
+        expectedProject: { type: "string", description: "Optional visible Antigravity project text." },
+        expectedChat: { type: "string", description: "Optional visible Antigravity chat/conversation title." },
+      },
+      required: ["goal"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create-job",
     description: "Create a durable Antigravity bridge job folder with request/status/result/diff artifact files. Does not touch the UI.",
     inputSchema: {
@@ -506,6 +526,139 @@ function buildPrepareOffload(args = {}, quick = null) {
     "CompactHandoff:",
     handoff,
   ].join("\n");
+}
+
+function parseFoundFromStatus(text) {
+  return /\bFound:\s*true\b/i.test(String(text || ""));
+}
+
+function normalizeBudgetState(value) {
+  const text = String(value || "unknown").trim();
+  const lower = text.toLowerCase();
+  if (/\b(critical|very low|almost gone|near limit|running out)\b/.test(lower)) return { state: "critical", text };
+  if (/\b(low|limited|mini|small budget)\b/.test(lower)) return { state: "low", text };
+  if (/\b(medium|moderate|ok)\b/.test(lower)) return { state: "medium", text };
+  if (/\b(healthy|high|full|plenty)\b/.test(lower)) return { state: "healthy", text };
+  return { state: "unknown", text };
+}
+
+async function buildOrchestrationPlan(args = {}) {
+  const goal = String(args.goal || "").trim();
+  const workspace = String(args.workspace || "").trim();
+  const estimatedCodexInputTokens = Number(args.estimatedCodexInputTokens || 2000);
+  const hasWorkspaceWork = args.hasWorkspaceWork !== false;
+  const needsVisibleAntigravityChat = Boolean(args.needsVisibleAntigravityChat || args.expectedChat);
+  const needsUi = Boolean(args.needsUi || needsVisibleAntigravityChat);
+  const expectedProject = String(args.expectedProject || "").trim();
+  const expectedChat = String(args.expectedChat || "").trim();
+  const codexBudget = normalizeBudgetState(args.codexBudgetState || "unknown");
+  const offload = getOffloadDecision({ goal, hasWorkspaceWork, estimatedCodexInputTokens });
+
+  let quick = null;
+  let quickError = "";
+  try {
+    quick = await runHelper("quick");
+  } catch (error) {
+    quickError = error?.message || String(error);
+  }
+
+  const agyStatusText = getAgyStatusText();
+  const claudeStatusText = getClaudeStatusText();
+  const cursorStatusText = getCursorStatusText();
+  const antigravitySetup = quick?.Setup || {};
+  const antigravityLive = quick?.Live || {};
+  const limits = quick?.Limits || {};
+  const antigravityAvailable = Array.isArray(limits.RecommendedAvailable) ? limits.RecommendedAvailable : [];
+  const bestAgModel = antigravityAvailable[0] || null;
+  const agyFound = parseFoundFromStatus(agyStatusText);
+  const claudeFound = parseFoundFromStatus(claudeStatusText);
+  const cursorHeadlessFound = /\bHeadlessAgentFound:\s*true\b/i.test(cursorStatusText);
+  const antigravityLimitText = bestAgModel
+    ? `${bestAgModel.DisplayName || bestAgModel.Id} (${bestAgModel.RemainingPercent ?? "?"}% remaining)`
+    : "no recommended available Antigravity model reported";
+  const antigravityHealthy = antigravitySetup.ReadyForModelLimits === true && antigravityAvailable.length > 0;
+  const visibleReady = antigravitySetup.ReadyForLiveUiInspection === true && Number(antigravityLive.PageCount || 0) > 0;
+
+  const lowerGoal = goal.toLowerCase();
+  const codeReviewLikely = /\b(code|repo|review|refactor|patch|diff|test|lint|bug|implementation|architecture)\b/.test(lowerGoal);
+  const cursorLikely = /\bcursor\b/.test(lowerGoal);
+  let route = "codex-direct";
+  let worker = "Codex";
+  let reason = "Task appears small enough for Codex direct work.";
+  const nextCalls = [];
+  const fallback = [];
+
+  if (cursorLikely && cursorHeadlessFound) {
+    route = "cursor-headless";
+    worker = "Cursor agent";
+    reason = "The task explicitly belongs in Cursor and a true headless cursor-agent is available.";
+    nextCalls.push("ai-mobile-local.submit-cursor-job");
+    fallback.push("If cursor-agent fails, use Codex direct for final patch or Antigravity CLI for broad review.");
+  } else if (needsVisibleAntigravityChat) {
+    route = "antigravity-desktop-chat";
+    worker = "Antigravity desktop";
+    reason = "The task names or requires a visible Antigravity project/chat; UI state is the source of truth.";
+    nextCalls.push("ai-mobile-local.select-chat");
+    nextCalls.push("ai-mobile-local.switch-model");
+    nextCalls.push("ai-mobile-local.submit-job or submit-offload");
+    fallback.push("If select-chat is not Ok, stop and report visible candidates; do not use a new or wrong chat.");
+    fallback.push("If the requested model is exhausted, switch to the best available Antigravity model.");
+  } else if (offload.shouldOffload && agyFound && antigravityHealthy && !needsUi) {
+    route = "antigravity-cli";
+    worker = "Antigravity CLI";
+    reason = "Nontrivial workspace work can be done in low-RAM Antigravity CLI without desktop UI.";
+    nextCalls.push("ai-mobile-local.submit-agy-job");
+    nextCalls.push("ai-mobile-local.read-job");
+    fallback.push("If Antigravity CLI fails, use Claude Code for code/review tasks or Antigravity desktop when UI state is needed.");
+  } else if (offload.shouldOffload && codeReviewLikely && claudeFound) {
+    route = "claude-code";
+    worker = "Claude Code CLI";
+    reason = "This is local code/review work and Claude Code is available; no Antigravity UI context is required.";
+    nextCalls.push("ai-mobile-local.submit-claude-job");
+    nextCalls.push("ai-mobile-local.read-job");
+    fallback.push("If Claude Code is not logged in or fails, use Antigravity CLI when available; otherwise Codex does a narrow patch.");
+  } else if (offload.shouldOffload && visibleReady) {
+    route = "antigravity-desktop";
+    worker = "Antigravity desktop";
+    reason = "The task should be offloaded and desktop UI is available, but CLI/headless routes are not preferred for this shape.";
+    nextCalls.push("ai-mobile-local.submit-job");
+    nextCalls.push("ai-mobile-local.read-job");
+    fallback.push("If submission is not confirmed, use handoff-template and stop; do not watch full chat logs.");
+  } else if (codexBudget.state === "critical" || codexBudget.state === "low") {
+    route = claudeFound && codeReviewLikely ? "claude-code" : (agyFound && antigravityHealthy ? "antigravity-cli" : "codex-minimal");
+    worker = route === "claude-code" ? "Claude Code CLI" : (route === "antigravity-cli" ? "Antigravity CLI" : "Codex minimal");
+    reason = "Codex budget was reported low, so only minimal Codex routing/synthesis should happen.";
+    nextCalls.push(route === "claude-code" ? "ai-mobile-local.submit-claude-job" : route === "antigravity-cli" ? "ai-mobile-local.submit-agy-job" : "Codex: run one targeted command/read only compact files");
+    fallback.push("Ask for a smaller task or wait for budget reset if no local worker is available.");
+  }
+
+  return [
+    "AiMobileOrchestrationPlan:",
+    `Route: ${route}`,
+    `PrimaryWorker: ${worker}`,
+    `Reason: ${reason}`,
+    "",
+    "CapacitySnapshot:",
+    `CodexBudget: ${codexBudget.state} (${codexBudget.text || "caller did not provide current Codex token state"})`,
+    "CodexBudgetSource: caller/UI only; this local plugin cannot read Codex's private token meter directly.",
+    `AntigravityModels: ${antigravityLimitText}`,
+    `AntigravityReady: ${antigravityHealthy}`,
+    `AntigravityLiveReady: ${visibleReady}`,
+    `AntigravityCLI: ${agyFound}`,
+    `ClaudeCode: ${claudeFound}`,
+    "ClaudeCodeBudget: unknown; Claude Code status exposes availability/version, not remaining usage.",
+    `CursorHeadless: ${cursorHeadlessFound}`,
+    quickError ? `AntigravityQuickError: ${quickError}` : null,
+    "",
+    "NextCalls:",
+    ...(nextCalls.length ? nextCalls.map((item, index) => `${index + 1}. ${item}`) : ["1. Codex direct: keep context small and run targeted checks only."]),
+    "",
+    "Fallback:",
+    ...(fallback.length ? fallback.map((item) => `- ${item}`) : ["- If the direct path grows beyond the estimated token budget, rerun orchestration-plan with a higher estimate and offload."]),
+    "",
+    "OrchestrationRule:",
+    "Codex routes, safety-checks, verifies final diffs/tests, and summarizes. Workers do broad reading/reasoning and write compact artifacts. Do not paste full logs, chats, or source back into Codex.",
+  ].filter(Boolean).join("\n");
 }
 
 function getDevToolsPort() {
@@ -2463,6 +2616,12 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "orchestration-plan") {
+        const text = await buildOrchestrationPlan(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "create-job") {
         const created = createJob(params?.arguments || {});
         const text = [
@@ -2589,7 +2748,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["orchestration-plan-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -2603,6 +2762,7 @@ if (["submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cl
   }
 
   const actions = {
+    "orchestration-plan-cli": buildOrchestrationPlan,
     "submit-offload-cli": submitOffloadToCurrentChat,
     "switch-model-cli": switchModelInCurrentChat,
     "select-chat-cli": selectAntigravityChat,

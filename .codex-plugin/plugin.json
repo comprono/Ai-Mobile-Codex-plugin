@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
   "version": "0.1.0",
-  "description": "AI Mobile Codex Plugin for connecting mobile-started Codex sessions to local Antigravity CLI, Antigravity desktop, Claude Code, and Cursor workers on Windows.",
+  "description": "AI Mobile Codex Plugin for orchestrating mobile-started Codex work across local Antigravity CLI, Antigravity desktop, Claude Code, and Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "license": "MIT",
@@ -30,8 +30,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AI Mobile",
-    "shortDescription": "Connect mobile-started Codex sessions to local Antigravity, Claude Code, and Cursor workers.",
-    "longDescription": "Adds Codex-side helpers for mobile-started OpenAI Codex workflows on Windows. The plugin exposes local MCP tools for compact quick readiness checks, status, live readiness, model limit summaries, low-RAM Antigravity CLI jobs, existing Antigravity chat selection, active Antigravity chat model switching, durable bridge jobs, optional Claude Code headless bridge jobs, Cursor UI handoff, fail-closed Cursor agent bridge jobs when a true cursor-agent binary exists, full Antigravity model limits, and privacy scans, plus a DevTools MCP bridge for live Antigravity UI automation. It can verify setup on another user's machine, launch the Antigravity desktop app only when needed, open Cursor UI only when needed, report install and process status, read model quota state from Antigravity's local language server, list Antigravity CLI models, select and verify an existing visible chat before submitting, switch the active chat away from exhausted models to an available Flash/Gemini model, create .antigravity-bridge job folders, submit jobs to Antigravity CLI, Antigravity desktop, local Claude Code CLI, or a true Cursor agent CLI when available, list/read/cancel/retry jobs, inspect visible projects and chats, continue existing chats, start new chats in existing projects, start new projects, and hand off instructions safely after live UI verification.",
+    "shortDescription": "Orchestrate mobile-started Codex sessions across local Antigravity, Claude Code, and Cursor workers.",
+    "longDescription": "Adds Codex-side orchestration helpers for mobile-started OpenAI Codex workflows on Windows. The plugin exposes local MCP tools for compact quick readiness checks, orchestration planning, status, live readiness, model limit summaries, low-RAM Antigravity CLI jobs, existing Antigravity chat selection, active Antigravity chat model switching, durable bridge jobs, optional Claude Code headless bridge jobs, Cursor UI handoff, fail-closed Cursor agent bridge jobs when a true cursor-agent binary exists, full Antigravity model limits, and privacy scans, plus a DevTools MCP bridge for live Antigravity UI automation. It can compare caller-provided Codex budget state, Antigravity model availability, Claude Code availability, Cursor availability, and task shape before selecting a worker. It can verify setup on another user's machine, launch the Antigravity desktop app only when needed, open Cursor UI only when needed, report install and process status, read model quota state from Antigravity's local language server, list Antigravity CLI models, select and verify an existing visible chat before submitting, switch the active chat away from exhausted models to an available Flash/Gemini model, create .antigravity-bridge job folders, submit jobs to Antigravity CLI, Antigravity desktop, local Claude Code CLI, or a true Cursor agent CLI when available, list/read/cancel/retry jobs, inspect visible projects and chats, continue existing chats, start new chats in existing projects, start new projects, and hand off instructions safely after live UI verification.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -41,6 +41,8 @@
     "category": "Productivity",
     "capabilities": [
       "Local app launch",
+      "AI worker orchestration",
+      "Capacity-aware routing",
       "Compact quick status",
       "Autonomous setup checks",
       "Local MCP setup tools",
@@ -62,6 +64,7 @@
       "Public repo privacy scan"
     ],
     "defaultPrompt": [
+      "Plan AI Mobile orchestration",
       "Quick check AI Mobile bridge",
       "Open Antigravity 2.0",
       "Repair Antigravity live inspection",
