@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -1008,6 +1008,38 @@ function Invoke-OrchestrationPlan {
   }
 }
 
+function Invoke-EfficiencyFlow {
+  $hasWorkspaceWorkValue = ConvertTo-BooleanValue -Value $HasWorkspaceWork -Default $true
+  $needsVisibleChatValue = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
+  if (-not (Test-Path -LiteralPath $localMcpScript)) {
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
+  }
+
+  $payload = [PSCustomObject]@{
+    goal = $Goal
+    workspace = $Workspace
+    codexBudgetState = $CodexBudgetState
+    estimatedCodexInputTokens = $EstimatedCodexInputTokens
+    hasWorkspaceWork = $hasWorkspaceWorkValue
+    needsVisibleAntigravityChat = $needsVisibleChatValue
+    needsUi = $needsVisibleChatValue
+    expectedProject = $ExpectedProject
+    expectedChat = $ExpectedChat
+  } | ConvertTo-Json -Compress
+
+  $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-efficiency-flow-{0}.json" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    & node $localMcpScript efficiency-flow-cli --json-file $payloadFile
+    if ($LASTEXITCODE -ne 0) {
+      throw "efficiency-flow failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-BridgeJobCommand {
   param(
     [string] $CliCommand
@@ -1268,6 +1300,10 @@ switch ($Command) {
 
   "orchestration-plan" {
     Invoke-OrchestrationPlan
+  }
+
+  "efficiency-flow" {
+    Invoke-EfficiencyFlow
   }
 
   "create-job" {

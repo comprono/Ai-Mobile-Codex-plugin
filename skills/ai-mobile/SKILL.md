@@ -27,7 +27,9 @@ Core jobs:
 
 Primary operating model:
 
-- Codex is the orchestrator. Before nontrivial work, it should call `ai-mobile-local.orchestration-plan` or `antigravity.ps1 orchestration-plan` with the goal, workspace, expected project/chat, estimated Codex tokens, and any visible Codex budget state.
+- Codex is the orchestrator. Before nontrivial work, it should call `ai-mobile-local.efficiency-flow` or `antigravity.ps1 efficiency-flow` with the goal, workspace, expected project/chat, estimated Codex tokens, and any visible Codex budget state.
+- `efficiency-flow` is the default because it combines token saving and delivery flow: budget gate, route gate, submit gate, wait gate, compact-read gate, improvement gate, verification gate, and summary gate.
+- Use `orchestration-plan` only when Codex needs the route/capacity snapshot without the full delivery loop.
 - The orchestrator compares: caller-provided Codex budget state, Antigravity model availability from local limits, Claude Code availability, Cursor headless availability, and whether visible Antigravity UI/chat state is required.
 - Codex token availability is not directly readable by this local plugin. If the Codex UI shows a remaining budget or the user states one, pass it as `codexBudgetState`; otherwise use `unknown` and route conservatively.
 - Claude Code remaining usage is not exposed by `claude-status`; treat Claude Code as availability/version only unless a future Claude API exposes remaining usage.
@@ -55,7 +57,7 @@ Claude routing hard rule:
 
 This plugin exposes two MCP servers:
 
-- `ai-mobile-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `orchestration-plan`, `create-job`, `submit-job`, `select-chat`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
+- `ai-mobile-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `orchestration-plan`, `efficiency-flow`, `create-job`, `submit-job`, `select-chat`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
 - `ai-mobile-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
 
 Prefer `ai-mobile-local.submit-job` for nontrivial coding/workspace work. It creates a durable `.antigravity-bridge/jobs/<jobId>/` folder, asks Antigravity to write compact artifacts, verifies/switches the selected model, submits once, and lets Codex stop watching the UI. Use `ai-mobile-local.read-job` later to read only the artifact files. Use `ai-mobile-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted, do not wait for the user to say so: call `ai-mobile-local.switch-model` with `modelPreference=flash-medium` or pass `modelPreference=flash-medium` to `submit-job` / `submit-offload`. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper equivalents before falling back to DevTools choreography. Use `ai-mobile-local.prepare-offload` when Codex should first show the plan or when the selected chat is uncertain. For any nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, or job-application task, default to Antigravity for exploration and long reasoning, while Codex stays the planner, safety gate, patch reviewer, and final summarizer. Use `ai-mobile-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false or `PageCount` is zero, call `ai-mobile-local.repair-live` once before using DevTools. If `repair-live` restarts Antigravity, do not keep using an already-started stale DevTools MCP connection; let it reconnect to the new port before UI calls. If `ai-mobile-devtools` fails with `Transport closed`, do not repeatedly call `list_pages` in that session. Call `ai-mobile-local.devtools-health`; if it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for a manual paste this turn. Use `limits-summary` for normal quota checks and full `limits` only when complete per-model JSON is needed. Use `ai-mobile-devtools` for project/chat selection only when the selected chat is not already correct. If this skill file cannot be read in a Codex session, run the PowerShell helper fast path.
@@ -148,6 +150,12 @@ Plan the full Codex / Antigravity / Claude / Cursor route before doing work:
 
 ```text
 Call ai-mobile-local.orchestration-plan with goal, workspace, codexBudgetState, estimatedCodexInputTokens, hasWorkspaceWork, needsVisibleAntigravityChat, expectedProject, and expectedChat.
+```
+
+Run the full token-saving delivery flow before doing nontrivial work:
+
+```text
+Call ai-mobile-local.efficiency-flow with goal, workspace, codexBudgetState, estimatedCodexInputTokens, hasWorkspaceWork, needsVisibleAntigravityChat, expectedProject, and expectedChat.
 ```
 
 Create and submit a durable bridge job:
@@ -392,7 +400,7 @@ Use Antigravity as an offload worker when the user wants to save Codex tokens or
 
 ### Orchestration Gate
 
-Run `ai-mobile-local.orchestration-plan` before `prepare-offload`, `submit-agy-job`, `submit-job`, or `submit-claude-job` for any nontrivial task. This is the main AI Mobile behavior: Codex should decide who works before it spends tokens reading files or driving UI.
+Run `ai-mobile-local.efficiency-flow` before `prepare-offload`, `submit-agy-job`, `submit-job`, or `submit-claude-job` for any nontrivial task. This is the main AI Mobile behavior: Codex should decide who works and how the work will flow before it spends tokens reading files or driving UI.
 
 Routing contract:
 

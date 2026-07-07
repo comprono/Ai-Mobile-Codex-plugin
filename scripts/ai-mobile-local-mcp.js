@@ -98,6 +98,26 @@ const tools = [
     },
   },
   {
+    name: "efficiency-flow",
+    description: "Return the full token-saving delivery flow: plan, route, submit, wait, read compact artifacts, follow up, verify, and summarize.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "User goal to route." },
+        workspace: { type: "string", description: "Local workspace path or project name." },
+        codexBudgetState: { type: "string", description: "Caller-observed Codex budget state.", default: "unknown" },
+        estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled directly.", default: 2000 },
+        hasWorkspaceWork: { type: "boolean", description: "Whether the task needs files, diffs, logs, browser state, or project context.", default: true },
+        needsVisibleAntigravityChat: { type: "boolean", description: "Whether the task must continue/select a visible Antigravity project/chat.", default: false },
+        needsUi: { type: "boolean", description: "Whether the task needs visual desktop UI state.", default: false },
+        expectedProject: { type: "string", description: "Optional visible Antigravity project text." },
+        expectedChat: { type: "string", description: "Optional visible Antigravity chat/conversation title." },
+      },
+      required: ["goal"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create-job",
     description: "Create a durable Antigravity bridge job folder with request/status/result/diff artifact files. Does not touch the UI.",
     inputSchema: {
@@ -658,6 +678,65 @@ async function buildOrchestrationPlan(args = {}) {
     "",
     "OrchestrationRule:",
     "Codex routes, safety-checks, verifies final diffs/tests, and summarizes. Workers do broad reading/reasoning and write compact artifacts. Do not paste full logs, chats, or source back into Codex.",
+  ].filter(Boolean).join("\n");
+}
+
+function valueFromPlan(planText, label) {
+  const line = String(planText || "").split(/\r?\n/).find((entry) => entry.startsWith(`${label}:`));
+  return line ? line.slice(label.length + 1).trim() : "";
+}
+
+async function buildEfficiencyFlow(args = {}) {
+  const plan = await buildOrchestrationPlan(args);
+  const route = valueFromPlan(plan, "Route") || "unknown";
+  const worker = valueFromPlan(plan, "PrimaryWorker") || "unknown";
+  const goal = String(args.goal || "").trim();
+  const workspace = String(args.workspace || "").trim();
+  const expectedProject = String(args.expectedProject || "").trim();
+  const expectedChat = String(args.expectedChat || "").trim();
+  const statusFile = ".antigravity-bridge/jobs/<jobId>/status.json";
+  const readArtifacts = "result.md, changed-files.txt, diff.patch, test-output-summary.md, status.json";
+  const submitStep = (() => {
+    if (route === "antigravity-cli") return "Call submit-agy-job with the compact goal, workspace, mode, and nextStep; then stop watching.";
+    if (route === "antigravity-desktop-chat") return "Call select-chat, then switch-model, then submit-job or submit-offload only after the expected chat is active.";
+    if (route === "antigravity-desktop") return "Call submit-job with expected project/chat when known; require Submitted: true before waiting for artifacts.";
+    if (route === "claude-code") return "Call submit-claude-job with a compact review/patch goal; then stop watching.";
+    if (route === "cursor-headless") return "Call submit-cursor-job only if HeadlessAgentFound is true; otherwise route back to orchestration-plan.";
+    return "Keep Codex direct: run one targeted command/read and avoid broad file or log ingestion.";
+  })();
+  const followUpStep = (() => {
+    if (route === "codex-direct" || route === "codex-minimal") {
+      return "If the direct task expands beyond the estimate, rerun efficiency-flow with a higher token estimate and offload.";
+    }
+    return "If artifacts are weak or incomplete, send one compact retry/follow-up to the same worker with only the missing point; do not import broad context into Codex.";
+  })();
+
+  return [
+    "AiMobileEfficiencyFlow:",
+    `Goal: ${goal || "<missing>"}`,
+    `Workspace: ${workspace || "<none>"}`,
+    `Route: ${route}`,
+    `PrimaryWorker: ${worker}`,
+    expectedProject ? `ExpectedProject: ${expectedProject}` : null,
+    expectedChat ? `ExpectedChat: ${expectedChat}` : null,
+    "",
+    "StageFlow:",
+    "1. Budget gate: use caller-provided Codex budget state, Antigravity limits, Claude availability, and task size; do not assume hidden token meters.",
+    "2. Route gate: use the route below; do not manually choose another worker unless a blocker appears.",
+    `3. Submit gate: ${submitStep}`,
+    "4. Wait gate: after a confirmed submit, stop watching the UI/chat; wait for a compact artifact or job status instead of streaming every step into Codex.",
+    `5. Read gate: read only ${readArtifacts}. Do not paste full logs, full source, screenshots, private chats, or large transcripts into Codex.`,
+    `6. Improvement gate: ${followUpStep}`,
+    "7. Verification gate: Codex performs only targeted final checks, tests, diffs, or UI status needed to trust the result.",
+    "8. Summary gate: report route used, model/worker used, accepted/submitted state, artifact/result status, remaining blocker, and next action.",
+    "",
+    "StopRules:",
+    "- If expected chat/project is not verified, stop before submit.",
+    "- If submit is not confirmed, do not wait for artifacts and do not claim work started.",
+    "- If Antigravity/Claude/Cursor is unavailable, use the fallback from orchestration-plan rather than retrying the same broken call.",
+    "- If Codex budget is low, Codex may route and summarize only; workers do broad reading/reasoning.",
+    "",
+    plan,
   ].filter(Boolean).join("\n");
 }
 
@@ -2622,6 +2701,12 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "efficiency-flow") {
+        const text = await buildEfficiencyFlow(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "create-job") {
         const created = createJob(params?.arguments || {});
         const text = [
@@ -2748,7 +2833,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["orchestration-plan-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["orchestration-plan-cli", "efficiency-flow-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -2763,6 +2848,7 @@ if (["orchestration-plan-cli", "submit-offload-cli", "switch-model-cli", "select
 
   const actions = {
     "orchestration-plan-cli": buildOrchestrationPlan,
+    "efficiency-flow-cli": buildEfficiencyFlow,
     "submit-offload-cli": submitOffloadToCurrentChat,
     "switch-model-cli": switchModelInCurrentChat,
     "select-chat-cli": selectAntigravityChat,
