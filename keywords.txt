@@ -1,0 +1,12 @@
+ai mobile codex plugin
+mobile codex desktop bridge
+openai codex antigravity
+antigravity 2.0 codex plugin
+claude code codex bridge
+codex mcp plugin
+devtools mcp antigravity
+codex windows bridge
+local antigravity desktop app
+claude code headless worker
+mcp server for codex
+chromium devtools codex plugin

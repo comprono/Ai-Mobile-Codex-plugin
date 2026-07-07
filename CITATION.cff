@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this plugin, please cite it as below."
+title: "AI Mobile Codex Plugin"
+version: "0.1.0"
+date-released: "2026-06-03"
+authors:
+  - name: "comprono"
+repository-code: "https://github.com/comprono/AI-mobile"
+url: "https://github.com/comprono/AI-mobile"
+license: "MIT"
+keywords:
+  - "google antigravity codex plugin"
+  - "ai mobile codex plugin"
+  - "claude code codex bridge"
+  - "mobile codex desktop bridge"
+  - "openai codex antigravity"
+  - "antigravity 2.0 codex plugin"
+  - "codex mcp plugin"
+  - "devtools mcp antigravity"
+abstract: "A community Codex plugin for connecting mobile-started OpenAI Codex sessions to local Antigravity 2.0 and Claude Code workers on Windows."

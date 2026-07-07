@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://comprono.github.io/AI-mobile/sitemap.xml
