@@ -41,7 +41,7 @@ Keywords: AI Mobile Codex plugin, OpenAI Codex Antigravity, Antigravity 2.0 Code
 Clone this repository into your Codex plugins directory:
 
 ```powershell
-git clone https://github.com/comprono/AI-mobile.git "$env:USERPROFILE\plugins\AI-mobile"
+git clone https://github.com/comprono/Ai-Mobile-Codex-plugin.git "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin"
 ```
 
 Then install or refresh the plugin from your Codex personal marketplace.
@@ -49,7 +49,7 @@ Then install or refresh the plugin from your Codex personal marketplace.
 For a setup check after cloning:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" setup
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" setup
 ```
 
 The setup report tells Codex whether Antigravity is installed, whether Node.js is available, whether the bundled DevTools MCP package exists, whether the DevTools endpoint is reachable, and whether the local language-server model-limit API is ready.
@@ -90,37 +90,37 @@ Codex should submit the job, stop watching the UI, and later call `read-job` to 
 Check status:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" status
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" status
 ```
 
 Fast combined readiness and quota summary:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" quick
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" quick
 ```
 
 Open Antigravity:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" open
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" open
 ```
 
 Repair live DevTools inspection if Antigravity is running but exposes zero pages:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" repair-live
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" repair-live
 ```
 
 Inspect integration details:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" inspect
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" inspect
 ```
 
 Inspect live UI connection:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" live
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" live
 ```
 
 After a DevTools MCP `Transport closed` error, use the local fallback:
@@ -134,8 +134,8 @@ If it reports pages are ready, restart Codex to recreate the DevTools MCP transp
 Report model quota state:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" limits-summary
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" models
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" limits-summary
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" models
 ```
 
 The `limits-summary` command gives a compact availability summary. The `models` and `limits` commands call Antigravity's local language server over its gRPC-web API (`LanguageServerService/GetAvailableModels` and `GetLoadCodeAssist`) and return the fuller per-model data. This is the same source the Antigravity Models tab uses. It returns per-model quota metadata such as remaining fraction and reset time when available. It does not expose a raw all-model token ledger if Antigravity itself does not publish one.
@@ -143,7 +143,7 @@ The `limits-summary` command gives a compact availability summary. The `models` 
 Switch the current Antigravity chat to a cost-saving available model:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" switch-model -ModelPreference flash-medium -ExpectedProject "<visible project>" -ExpectedChat "<visible chat>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" switch-model -ModelPreference flash-medium -ExpectedProject "<visible project>" -ExpectedChat "<visible chat>"
 ```
 
 `switch-model` uses the local model-limit summary to choose an available model, then uses the local CDP bridge to select it in the visible Antigravity chat. `flash-medium` prefers `Gemini 3.5 Flash (Medium)` when available, then falls back to another available Flash/Gemini model.
@@ -151,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scr
 Run a local repository privacy scan:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" privacy
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" privacy
 ```
 
 ## Codex Operating Model
@@ -191,13 +191,13 @@ Recommended flow:
 If a Codex session cannot see MCP tools and can only run shell commands, use the equivalent PowerShell helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" prepare-offload -Goal "<goal>" -Workspace "<path>" -StatusFile "notes/antigravity-status.md" -NextStep "<next step>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" prepare-offload -Goal "<goal>" -Workspace "<path>" -StatusFile "notes/antigravity-status.md" -NextStep "<next step>"
 ```
 
 For selected-chat direct submission through the PowerShell helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" submit-offload -Goal "<goal>" -Workspace "<path>" -StatusFile "notes/antigravity-status.md" -NextStep "<next step>" -ExpectedProject "<project text>" -ExpectedChat "<chat text>" -ModelPreference auto -Submit true
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" submit-offload -Goal "<goal>" -Workspace "<path>" -StatusFile "notes/antigravity-status.md" -NextStep "<next step>" -ExpectedProject "<project text>" -ExpectedChat "<chat text>" -ModelPreference auto -Submit true
 ```
 
 Use `-Submit false` for verify-only; it should not fill the composer. Use `-FillOnly true` only when the user wants to manually review the handoff before sending.
@@ -205,9 +205,9 @@ Use `-Submit false` for verify-only; it should not fill the composer. Use `-Fill
 For durable job submission through the PowerShell helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" submit-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -ExpectedProject "<project text>" -ExpectedChat "<chat text>" -ModelPreference auto
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" list-jobs -Workspace "<path>"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" submit-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -ExpectedProject "<project text>" -ExpectedChat "<chat text>" -ModelPreference auto
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" list-jobs -Workspace "<path>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest
 ```
 
 Modes are `fast`, `deep`, `review`, and `patch`. Use `create-job` when you want to create the folder without touching Antigravity, `retry-job` to resubmit an existing request, and `cancel-job` to mark the bridge job cancelled.
@@ -215,8 +215,8 @@ Modes are `fast`, `deep`, `review`, and `patch`. Use `create-job` when you want 
 For local Claude Code headless jobs through the PowerShell helper:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" claude-status
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\AI-mobile\scripts\antigravity.ps1" submit-claude-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -ClaudeModel sonnet
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" claude-status
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" submit-claude-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -ClaudeModel sonnet
 ```
 
 Use `-Start false` to create and inspect the job without starting Claude Code. `submit-claude-job` writes into `.antigravity-bridge/jobs/<jobId>/` and returns immediately; call `read-job` later to inspect the compact artifacts. It does not use `--dangerously-skip-permissions` by default. Review mode defaults to Claude Code `plan`; other modes default to `acceptEdits`.

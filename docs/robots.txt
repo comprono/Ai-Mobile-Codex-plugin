@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://comprono.github.io/AI-mobile/sitemap.xml
+Sitemap: https://comprono.github.io/Ai-Mobile-Codex-plugin/sitemap.xml

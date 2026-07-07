@@ -1,4 +1,4 @@
-# AI Mobile Codex Plugin — local Windows bridge for Codex + Antigravity + Claude Code
+# AI Mobile Codex Plugin â€” local Windows bridge for Codex + Antigravity + Claude Code
 
 Initial public release of the combined AI Mobile bridge.
 

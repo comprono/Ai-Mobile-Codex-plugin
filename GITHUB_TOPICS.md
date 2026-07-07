@@ -20,4 +20,4 @@ powershell
 windows
 
 Suggested GitHub repo description:
-AI Mobile Codex Plugin — connect mobile-started OpenAI Codex sessions to Antigravity 2.0 and Claude Code on Windows.
+AI Mobile Codex Plugin â€” connect mobile-started OpenAI Codex sessions to Antigravity 2.0 and Claude Code on Windows.

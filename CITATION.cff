@@ -5,8 +5,8 @@ version: "0.1.0"
 date-released: "2026-06-03"
 authors:
   - name: "comprono"
-repository-code: "https://github.com/comprono/AI-mobile"
-url: "https://github.com/comprono/AI-mobile"
+repository-code: "https://github.com/comprono/Ai-Mobile-Codex-plugin"
+url: "https://github.com/comprono/Ai-Mobile-Codex-plugin"
 license: "MIT"
 keywords:
   - "google antigravity codex plugin"
