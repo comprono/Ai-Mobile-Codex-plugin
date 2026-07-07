@@ -62,22 +62,22 @@ The setup report tells Codex whether Antigravity is installed, whether Node.js i
 
 The plugin registers two MCP servers:
 
-- `antigravity-local`: direct local tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
-- `antigravity-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
+- `ai-mobile-local`: direct local tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
+- `ai-mobile-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
 
-Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity. The DevTools MCP server only connects when Antigravity is already running and inspectable; use `antigravity-local.open` or `antigravity-local.repair-live` only after the user asks to use Antigravity.
+Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity. The DevTools MCP server only connects when Antigravity is already running and inspectable; use `ai-mobile-local.open` or `ai-mobile-local.repair-live` only after the user asks to use Antigravity.
 
-Codex should call `antigravity-local.submit-job` first for nontrivial workspace work when the correct Antigravity project/chat is already selected. It creates a durable job folder, prepares the artifact contract, verifies or switches the active model with `modelPreference=auto`, fills the active composer, and submits with a direct CDP Enter keypress, avoiding repeated `list_pages`, snapshots, fill, key, and evaluate calls. Use `antigravity-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted or the user asks for Flash, Codex should call `antigravity-local.switch-model` with `modelPreference=flash-medium` before submitting. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper `antigravity.ps1 submit-job` / `antigravity.ps1 switch-model` before falling back to DevTools choreography. Use `antigravity-local.prepare-offload` when Codex should show the plan first or when the selected chat is uncertain. For nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, and job-application work, the intended cost split is: Antigravity explores and works locally; Codex plans, gates safety, reviews final changes, and summarizes from job artifacts. Use `antigravity-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false, call `antigravity-local.repair-live` once before using DevTools. If repair restarts Antigravity, an already-started DevTools MCP connection may need to reconnect to the new port. If `antigravity-devtools` fails with `Transport closed`, call `antigravity-local.devtools-health`; do not keep retrying `list_pages` in the same broken transport. Use `limits-summary` for normal quota checks and full `limits` only when the complete per-model JSON is needed.
+Codex should call `ai-mobile-local.submit-job` first for nontrivial workspace work when the correct Antigravity project/chat is already selected. It creates a durable job folder, prepares the artifact contract, verifies or switches the active model with `modelPreference=auto`, fills the active composer, and submits with a direct CDP Enter keypress, avoiding repeated `list_pages`, snapshots, fill, key, and evaluate calls. Use `ai-mobile-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted or the user asks for Flash, Codex should call `ai-mobile-local.switch-model` with `modelPreference=flash-medium` before submitting. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper `antigravity.ps1 submit-job` / `antigravity.ps1 switch-model` before falling back to DevTools choreography. Use `ai-mobile-local.prepare-offload` when Codex should show the plan first or when the selected chat is uncertain. For nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, and job-application work, the intended cost split is: Antigravity explores and works locally; Codex plans, gates safety, reviews final changes, and summarizes from job artifacts. Use `ai-mobile-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false, call `ai-mobile-local.repair-live` once before using DevTools. If repair restarts Antigravity, an already-started DevTools MCP connection may need to reconnect to the new port. If `ai-mobile-devtools` fails with `Transport closed`, call `ai-mobile-local.devtools-health`; do not keep retrying `list_pages` in the same broken transport. Use `limits-summary` for normal quota checks and full `limits` only when the complete per-model JSON is needed.
 
-When Antigravity work does not require visible desktop project/chat state, Codex should call `antigravity-local.agy-status`, `antigravity-local.agy-models`, and `antigravity-local.submit-agy-job` before opening the desktop UI. This uses Antigravity CLI print mode, creates the same durable job folder, and avoids desktop RAM overhead. Use the Antigravity desktop UI only for visual project/chat state, model picker work, or workflows that require the Manager/Editor interface.
+When Antigravity work does not require visible desktop project/chat state, Codex should call `ai-mobile-local.agy-status`, `ai-mobile-local.agy-models`, and `ai-mobile-local.submit-agy-job` before opening the desktop UI. This uses Antigravity CLI print mode, creates the same durable job folder, and avoids desktop RAM overhead. Use the Antigravity desktop UI only for visual project/chat state, model picker work, or workflows that require the Manager/Editor interface.
 
-When the task is local coding or review work and Antigravity context is not needed, Codex can call `antigravity-local.claude-status` and then `antigravity-local.submit-claude-job`. This uses Claude Code's non-interactive CLI mode, creates the same durable job folder, and returns immediately so Codex can later call `read-job` instead of watching a chat.
+When the task is local coding or review work and Antigravity context is not needed, Codex can call `ai-mobile-local.claude-status` and then `ai-mobile-local.submit-claude-job`. This uses Claude Code's non-interactive CLI mode, creates the same durable job folder, and returns immediately so Codex can later call `read-job` instead of watching a chat.
 
-When the task belongs in Cursor, Codex should call `antigravity-local.cursor-status` first. If `HeadlessAgentFound` is true, Codex may use `submit-cursor-job`. If only the Cursor UI launcher is available, Codex should use `open-cursor` for the visual workflow and must not pretend that `cursor.cmd agent -p` is headless.
+When the task belongs in Cursor, Codex should call `ai-mobile-local.cursor-status` first. If `HeadlessAgentFound` is true, Codex may use `submit-cursor-job`. If only the Cursor UI launcher is available, Codex should use `open-cursor` for the visual workflow and must not pretend that `cursor.cmd agent -p` is headless.
 
 Existing-chat submissions are strict. If `expectedChat` is provided, it must match the active Antigravity document title, not merely a sidebar item or previous message. The helper refuses to submit in a new chat and records `submit_failed` when Antigravity does not accept the prompt. Codex must not wait for artifacts unless the helper returns `Submitted: true`.
 
-For the lowest-token phone workflow, prefer `antigravity-local.submit-job` over raw chat watching. It creates:
+For the lowest-token phone workflow, prefer `ai-mobile-local.submit-job` over raw chat watching. It creates:
 
 ```text
 .antigravity-bridge/
@@ -134,10 +134,10 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Cod
 After a DevTools MCP `Transport closed` error, use the local fallback:
 
 ```text
-Call antigravity-local.devtools-health.
+Call ai-mobile-local.devtools-health.
 ```
 
-If it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `antigravity-local.handoff-template` for a manual paste into Antigravity for the current turn.
+If it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `ai-mobile-local.handoff-template` for a manual paste into Antigravity for the current turn.
 
 Report model quota state:
 
@@ -178,13 +178,13 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Cod
 This plugin intentionally combines two local surfaces:
 
 - Stable status and model-limit checks use local helper commands and Antigravity's local language server.
-- Project/chat actions use the live Antigravity UI through the `antigravity-devtools` MCP bridge, because the UI is the source of truth for selected projects, selected conversations, composer state, and model selection.
+- Project/chat actions use the live Antigravity UI through the `ai-mobile-devtools` MCP bridge, because the UI is the source of truth for selected projects, selected conversations, composer state, and model selection.
 
 For chat actions, Codex should verify the target project, conversation, and selected model before sending anything. For new projects or new chats, Codex should use the visible Antigravity controls through DevTools automation and report whether Antigravity accepted the action or showed an error/quota state.
 
 For nontrivial work, Codex should act as the orchestrator, not the main worker. Codex gives Antigravity compact tasks, waits, reads only status artifacts or targeted diffs, reviews the result, and sends the next improvement task back to Antigravity. Codex should avoid duplicating Antigravity's broad file reading, browser operation, and long reasoning unless Antigravity is blocked or final verification requires it.
 
-For prompt submission, Codex should call `antigravity-local.submission-guide` or follow the same rule: fill/type the prompt without a `submitKey`, then click the visible Send/arrow button. If a keyboard submit is required, use a separate key call with a simple accepted key such as `Enter`. Do not use `Control+Enter`, `Ctrl+Enter`, or chord strings unless the active tool schema explicitly lists that exact value; some DevTools tools reject those strings with `Unknown key`.
+For prompt submission, Codex should call `ai-mobile-local.submission-guide` or follow the same rule: fill/type the prompt without a `submitKey`, then click the visible Send/arrow button. If a keyboard submit is required, use a separate key call with a simple accepted key such as `Enter`. Do not use `Control+Enter`, `Ctrl+Enter`, or chord strings unless the active tool schema explicitly lists that exact value; some DevTools tools reject those strings with `Unknown key`.
 
 ## Token-Saving Offload Pattern
 
@@ -199,8 +199,8 @@ Token savings are not automatic. First decide whether the task is worth offloadi
 
 Recommended flow:
 
-1. If the correct Antigravity project/chat is already selected, run `antigravity-local.submit-job` with `submit=true`, plus `expectedProject` and `expectedChat` when known.
-2. If the selected chat is uncertain, run `antigravity-local.prepare-offload`, then use DevTools only to select the project/chat; use `switch-model` for model changes.
+1. If the correct Antigravity project/chat is already selected, run `ai-mobile-local.submit-job` with `submit=true`, plus `expectedProject` and `expectedChat` when known.
+2. If the selected chat is uncertain, run `ai-mobile-local.prepare-offload`, then use DevTools only to select the project/chat; use `switch-model` for model changes.
 3. If it returns `codex-direct`, do not open or drive Antigravity.
 4. Ask Antigravity to write progress to `.antigravity-bridge/jobs/<jobId>/status.json` and the required result/diff/test artifacts.
 5. Codex reads only `read-job`, a targeted diff, or a compact visible UI status.
@@ -252,7 +252,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\Ai-Mobile-Cod
 
 Use `submit-cursor-job` only when `cursor-status` reports `HeadlessAgentFound: true`. On Windows, the normal `cursor.cmd` launcher opens UI and is not treated as a reliable headless job runner.
 
-If UI submission is blocked by a stale DevTools port, use `antigravity-local.handoff-template` to generate the compact prompt and avoid repeated CDP probing. Restart Codex or paste the generated handoff manually so the next session attaches to the current Antigravity port.
+If UI submission is blocked by a stale DevTools port, use `ai-mobile-local.handoff-template` to generate the compact prompt and avoid repeated CDP probing. Restart Codex or paste the generated handoff manually so the next session attaches to the current Antigravity port.
 
 Compact handoff template:
 

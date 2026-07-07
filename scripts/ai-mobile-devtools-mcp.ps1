@@ -6,7 +6,7 @@ $userDataPath = Join-Path $env:APPDATA "Antigravity"
 $devToolsPortFile = Join-Path $userDataPath "DevToolsActivePort"
 $helperScript = Join-Path (Split-Path -Parent $PSScriptRoot) "scripts\antigravity.ps1"
 $mcpBin = Join-Path $installRoot "resources\app.asar.unpacked\node_modules\chrome-devtools-mcp\build\src\bin\chrome-devtools-mcp.js"
-$logFile = Join-Path $env:TEMP "antigravity-devtools-mcp.log"
+$logFile = Join-Path $env:TEMP "ai-mobile-devtools-mcp.log"
 
 if (-not (Test-Path -LiteralPath $exePath)) {
   throw "Antigravity.exe was not found at $exePath"
@@ -18,7 +18,7 @@ if (-not (Test-Path -LiteralPath $mcpBin)) {
 
 $processes = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)
 if ($processes.Count -eq 0) {
-  throw "Antigravity is not running. This DevTools MCP server is passive and will not open Antigravity during Codex startup. Call antigravity-local.open or antigravity-local.repair-live only when the user asks to use Antigravity, then restart Codex if DevTools tools are needed."
+  throw "Antigravity is not running. This DevTools MCP server is passive and will not open Antigravity during Codex startup. Call ai-mobile-local.open or ai-mobile-local.repair-live only when the user asks to use Antigravity, then restart Codex if DevTools tools are needed."
 }
 
 function Get-LivePageCount {
@@ -38,7 +38,7 @@ function Get-LivePageCount {
 }
 
 if ((Get-LivePageCount) -eq 0) {
-  throw "Antigravity is running but has no inspectable DevTools pages. This DevTools MCP server will not repair/restart Antigravity during Codex startup. Call antigravity-local.repair-live only when the user asks to use Antigravity, then restart Codex if DevTools tools are needed."
+  throw "Antigravity is running but has no inspectable DevTools pages. This DevTools MCP server will not repair/restart Antigravity during Codex startup. Call ai-mobile-local.repair-live only when the user asks to use Antigravity, then restart Codex if DevTools tools are needed."
 }
 
 if (-not (Test-Path -LiteralPath $devToolsPortFile)) {
@@ -54,7 +54,7 @@ $port = [string]$lines[0]
 $browserUrl = "http://127.0.0.1:$port"
 
 if ((Get-LivePageCount) -eq 0) {
-  throw "Antigravity DevTools has no inspectable pages after repair. Run antigravity-local.live or antigravity-local.repair-live, then restart Codex so the DevTools MCP transport can reconnect."
+  throw "Antigravity DevTools has no inspectable pages after repair. Run ai-mobile-local.live or ai-mobile-local.repair-live, then restart Codex so the DevTools MCP transport can reconnect."
 }
 
 & node $mcpBin --browserUrl $browserUrl --no-usage-statistics --no-performance-crux --acceptInsecureCerts --logFile $logFile

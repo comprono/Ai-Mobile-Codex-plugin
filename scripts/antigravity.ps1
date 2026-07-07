@@ -209,7 +209,7 @@ function Repair-LiveDevTools {
     Before = $before
     After = $after
     StoppedDevToolsMcpProcessIds = @($stoppedMcpBefore + $stoppedMcpAfter)
-    StaleMcpNote = "If repair-live restarted Antigravity, any already-started antigravity-devtools MCP process must reconnect to the new DevTools port before UI actions."
+    StaleMcpNote = "If repair-live restarted Antigravity, any already-started ai-mobile-devtools MCP process must reconnect to the new DevTools port before UI actions."
     ReadyForLiveUiInspection = [bool]($after.Running -and $after.PageCount -gt 0)
   }
 }
@@ -459,7 +459,7 @@ function Get-LiveReportObject {
     DevToolsPort = $status.DevToolsPort
     PageCount = @($pages).Count
     Pages = @($pages)
-    Note = "Use the DevTools page WebSocket or the antigravity-devtools MCP server for verified live UI inspection and interaction."
+    Note = "Use the DevTools page WebSocket or the ai-mobile-devtools MCP server for verified live UI inspection and interaction."
   }
 }
 
@@ -727,7 +727,7 @@ function Get-QuickReport {
       $null
     }
     LimitsError = $limitsError
-    NextToolHint = "Use antigravity-local quick first. If ReadyForLiveUiInspection is false, call repair-live once. If repair restarts Antigravity, reconnect DevTools before UI calls. Use limits-summary for compact quota checks, full limits only when needed. If UI handoff is blocked, use handoff-template."
+    NextToolHint = "Use ai-mobile-local quick first. If ReadyForLiveUiInspection is false, call repair-live once. If repair restarts Antigravity, reconnect DevTools before UI calls. Use limits-summary for compact quota checks, full limits only when needed. If UI handoff is blocked, use handoff-template."
   } | ConvertTo-Json -Depth 10
 }
 
@@ -815,9 +815,9 @@ function Get-DevToolsHealthText {
   $ready = $live.Running -and $pageCount -gt 0
   $status = if ($ready) { "ready" } else { "not-ready" }
   $next = if ($ready) {
-    "If antigravity-devtools still says Transport closed, do not retry the same MCP transport. Restart Codex so the DevTools MCP server is re-created, or use handoff-template/manual paste for this turn."
+    "If ai-mobile-devtools still says Transport closed, do not retry the same MCP transport. Restart Codex so the DevTools MCP server is re-created, or use handoff-template/manual paste for this turn."
   } else {
-    "Run repair-live once. If it restarts Antigravity, restart Codex before calling antigravity-devtools again."
+    "Run repair-live once. If it restarts Antigravity, restart Codex before calling ai-mobile-devtools again."
   }
 
   @(
@@ -827,7 +827,7 @@ function Get-DevToolsHealthText {
     "PageCount: $pageCount",
     "Next: $next",
     "",
-    "Rule: local helper commands can report health even when antigravity-devtools/list_pages fails with Transport closed."
+    "Rule: local helper commands can report health even when ai-mobile-devtools/list_pages fails with Transport closed."
   ) -join [Environment]::NewLine
 }
 
@@ -898,9 +898,9 @@ function Invoke-SubmitOffload {
   $submitValue = ConvertTo-BooleanValue -Value $Submit -Default $false
   $fillOnlyValue = ConvertTo-BooleanValue -Value $FillOnly -Default $false
   $skipModelSwitchValue = ConvertTo-BooleanValue -Value $SkipModelSwitch -Default $false
-  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
-    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
   $payload = [PSCustomObject]@{
@@ -929,9 +929,9 @@ function Invoke-SubmitOffload {
 }
 
 function Invoke-SwitchModel {
-  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
-    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
   $payload = [PSCustomObject]@{
@@ -957,9 +957,9 @@ function Invoke-BridgeJobCommand {
     [string] $CliCommand
   )
 
-  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
-    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
   $submitValue = ConvertTo-BooleanValue -Value $Submit -Default $true
@@ -994,9 +994,9 @@ function Invoke-ClaudeBridgeCommand {
     [string] $CliCommand
   )
 
-  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
-    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
@@ -1031,9 +1031,9 @@ function Invoke-AgyBridgeCommand {
     [string] $CliCommand
   )
 
-  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
-    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
@@ -1072,9 +1072,9 @@ function Invoke-CursorBridgeCommand {
     [string] $CliCommand
   )
 
-  $localMcpScript = Join-Path $PSScriptRoot "antigravity-local-mcp.js"
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
-    throw "antigravity-local-mcp.js was not found at $localMcpScript"
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true

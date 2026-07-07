@@ -52,7 +52,7 @@ const tools = [
   },
   {
     name: "devtools-health",
-    description: "Low-token fallback for antigravity-devtools transport errors. Reports live pages and the recommended recovery step.",
+    description: "Low-token fallback for ai-mobile-devtools transport errors. Reports live pages and the recommended recovery step.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -473,7 +473,7 @@ function buildPrepareOffload(args = {}, quick = null) {
   ].join("\n");
 
   const nextAction = decision.shouldOffload
-    ? "First call antigravity-local.switch-model with modelPreference=auto or flash-medium. Then call submit-offload with submit=true. Avoid raw DevTools choreography unless the direct tools fail."
+    ? "First call ai-mobile-local.switch-model with modelPreference=auto or flash-medium. Then call submit-offload with submit=true. Avoid raw DevTools choreography unless the direct tools fail."
     : "Do not open or drive Antigravity for this task. Answer or act directly in Codex.";
 
   return [
@@ -2216,8 +2216,8 @@ function buildDevToolsHealthAdvice(result) {
   const port = result?.DevToolsPort || "<unknown>";
   const status = running && pageCount > 0 ? "ready" : "not-ready";
   const next = status === "ready"
-    ? "If antigravity-devtools still says Transport closed, do not retry the same MCP transport. Restart Codex so the DevTools MCP server is re-created, or use handoff-template/manual paste for this turn."
-    : "Run antigravity-local.repair-live once. If it restarts Antigravity, restart Codex before calling antigravity-devtools again.";
+    ? "If ai-mobile-devtools still says Transport closed, do not retry the same MCP transport. Restart Codex so the DevTools MCP server is re-created, or use handoff-template/manual paste for this turn."
+    : "Run ai-mobile-local.repair-live once. If it restarts Antigravity, restart Codex before calling ai-mobile-devtools again.";
 
   return [
     `DevToolsHealth: ${status}`,
@@ -2226,7 +2226,7 @@ function buildDevToolsHealthAdvice(result) {
     `PageCount: ${pageCount}`,
     `Next: ${next}`,
     "",
-    "Rule: antigravity-local can report health even when antigravity-devtools/list_pages fails with Transport closed. A closed transport means the DevTools MCP child process died; it is not fixed by repeatedly calling list_pages in the same session.",
+    "Rule: ai-mobile-local can report health even when ai-mobile-devtools/list_pages fails with Transport closed. A closed transport means the DevTools MCP child process died; it is not fixed by repeatedly calling list_pages in the same session.",
   ].join("\n");
 }
 
@@ -2251,7 +2251,7 @@ async function handleRequest(message) {
     sendResult(id, {
       protocolVersion: params?.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "antigravity-local", version: "0.1.0" },
+      serverInfo: { name: "ai-mobile-local", version: "0.1.0" },
     });
     return;
   }
