@@ -21,6 +21,7 @@ Core jobs:
 - Report quota, model, UI, or submission errors without repeatedly retrying.
 - Switch the active chat to an available model automatically when the selected model is exhausted or unsuitable for cost-saving handoff.
 - Create durable bridge jobs and read compact artifacts instead of inspecting full Antigravity chats.
+- Use Antigravity CLI (`agy`) for low-RAM Antigravity work when visible desktop UI/project/chat state is not required.
 - Use local Claude Code CLI as an optional headless worker for coding/review bridge jobs when Antigravity UI context is not needed.
 
 Primary operating model:
@@ -32,18 +33,21 @@ Primary operating model:
 - Codex reviews Antigravity's result, identifies gaps, and gives Antigravity the next compact improvement task.
 - Codex performs final user-facing synthesis, safety checks, and narrow code patches only when that is cheaper or higher quality than another Antigravity pass.
 - Codex should not duplicate Antigravity's file reading, broad search, browser operation, or long reasoning unless Antigravity is blocked, unavailable, or the task is tiny.
-- For local coding/review tasks that do not need visible Antigravity project/chat state, Codex may delegate to Claude Code through `submit-claude-job` and then read the same compact bridge artifacts.
+- For Antigravity tasks that do not need visible desktop UI/project/chat state, Codex should delegate through `submit-agy-job` first and then read the same compact bridge artifacts.
+- For local coding/review tasks that do not need Antigravity context, Codex may delegate to Claude Code through `submit-claude-job` and then read the same compact bridge artifacts.
 
 ## MCP Tool Surfaces
 
 This plugin exposes two MCP servers:
 
-- `antigravity-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `claude-status`, `submit-claude-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
+- `antigravity-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `create-job`, `submit-job`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
 - `antigravity-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
 
 Prefer `antigravity-local.submit-job` for nontrivial coding/workspace work. It creates a durable `.antigravity-bridge/jobs/<jobId>/` folder, asks Antigravity to write compact artifacts, verifies/switches the selected model, submits once, and lets Codex stop watching the UI. Use `antigravity-local.read-job` later to read only the artifact files. Use `antigravity-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted, do not wait for the user to say so: call `antigravity-local.switch-model` with `modelPreference=flash-medium` or pass `modelPreference=flash-medium` to `submit-job` / `submit-offload`. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper equivalents before falling back to DevTools choreography. Use `antigravity-local.prepare-offload` when Codex should first show the plan or when the selected chat is uncertain. For any nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, or job-application task, default to Antigravity for exploration and long reasoning, while Codex stays the planner, safety gate, patch reviewer, and final summarizer. Use `antigravity-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false or `PageCount` is zero, call `antigravity-local.repair-live` once before using DevTools. If `repair-live` restarts Antigravity, do not keep using an already-started stale DevTools MCP connection; let it reconnect to the new port before UI calls. If `antigravity-devtools` fails with `Transport closed`, do not repeatedly call `list_pages` in that session. Call `antigravity-local.devtools-health`; if it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for a manual paste this turn. Use `limits-summary` for normal quota checks and full `limits` only when complete per-model JSON is needed. Use `antigravity-devtools` for project/chat selection only when the selected chat is not already correct. If this skill file cannot be read in a Codex session, run the PowerShell helper fast path.
 
 Use `antigravity-local.claude-status` and `antigravity-local.submit-claude-job` for headless local coding/review jobs when the user has Claude Code installed and the task does not need Antigravity's visible UI/chat context. `submit-claude-job` creates `.antigravity-bridge/jobs/<jobId>/`, starts Claude Code in non-interactive mode, and returns immediately. Codex should later call `read-job` and inspect only compact artifacts. Do not use Claude Code as a hidden substitute for Antigravity project/chat work; use it as a local worker for code review, patching, and repository analysis.
+
+Use `antigravity-local.agy-status`, `antigravity-local.agy-models`, and `antigravity-local.submit-agy-job` for low-RAM Antigravity work. `submit-agy-job` uses official Antigravity CLI print mode and does not open the desktop app. Prefer it before desktop UI tools unless the user explicitly asks to inspect/continue a visible Antigravity project/chat or use Manager/Editor UI state.
 
 Existing-chat rule: if the user asks for an existing project/chat, do not create or use a new chat. `expectedChat` must match the active Antigravity document title before model switching or submission. If the helper reports `expectedChatActiveTitle` or `activeExistingChat`, stop and select the correct existing chat before submitting.
 
@@ -58,6 +62,7 @@ Startup rule: plugin MCP startup must be passive. Do not open, close, restart, o
 - Antigravity user data at: `%APPDATA%\Antigravity`.
 - Plugin installed at: `%USERPROFILE%\plugins\Ai-Mobile-Codex-plugin`.
 - Node.js available on `PATH` when using the bundled `chrome-devtools-mcp` bridge.
+- Optional Antigravity CLI available as `agy` on `PATH` or `%LOCALAPPDATA%\agy\bin\agy.exe` for low-RAM Antigravity jobs.
 - Optional Claude Code CLI available as `claude` on `PATH` and logged in for headless Claude bridge jobs.
 
 The helper scripts compute `%LOCALAPPDATA%`, `%APPDATA%`, and `%USERPROFILE%` at runtime. Do not hardcode another user's home directory, ports, project names, chats, email addresses, or runtime tokens.
@@ -126,6 +131,23 @@ Create and submit a durable bridge job:
 
 ```text
 Call antigravity-local.submit-job with goal, workspace, mode, nextStep, expectedProject, expectedChat, modelPreference=auto, and submit=true.
+```
+
+Use low-RAM Antigravity CLI for non-UI Antigravity jobs:
+
+```text
+Call antigravity-local.agy-status.
+Call antigravity-local.agy-models.
+Call antigravity-local.submit-agy-job with goal, workspace, mode, nextStep, model=gemini-3.5-flash-low, and start=true.
+Call antigravity-local.read-job with workspace and the returned jobId.
+```
+
+PowerShell fallback:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" agy-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" agy-models
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\Ai-Mobile-Codex-plugin\scripts\antigravity.ps1" submit-agy-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -AgyModel gemini-3.5-flash-low
 ```
 
 Read job results without reading the Antigravity chat:
@@ -343,6 +365,7 @@ Do not offload:
 Do offload:
 
 - most nontrivial workspace tasks that would make Codex read files, large logs, browser state, or transcripts,
+- non-UI Antigravity tasks to Antigravity CLI (`submit-agy-job`) before opening desktop UI,
 - ongoing Antigravity project/chat work where the Antigravity context is already useful,
 - local coding/review tasks to Claude Code when the `claude` CLI is installed and Antigravity UI context would add friction,
 - debugging, implementation, job-search/application workflows, UI operation, reviews, planning, research, and analysis that can write a compact artifact,
@@ -359,7 +382,8 @@ Important lesson from project chats: Antigravity may automatically inspect attac
 Core rule:
 
 - Codex is the router, verifier, and final summarizer.
-- Antigravity is the long-running worker.
+- Antigravity CLI is the default low-RAM Antigravity worker.
+- Antigravity desktop UI is the visual project/chat worker only when UI state matters.
 - Claude Code is the headless local worker when UI/project chat context is unnecessary.
 - Files are the compact memory between them.
 
@@ -367,14 +391,15 @@ Do not copy large files, long logs, full source, or full Antigravity chat transc
 
 Fast preferred flow:
 
-1. If the correct project/chat is already selected and the task is nontrivial workspace work, call `antigravity-local.submit-job` with `submit=true`, `modelPreference=auto`, and expected visible project/chat text.
-2. If the task is pure repository code/review work and does not require Antigravity's visible chat/project state, call `antigravity-local.claude-status` and then `antigravity-local.submit-claude-job`; read artifacts with `read-job`.
-3. If a quota warning is visible or the user mentions Sonnet/Opus/GPT-OSS exhaustion, call `antigravity-local.switch-model` with `modelPreference=flash-medium` first.
-4. If MCP job/model tools are not visible, run `antigravity.ps1 submit-job` / `antigravity.ps1 submit-claude-job` / `antigravity.ps1 switch-model` with the same fields.
-5. If the selected chat is uncertain, call `antigravity-local.prepare-offload`, then use DevTools only to select the project/chat; use `switch-model` for the model.
-6. If the decision is `codex-direct`, do not open or drive Antigravity.
-7. After a successful `submit-job` or `submit-claude-job`, stop watching every step. Read only the job artifacts with `read-job`.
-8. If the artifact is weak, issue another compact Antigravity/Claude follow-up or retry with the exact missing point. Do not pull broad context back into Codex unless needed for final verification.
+1. If the task is Antigravity-capable but does not require visible desktop UI/project/chat state, call `antigravity-local.agy-status`, `agy-models`, then `submit-agy-job`; read artifacts with `read-job`.
+2. If the correct desktop project/chat is already selected and visible UI context matters, call `antigravity-local.submit-job` with `submit=true`, `modelPreference=auto`, and expected visible project/chat text.
+3. If the task is pure repository code/review work and does not require Antigravity context, call `antigravity-local.claude-status` and then `antigravity-local.submit-claude-job`; read artifacts with `read-job`.
+4. If a quota warning is visible or the user mentions Sonnet/Opus/GPT-OSS exhaustion in the desktop UI, call `antigravity-local.switch-model` with `modelPreference=flash-medium` first.
+5. If MCP job/model tools are not visible, run `antigravity.ps1 submit-agy-job` / `antigravity.ps1 submit-job` / `antigravity.ps1 submit-claude-job` / `antigravity.ps1 switch-model` with the same fields.
+6. If the selected desktop chat is uncertain, call `antigravity-local.prepare-offload`, then use DevTools only to select the project/chat; use `switch-model` for the model.
+7. If the decision is `codex-direct`, do not open or drive Antigravity.
+8. After a successful `submit-agy-job`, `submit-job`, or `submit-claude-job`, stop watching every step. Read only the job artifacts with `read-job`.
+9. If the artifact is weak, issue another compact Antigravity/Claude follow-up or retry with the exact missing point. Do not pull broad context back into Codex unless needed for final verification.
 
 Detailed fallback flow:
 

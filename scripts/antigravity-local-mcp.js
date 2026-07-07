@@ -112,6 +112,39 @@ const tools = [
     },
   },
   {
+    name: "agy-status",
+    description: "Report whether the official Antigravity CLI (agy) is installed for low-RAM terminal agent work. Does not start the desktop UI.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "agy-models",
+    description: "List models available to the official Antigravity CLI without opening the desktop UI.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "submit-agy-job",
+    description: "Create a durable bridge job and run the official Antigravity CLI in print mode, avoiding the desktop UI unless visual project/chat state is needed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Task goal for Antigravity CLI." },
+        workspace: { type: "string", description: "Local workspace path where .antigravity-bridge/jobs will be created." },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
+        nextStep: { type: "string", description: "Specific next action.", default: "Inspect the relevant files and write compact artifacts." },
+        model: { type: "string", description: "Antigravity CLI model id/name, such as gemini-3.5-flash-low.", default: "gemini-3.5-flash-low" },
+        project: { type: "string", description: "Optional Antigravity CLI project id." },
+        conversation: { type: "string", description: "Optional Antigravity CLI conversation id to resume." },
+        continueLatest: { type: "boolean", description: "Continue the most recent Antigravity CLI conversation.", default: false },
+        sandbox: { type: "boolean", description: "Run Antigravity CLI with terminal sandbox restrictions enabled.", default: true },
+        printTimeout: { type: "string", description: "Antigravity CLI print timeout, such as 5m or 30s.", default: "5m" },
+        start: { type: "boolean", description: "Set false to create the job without starting Antigravity CLI.", default: true },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Antigravity CLI worker may run.", default: 30 },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "claude-status",
     description: "Report whether local Claude Code CLI is installed and usable for headless bridge jobs. Does not start a job.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -844,6 +877,256 @@ function getClaudeStatusText() {
     `Version: ${status.version || "<unknown>"}`,
     "SupportedBridge: headless Claude Code CLI via claude -p",
     "Startup: passive; no Claude job is started by this status check.",
+  ].join("\n");
+}
+
+function commandCheck(command, args = ["--version"], options = {}) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    timeout: options.timeout || 10000,
+    windowsHide: true,
+  });
+  return {
+    ok: result.status === 0,
+    stdout: String(result.stdout || "").trim(),
+    stderr: String(result.stderr || "").trim(),
+    error: result.error?.message || "",
+  };
+}
+
+function findAgyCli() {
+  const candidates = [];
+  if (process.platform === "win32") {
+    const where = spawnSync("where.exe", ["agy"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+    for (const line of String(where.stdout || "").split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) candidates.push(trimmed);
+    }
+    if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe"));
+    candidates.push("agy.exe", "agy");
+  } else {
+    candidates.push("agy");
+  }
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const check = commandCheck(candidate, ["--version"]);
+    if (check.ok) {
+      return { found: true, command: candidate, version: check.stdout || check.stderr };
+    }
+  }
+  return { found: false, command: "", version: "", message: "Antigravity CLI (agy) was not found. Install it with: irm https://antigravity.google/cli/install.ps1 | iex" };
+}
+
+function getAgyStatusText() {
+  const status = findAgyCli();
+  return [
+    "AgyCliStatus:",
+    `Found: ${status.found}`,
+    `Command: ${status.command || "<not found>"}`,
+    `Version: ${status.version || "<unknown>"}`,
+    "SupportedBridge: Antigravity CLI print mode via agy -p",
+    "Startup: passive; no Antigravity desktop UI is opened by this status check.",
+  ].join("\n");
+}
+
+function getAgyModelsText() {
+  const status = findAgyCli();
+  if (!status.found) return `AgyModels:\nFound: false\nBlocker: ${status.message}`;
+  const result = commandCheck(status.command, ["models"], { timeout: 30000 });
+  return [
+    "AgyModels:",
+    `Found: true`,
+    `Command: ${status.command}`,
+    `ExitCode: ${result.ok ? 0 : 1}`,
+    result.stdout || result.stderr || result.error || "<empty>",
+  ].join("\n");
+}
+
+function safeAgyFlag(value, name) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (!/^[A-Za-z0-9._:/@()+ -]+$/.test(text)) {
+    throw new Error(`Unsafe Antigravity CLI ${name} value. Use a simple id or display name.`);
+  }
+  return text;
+}
+
+function buildAgyJobPrompt(workspace, jobId, args = {}) {
+  const jobDir = jobDirFor(workspace, jobId);
+  const request = summarizeFile(path.join(jobDir, "request.md"), 18000);
+  return [
+    "You are Antigravity CLI running as a low-RAM local worker for Codex.",
+    "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
+    "",
+    request,
+    "",
+    "Artifact rules:",
+    `- Write the final compact result to: ${path.join(jobDir, "result.md")}`,
+    `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
+    `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
+    "- If blocked, write one concise blocker and the next smallest action.",
+    "- Keep result.md to max 10 bullets.",
+    "",
+    `Current next step: ${String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim()}`,
+  ].join("\n");
+}
+
+function runAgyJobWorker(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const jobId = resolveJobId(workspace, args.jobId);
+  const jobDir = jobDirFor(workspace, jobId);
+  const status = findAgyCli();
+  if (!status.found) {
+    updateJobStatus(workspace, jobId, {
+      state: "failed",
+      currentStep: "agy-cli-not-found",
+      blocker: status.message,
+    });
+    return `AgyJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${status.message}`;
+  }
+
+  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 30)));
+  const prompt = buildAgyJobPrompt(workspace, jobId, args);
+  const cliArgs = ["-p"];
+  if (args.model) cliArgs.push("--model", safeAgyFlag(args.model, "model"));
+  if (args.project) cliArgs.push("--project", safeAgyFlag(args.project, "project"));
+  if (args.conversation) cliArgs.push("--conversation", safeAgyFlag(args.conversation, "conversation"));
+  if (args.continueLatest) cliArgs.push("--continue");
+  if (args.sandbox !== false) cliArgs.push("--sandbox");
+  if (args.printTimeout) cliArgs.push("--print-timeout", safeAgyFlag(args.printTimeout, "printTimeout"));
+
+  updateJobStatus(workspace, jobId, {
+    state: "running",
+    worker: "antigravity-cli",
+    currentStep: "agy-cli-running",
+    startedAt: utcStamp(),
+    agyCommand: status.command,
+    agyVersion: status.version,
+    agyModel: args.model || "",
+  });
+
+  const result = spawnSync(status.command, cliArgs, {
+    cwd: workspace,
+    input: prompt,
+    encoding: "utf8",
+    timeout: maxMinutes * 60 * 1000,
+    maxBuffer: 8 * 1024 * 1024,
+    windowsHide: true,
+  });
+
+  const stdout = String(result.stdout || "");
+  const stderr = String(result.stderr || "");
+  fs.writeFileSync(path.join(jobDir, "agy-output.txt"), truncateText(stdout, 80000), "utf8");
+  fs.writeFileSync(path.join(jobDir, "agy-error.txt"), truncateText(stderr, 30000), "utf8");
+
+  const resultPath = path.join(jobDir, "result.md");
+  if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
+    fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Antigravity CLI produced no output>", 24000), "utf8");
+  }
+
+  const testsPath = path.join(jobDir, "test-output-summary.md");
+  if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
+    fs.writeFileSync(
+      testsPath,
+      [
+        `AgyCliExitCode: ${result.status ?? "<unknown>"}`,
+        `TimedOut: ${Boolean(result.error && result.error.code === "ETIMEDOUT")}`,
+        stderr.trim() ? `Stderr: ${truncateText(stderr.trim(), 4000)}` : "Stderr: <empty>",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+  }
+
+  writeGitArtifacts(workspace, jobDir);
+
+  const failed = result.status !== 0 || Boolean(result.error);
+  updateJobStatus(workspace, jobId, {
+    state: failed ? "failed" : "completed",
+    currentStep: failed ? "agy-cli-failed" : "agy-cli-completed",
+    completedAt: utcStamp(),
+    exitCode: result.status,
+    blocker: failed ? truncateText(result.error?.message || stderr || stdout || "Antigravity CLI exited non-zero.", 1000) : "",
+  });
+
+  return [
+    "AgyJobWorkerResult:",
+    `JobId: ${jobId}`,
+    `State: ${failed ? "failed" : "completed"}`,
+    `JobFolder: ${jobDir}`,
+  ].join("\n");
+}
+
+function submitAgyJob(args = {}) {
+  const created = createJob({ ...args, worker: "antigravity-cli" });
+  const start = args.start !== false;
+  updateJobStatus(created.workspace, created.jobId, {
+    worker: "antigravity-cli",
+    currentStep: start ? "agy-cli-queued" : "agy-cli-created-not-started",
+  });
+
+  if (!start) {
+    return [
+      "SubmitAgyJobResult:",
+      `JobId: ${created.jobId}`,
+      `JobFolder: ${created.jobDir}`,
+      "State: queued",
+      "Started: false",
+      "Next: call submit-agy-job again with start=true or run the worker from this job folder.",
+    ].join("\n");
+  }
+
+  const status = findAgyCli();
+  if (!status.found) {
+    updateJobStatus(created.workspace, created.jobId, {
+      state: "failed",
+      currentStep: "agy-cli-not-found",
+      blocker: status.message,
+    });
+    return [
+      "SubmitAgyJobResult:",
+      `JobId: ${created.jobId}`,
+      `JobFolder: ${created.jobDir}`,
+      "State: failed",
+      `Blocker: ${status.message}`,
+    ].join("\n");
+  }
+
+  const payloadPath = path.join(created.jobDir, "agy-worker-payload.json");
+  writeJsonFile(payloadPath, {
+    ...args,
+    workspace: created.workspace,
+    jobId: created.jobId,
+    model: args.model || args.agyModel || "gemini-3.5-flash-low",
+    printTimeout: args.printTimeout || "5m",
+  });
+  const child = spawn(process.execPath, [__filename, "agy-job-worker-cli", "--json-file", payloadPath], {
+    cwd: pluginRoot,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+
+  updateJobStatus(created.workspace, created.jobId, {
+    state: "running",
+    currentStep: "agy-cli-background-started",
+    workerPid: child.pid,
+    agyCommand: status.command,
+    agyVersion: status.version,
+  });
+
+  return [
+    "SubmitAgyJobResult:",
+    `JobId: ${created.jobId}`,
+    `JobFolder: ${created.jobDir}`,
+    "State: running",
+    "Started: true",
+    `WorkerPid: ${child.pid}`,
+    "Next: call read-job with this jobId; Codex should read only compact artifacts.",
   ].join("\n");
 }
 
@@ -1690,6 +1973,22 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "agy-status") {
+        sendResult(id, { content: [{ type: "text", text: getAgyStatusText() }] });
+        return;
+      }
+
+      if (name === "agy-models") {
+        sendResult(id, { content: [{ type: "text", text: getAgyModelsText() }] });
+        return;
+      }
+
+      if (name === "submit-agy-job") {
+        const text = submitAgyJob(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "claude-status") {
         sendResult(id, { content: [{ type: "text", text: getClaudeStatusText() }] });
         return;
@@ -1758,7 +2057,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -1779,6 +2078,10 @@ if (["submit-offload-cli", "switch-model-cli", "create-job-cli", "submit-job-cli
       return `CreateJobResult:\nJobId: ${created.jobId}\nJobFolder: ${created.jobDir}\nState: queued`;
     },
     "submit-job-cli": submitJob,
+    "agy-status-cli": async () => getAgyStatusText(),
+    "agy-models-cli": async () => getAgyModelsText(),
+    "submit-agy-job-cli": async (value) => submitAgyJob(value),
+    "agy-job-worker-cli": async (value) => runAgyJobWorker(value),
     "claude-status-cli": async () => getClaudeStatusText(),
     "submit-claude-job-cli": async (value) => submitClaudeJob(value),
     "claude-job-worker-cli": async (value) => runClaudeJobWorker(value),
