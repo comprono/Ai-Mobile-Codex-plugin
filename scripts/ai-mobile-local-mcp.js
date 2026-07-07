@@ -118,6 +118,34 @@ const tools = [
     },
   },
   {
+    name: "run-efficient-task",
+    description: "One-call efficient execution: plan the route, safely start the chosen worker when possible, and return the compact readback instruction.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "User goal to route and start." },
+        workspace: { type: "string", description: "Local workspace path where durable job artifacts should be written." },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
+        nextStep: { type: "string", description: "Specific next action for the selected worker.", default: "Inspect the relevant files and write compact artifacts." },
+        codexBudgetState: { type: "string", description: "Caller-observed Codex budget state.", default: "unknown" },
+        estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled directly.", default: 2000 },
+        hasWorkspaceWork: { type: "boolean", description: "Whether the task needs files, diffs, logs, browser state, or project context.", default: true },
+        needsVisibleAntigravityChat: { type: "boolean", description: "Whether the task must continue/select a visible Antigravity project/chat.", default: false },
+        needsUi: { type: "boolean", description: "Whether the task needs visual desktop UI state.", default: false },
+        expectedProject: { type: "string", description: "Optional visible Antigravity project text." },
+        expectedChat: { type: "string", description: "Optional visible Antigravity chat/conversation title." },
+        modelPreference: { type: "string", description: "Antigravity desktop model preference.", default: "auto" },
+        agyModel: { type: "string", description: "Optional Antigravity CLI model id." },
+        claudeModel: { type: "string", description: "Claude Code model alias.", default: "sonnet" },
+        cursorModel: { type: "string", description: "Optional Cursor agent model." },
+        start: { type: "boolean", description: "Start the selected worker when possible.", default: true },
+        submit: { type: "boolean", description: "Submit into Antigravity desktop when that route is selected.", default: true },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create-job",
     description: "Create a durable Antigravity bridge job folder with request/status/result/diff artifact files. Does not touch the UI.",
     inputSchema: {
@@ -686,6 +714,10 @@ function valueFromPlan(planText, label) {
   return line ? line.slice(label.length + 1).trim() : "";
 }
 
+function valueFromResult(text, label) {
+  return valueFromPlan(text, label);
+}
+
 async function buildEfficiencyFlow(args = {}) {
   const plan = await buildOrchestrationPlan(args);
   const route = valueFromPlan(plan, "Route") || "unknown";
@@ -737,6 +769,117 @@ async function buildEfficiencyFlow(args = {}) {
     "- If Codex budget is low, Codex may route and summarize only; workers do broad reading/reasoning.",
     "",
     plan,
+  ].filter(Boolean).join("\n");
+}
+
+async function runEfficientTask(args = {}) {
+  const flow = await buildEfficiencyFlow(args);
+  const route = valueFromPlan(flow, "Route") || "unknown";
+  const workspace = String(args.workspace || "").trim();
+  const start = args.start !== false;
+  const submit = args.submit !== false;
+  const base = {
+    goal: args.goal,
+    workspace,
+    mode: args.mode || "fast",
+    nextStep: args.nextStep || "Inspect the relevant files and write compact artifacts.",
+  };
+
+  if (!start) {
+    return [
+      flow,
+      "",
+      "RunEfficientTaskResult:",
+      "Started: false",
+      "Reason: start=false; returned only the flow.",
+    ].join("\n");
+  }
+
+  let action = "";
+  let selectedTool = "";
+  if (route === "antigravity-cli") {
+    selectedTool = "submit-agy-job";
+    action = submitAgyJob({
+      ...base,
+      model: args.agyModel || args.model || "",
+      start: true,
+    });
+  } else if (route === "claude-code") {
+    selectedTool = "submit-claude-job";
+    action = submitClaudeJob({
+      ...base,
+      model: args.claudeModel || "sonnet",
+      start: true,
+    });
+  } else if (route === "cursor-headless") {
+    selectedTool = "submit-cursor-job";
+    action = submitCursorJob({
+      ...base,
+      model: args.cursorModel || "",
+      start: true,
+    });
+  } else if (route === "antigravity-desktop-chat" || route === "antigravity-desktop") {
+    selectedTool = "submit-job";
+    if (args.expectedChat) {
+      const selectResult = await selectAntigravityChat({
+        expectedProject: args.expectedProject || "",
+        expectedChat: args.expectedChat || "",
+      });
+      if (!/Ok:\s*true/i.test(selectResult)) {
+        return [
+          flow,
+          "",
+          selectResult,
+          "",
+          "RunEfficientTaskResult:",
+          "Started: false",
+          "Submitted: false",
+          "Reason: expected Antigravity chat was not verified; refusing to submit into the wrong chat.",
+          "Next: make the target chat visible/active or rerun with the correct expectedChat.",
+        ].join("\n");
+      }
+    }
+    action = await submitJob({
+      ...base,
+      expectedProject: args.expectedProject || "",
+      expectedChat: args.expectedChat || "",
+      modelPreference: args.modelPreference || "auto",
+      submit,
+    });
+  } else {
+    return [
+      flow,
+      "",
+      "RunEfficientTaskResult:",
+      "Started: false",
+      "Submitted: false",
+      `Route: ${route}`,
+      "Reason: route is Codex-direct/minimal or unknown; no external worker should be started.",
+      "Next: Codex should perform one targeted command/read or ask for a narrower task.",
+    ].join("\n");
+  }
+
+  const jobId = valueFromResult(action, "JobId");
+  const started = /\bStarted:\s*true\b/i.test(action) || /\bState:\s*running\b/i.test(action);
+  const submitted = /\bSubmitted:\s*true\b/i.test(action);
+  const failed = /\bState:\s*failed\b/i.test(action) || /\bOk:\s*false\b/i.test(action);
+  const readCommand = jobId
+    ? `ai-mobile-local.read-job with workspace=${workspace} and jobId=${jobId}`
+    : "read-job unavailable until a JobId is returned";
+  return [
+    flow,
+    "",
+    "SelectedAction:",
+    `Tool: ${selectedTool}`,
+    action,
+    "",
+    "RunEfficientTaskResult:",
+    `Started: ${started && !failed}`,
+    `Submitted: ${submitted}`,
+    jobId ? `JobId: ${jobId}` : null,
+    `ReadBack: ${readCommand}`,
+    failed ? "Status: failed-or-unverified" : "Status: dispatched-or-ready",
+    "Next: do not watch the worker chat. Wait, then read only compact artifacts via read-job.",
   ].filter(Boolean).join("\n");
 }
 
@@ -2707,6 +2850,12 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "run-efficient-task") {
+        const text = await runEfficientTask(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "create-job") {
         const created = createJob(params?.arguments || {});
         const text = [
@@ -2833,7 +2982,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["orchestration-plan-cli", "efficiency-flow-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -2849,6 +2998,7 @@ if (["orchestration-plan-cli", "efficiency-flow-cli", "submit-offload-cli", "swi
   const actions = {
     "orchestration-plan-cli": buildOrchestrationPlan,
     "efficiency-flow-cli": buildEfficiencyFlow,
+    "run-efficient-task-cli": runEfficientTask,
     "submit-offload-cli": submitOffloadToCurrentChat,
     "switch-model-cli": switchModelInCurrentChat,
     "select-chat-cli": selectAntigravityChat,

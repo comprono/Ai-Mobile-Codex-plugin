@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Orchestrate mobile-started Codex sessions across local Antigravity, Claude Code, and Cursor workers.",
-    "longDescription": "Adds Codex-side orchestration helpers for mobile-started OpenAI Codex workflows on Windows. The plugin exposes local MCP tools for compact quick readiness checks, efficiency-flow planning, orchestration planning, status, live readiness, model limit summaries, low-RAM Antigravity CLI jobs, existing Antigravity chat selection, active Antigravity chat model switching, durable bridge jobs, optional Claude Code headless bridge jobs, Cursor UI handoff, fail-closed Cursor agent bridge jobs when a true cursor-agent binary exists, full Antigravity model limits, and privacy scans, plus a DevTools MCP bridge for live Antigravity UI automation. It can compare caller-provided Codex budget state, Antigravity model availability, Claude Code availability, Cursor availability, and task shape before selecting a worker, then keep Codex in the loop through submit, wait, compact artifact readback, follow-up, verification, and summary. It can verify setup on another user's machine, launch the Antigravity desktop app only when needed, open Cursor UI only when needed, report install and process status, read model quota state from Antigravity's local language server, list Antigravity CLI models, select and verify an existing visible chat before submitting, switch the active chat away from exhausted models to an available Flash/Gemini model, create .antigravity-bridge job folders, submit jobs to Antigravity CLI, Antigravity desktop, local Claude Code CLI, or a true Cursor agent CLI when available, list/read/cancel/retry jobs, inspect visible projects and chats, continue existing chats, start new chats in existing projects, start new projects, and hand off instructions safely after live UI verification.",
+    "longDescription": "Adds Codex-side orchestration helpers for mobile-started OpenAI Codex workflows on Windows. The plugin exposes local MCP tools for compact quick readiness checks, run-efficient-task dispatch, efficiency-flow planning, orchestration planning, status, live readiness, model limit summaries, low-RAM Antigravity CLI jobs, existing Antigravity chat selection, active Antigravity chat model switching, durable bridge jobs, optional Claude Code headless bridge jobs, Cursor UI handoff, fail-closed Cursor agent bridge jobs when a true cursor-agent binary exists, full Antigravity model limits, and privacy scans, plus a DevTools MCP bridge for live Antigravity UI automation. It can compare caller-provided Codex budget state, Antigravity model availability, Claude Code availability, Cursor availability, and task shape before selecting a worker, safely start that worker when allowed, then keep Codex in the loop through submit/start, wait, compact artifact readback, follow-up, verification, and summary. It can verify setup on another user's machine, launch the Antigravity desktop app only when needed, open Cursor UI only when needed, report install and process status, read model quota state from Antigravity's local language server, list Antigravity CLI models, select and verify an existing visible chat before submitting, switch the active chat away from exhausted models to an available Flash/Gemini model, create .antigravity-bridge job folders, submit jobs to Antigravity CLI, Antigravity desktop, local Claude Code CLI, or a true Cursor agent CLI when available, list/read/cancel/retry jobs, inspect visible projects and chats, continue existing chats, start new chats in existing projects, start new projects, and hand off instructions safely after live UI verification.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -42,6 +42,7 @@
     "capabilities": [
       "Local app launch",
       "AI worker orchestration",
+      "One-call efficient dispatch",
       "Efficiency flow",
       "Capacity-aware routing",
       "Compact quick status",
@@ -65,6 +66,7 @@
       "Public repo privacy scan"
     ],
     "defaultPrompt": [
+      "Run efficient task",
       "Run AI Mobile efficiency flow",
       "Plan AI Mobile orchestration",
       "Quick check AI Mobile bridge",

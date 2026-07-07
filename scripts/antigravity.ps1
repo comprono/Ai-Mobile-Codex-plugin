@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -1040,6 +1040,52 @@ function Invoke-EfficiencyFlow {
   }
 }
 
+function Invoke-RunEfficientTask {
+  $hasWorkspaceWorkValue = ConvertTo-BooleanValue -Value $HasWorkspaceWork -Default $true
+  $needsVisibleChatValue = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
+  $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
+  $submitValue = ConvertTo-BooleanValue -Value $Submit -Default $true
+  $runAgyModel = ""
+  if ($PSBoundParameters.ContainsKey("AgyModel")) {
+    $runAgyModel = $AgyModel
+  }
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
+  if (-not (Test-Path -LiteralPath $localMcpScript)) {
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
+  }
+
+  $payload = [PSCustomObject]@{
+    goal = $Goal
+    workspace = $Workspace
+    mode = $Mode
+    nextStep = $NextStep
+    codexBudgetState = $CodexBudgetState
+    estimatedCodexInputTokens = $EstimatedCodexInputTokens
+    hasWorkspaceWork = $hasWorkspaceWorkValue
+    needsVisibleAntigravityChat = $needsVisibleChatValue
+    needsUi = $needsVisibleChatValue
+    expectedProject = $ExpectedProject
+    expectedChat = $ExpectedChat
+    modelPreference = $ModelPreference
+    agyModel = $runAgyModel
+    claudeModel = $ClaudeModel
+    cursorModel = $CursorModel
+    start = $startValue
+    submit = $submitValue
+  } | ConvertTo-Json -Compress
+
+  $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-run-efficient-task-{0}.json" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    & node $localMcpScript run-efficient-task-cli --json-file $payloadFile
+    if ($LASTEXITCODE -ne 0) {
+      throw "run-efficient-task failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-BridgeJobCommand {
   param(
     [string] $CliCommand
@@ -1304,6 +1350,10 @@ switch ($Command) {
 
   "efficiency-flow" {
     Invoke-EfficiencyFlow
+  }
+
+  "run-efficient-task" {
+    Invoke-RunEfficientTask
   }
 
   "create-job" {
