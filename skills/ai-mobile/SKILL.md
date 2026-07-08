@@ -24,6 +24,7 @@ Core jobs:
 - Use Antigravity CLI (`agy`) for low-RAM Antigravity work when visible desktop UI/project/chat state is not required.
 - Use local Claude Code CLI as an optional headless worker for coding/review bridge jobs when Antigravity UI context is not needed.
 - Use local Cursor as an optional UI worker for Cursor workspace/chat workflows, and use `cursor-agent` headlessly only when a true `cursor-agent` binary is installed.
+- Plan and run team workflows where Codex coordinates while Antigravity CLI and Claude Code handle separate lanes of the same project.
 
 Primary operating model:
 
@@ -33,9 +34,12 @@ Primary operating model:
 - `run-efficient-task` is the default because it combines token saving and delivery flow with safe dispatch: budget gate, route gate, submit/start gate, wait gate, compact-read gate, improvement gate, verification gate, and summary gate.
 - Use `efficiency-flow` when Codex should preview the flow without starting a worker.
 - Use `orchestration-plan` only when Codex needs the route/capacity snapshot without the full delivery loop.
+- Use `team-orchestration-plan` for larger goals that should be split across UI, backend, testing, review, documentation, or release lanes over the next planning horizon, usually 5 hours.
+- Use `run-team-task` when Codex should start available lanes in parallel: Codex leads, Antigravity CLI scouts broad UI/product/integration context, and Claude Code handles implementation/testing/review.
 - The orchestrator compares: caller-provided Codex budget state, Antigravity model availability from local limits, Claude Code availability, Cursor headless availability, and whether visible Antigravity UI/chat state is required.
 - Codex token availability is not directly readable by this local plugin. If the Codex UI shows a remaining budget or the user states one, pass it as `codexBudgetState`; otherwise use `unknown` and route conservatively.
 - Claude Code remaining usage is not exposed by `claude-status`; treat Claude Code as availability/version only unless a future Claude API exposes remaining usage.
+- A 5-hour capacity plan can only use exposed local signals: caller-provided Codex budget text, Antigravity model availability/reset metadata from the local model API, Claude Code installed/login availability, and Cursor headless availability.
 - Codex delegates nontrivial work to Antigravity first.
 - Codex waits instead of doing the same exploration itself.
 - Codex reads only compact status artifacts, targeted diffs, or concise visible status.
@@ -60,7 +64,7 @@ Claude routing hard rule:
 
 This plugin exposes two MCP servers:
 
-- `ai-mobile-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `orchestration-plan`, `efficiency-flow`, `run-efficient-task`, `create-job`, `submit-job`, `select-chat`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
+- `ai-mobile-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `orchestration-plan`, `efficiency-flow`, `run-efficient-task`, `team-orchestration-plan`, `run-team-task`, `create-job`, `submit-job`, `select-chat`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
 - `ai-mobile-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
 
 Prefer `ai-mobile-local.submit-job` for nontrivial coding/workspace work. It creates a durable `.antigravity-bridge/jobs/<jobId>/` folder, asks Antigravity to write compact artifacts, verifies/switches the selected model, submits once, and lets Codex stop watching the UI. Use `ai-mobile-local.read-job` later to read only the artifact files. Use `ai-mobile-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted, do not wait for the user to say so: call `ai-mobile-local.switch-model` with `modelPreference=flash-medium` or pass `modelPreference=flash-medium` to `submit-job` / `submit-offload`. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper equivalents before falling back to DevTools choreography. Use `ai-mobile-local.prepare-offload` when Codex should first show the plan or when the selected chat is uncertain. For any nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, or job-application task, default to Antigravity for exploration and long reasoning, while Codex stays the planner, safety gate, patch reviewer, and final summarizer. Use `ai-mobile-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false or `PageCount` is zero, call `ai-mobile-local.repair-live` once before using DevTools. If `repair-live` restarts Antigravity, do not keep using an already-started stale DevTools MCP connection; let it reconnect to the new port before UI calls. If `ai-mobile-devtools` fails with `Transport closed`, do not repeatedly call `list_pages` in that session. Call `ai-mobile-local.devtools-health`; if it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for a manual paste this turn. Use `limits-summary` for normal quota checks and full `limits` only when complete per-model JSON is needed. Use `ai-mobile-devtools` for project/chat selection only when the selected chat is not already correct. If this skill file cannot be read in a Codex session, run the PowerShell helper fast path.
@@ -171,6 +175,25 @@ If that MCP tool is not exposed, use the helper directly:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -CodexBudgetState "unknown" -EstimatedCodexInputTokens 2000
+```
+
+Plan a multi-worker team workflow:
+
+```text
+Call ai-mobile-local.team-orchestration-plan with goal, workspace, taskSplit, horizonHours=5, codexBudgetState, estimatedCodexInputTokens, expectedProject, and expectedChat.
+```
+
+Run the multi-worker team workflow:
+
+```text
+Call ai-mobile-local.run-team-task with goal, workspace, taskSplit, horizonHours=5, mode, codexBudgetState, agyModel, claudeModel, includeCursor, and start=true.
+```
+
+PowerShell fallback:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" team-orchestration-plan -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -HorizonHours 5 -CodexBudgetState "unknown" -EstimatedCodexInputTokens 8000
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -Mode patch -HorizonHours 5
 ```
 
 Create and submit a durable bridge job:
@@ -412,6 +435,29 @@ Do not expose unrelated private chat content unless the user asked for that spec
 ## Token-Saving Offload Workflow
 
 Use Antigravity as an offload worker when the user wants to save Codex tokens or asks Codex to "ride on" Antigravity.
+
+## Team Orchestration Workflow
+
+Use this workflow when the user wants Codex, Antigravity CLI, and Claude Code to work together on the same project instead of choosing only one worker.
+
+Core contract:
+
+- Codex is the team lead: it turns the user goal into a shared work board, assigns non-overlapping lanes, checks conflicts, runs targeted final verification, and summarizes.
+- Antigravity CLI is the scout/product lane: broad project scan, UI/product/integration context, search-heavy exploration, and risk mapping.
+- Claude Code is the implementation/testing lane: backend/runtime changes, patch work, refactor details, tests, and code review when UI context is not required.
+- Cursor is optional and only used when a true `cursor-agent` is available or the user explicitly wants Cursor UI work.
+- All workers use the same workspace and write compact artifacts under `.antigravity-bridge/jobs/<jobId>/`.
+- Codex reads `result.md`, `changed-files.txt`, `diff.patch`, `test-output-summary.md`, and `status.json`; it does not paste full worker logs or chats into the prompt.
+
+Before starting larger work, call `team-orchestration-plan` with `horizonHours=5`. The plan must state:
+
+- what capacity is actually known for Codex, Antigravity, Claude Code, and Cursor,
+- which model pool is available now or appears to reset during the planning window,
+- which lane owns UI, backend, testing, documentation, review, or release tasks,
+- which lanes are startable now and which are blocked,
+- how Codex will reconcile artifacts and send follow-up tasks.
+
+Then call `run-team-task` when starting workers is allowed. If one lane is unavailable, skip that lane and reassign only its narrow ownership; do not collapse the entire workflow back into broad Codex exploration.
 
 ### Orchestration Gate
 

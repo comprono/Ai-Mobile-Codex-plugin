@@ -1,12 +1,14 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "team-orchestration-plan", "run-team-task", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
   [string] $Workspace = "",
   [string] $StatusFile = "notes/antigravity-status.md",
   [string] $NextStep = "Inspect the relevant files and write a compact status checkpoint.",
+  [string] $TaskSplit = "",
+  [int] $HorizonHours = 5,
   [string] $ExpectedProject = "",
   [string] $ExpectedChat = "",
   [string] $CodexBudgetState = "unknown",
@@ -34,6 +36,7 @@ param(
   [object] $FillOnly = $false,
   [object] $SkipModelSwitch = $false,
   [object] $HasWorkspaceWork = $true,
+  [object] $IncludeCursor = $false,
   [int] $EstimatedCodexInputTokens = 2000
 )
 
@@ -1086,6 +1089,47 @@ function Invoke-RunEfficientTask {
   }
 }
 
+function Invoke-TeamCommand {
+  param(
+    [string] $CliCommand
+  )
+
+  $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
+  $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
+  if (-not (Test-Path -LiteralPath $localMcpScript)) {
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
+  }
+
+  $payload = [PSCustomObject]@{
+    goal = $Goal
+    workspace = $Workspace
+    taskSplit = $TaskSplit
+    horizonHours = $HorizonHours
+    codexBudgetState = $CodexBudgetState
+    estimatedCodexInputTokens = $EstimatedCodexInputTokens
+    mode = $Mode
+    agyModel = $AgyModel
+    claudeModel = $ClaudeModel
+    includeCursor = $includeCursorValue
+    expectedProject = $ExpectedProject
+    expectedChat = $ExpectedChat
+    needsVisibleAntigravityChat = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
+    start = $startValue
+  } | ConvertTo-Json -Compress
+
+  $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-team-{0}.json" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    & node $localMcpScript $CliCommand --json-file $payloadFile
+    if ($LASTEXITCODE -ne 0) {
+      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-BridgeJobCommand {
   param(
     [string] $CliCommand
@@ -1354,6 +1398,14 @@ switch ($Command) {
 
   "run-efficient-task" {
     Invoke-RunEfficientTask
+  }
+
+  "team-orchestration-plan" {
+    Invoke-TeamCommand -CliCommand "team-orchestration-plan-cli"
+  }
+
+  "run-team-task" {
+    Invoke-TeamCommand -CliCommand "run-team-task-cli"
   }
 
   "create-job" {

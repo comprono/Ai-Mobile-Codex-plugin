@@ -146,6 +146,49 @@ const tools = [
     },
   },
   {
+    name: "team-orchestration-plan",
+    description: "Plan a 5-hour team workflow across Codex, Antigravity CLI, Claude Code, and optional Cursor lanes, with capacity-aware role assignment.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Common project goal for the team." },
+        workspace: { type: "string", description: "Local workspace path all lanes should coordinate around." },
+        taskSplit: { type: "string", description: "Optional desired lane split, such as UI, backend, testing, docs, review." },
+        horizonHours: { type: "number", description: "Capacity planning horizon in hours.", default: 5 },
+        codexBudgetState: { type: "string", description: "Caller-observed Codex budget/capacity state.", default: "unknown" },
+        estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled without team lanes.", default: 5000 },
+        needsVisibleAntigravityChat: { type: "boolean", description: "Whether the Antigravity desktop project/chat must be used instead of the CLI.", default: false },
+        expectedProject: { type: "string", description: "Optional visible Antigravity project text." },
+        expectedChat: { type: "string", description: "Optional visible Antigravity chat/conversation title." },
+        includeCursor: { type: "boolean", description: "Include Cursor as a possible lane only when a true headless cursor-agent is available.", default: false },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "run-team-task",
+    description: "Start available team lanes for one shared project goal: Codex coordinates, Antigravity CLI handles broad/product/UI analysis, and Claude Code handles code/testing/review.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Common project goal for the team." },
+        workspace: { type: "string", description: "Local workspace path where durable team job artifacts should be written." },
+        taskSplit: { type: "string", description: "Optional desired lane split, such as UI, backend, testing, docs, review." },
+        horizonHours: { type: "number", description: "Capacity planning horizon in hours.", default: 5 },
+        codexBudgetState: { type: "string", description: "Caller-observed Codex budget/capacity state.", default: "unknown" },
+        estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled without team lanes.", default: 5000 },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
+        agyModel: { type: "string", description: "Optional Antigravity CLI model id.", default: "gemini-3.5-flash-low" },
+        claudeModel: { type: "string", description: "Claude Code model alias.", default: "sonnet" },
+        includeCursor: { type: "boolean", description: "Include Cursor as a possible lane only when a true headless cursor-agent is available.", default: false },
+        start: { type: "boolean", description: "Start available worker lanes. Use false for plan-only dry runs.", default: true },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create-job",
     description: "Create a durable Antigravity bridge job folder with request/status/result/diff artifact files. Does not touch the UI.",
     inputSchema: {
@@ -881,6 +924,278 @@ async function runEfficientTask(args = {}) {
     failed ? "Status: failed-or-unverified" : "Status: dispatched-or-ready",
     "Next: do not watch the worker chat. Wait, then read only compact artifacts via read-job.",
   ].filter(Boolean).join("\n");
+}
+
+async function getTeamCapacityContext(args = {}) {
+  let quick = null;
+  let quickError = "";
+  try {
+    quick = await runHelper("quick");
+  } catch (error) {
+    quickError = error?.message || String(error);
+  }
+
+  const agyStatusText = getAgyStatusText();
+  const claudeStatusText = getClaudeStatusText();
+  const cursorStatusText = getCursorStatusText();
+  const limits = quick?.Limits || {};
+  const recommendedAvailable = Array.isArray(limits.RecommendedAvailable) ? limits.RecommendedAvailable : [];
+  const setup = quick?.Setup || {};
+  const live = quick?.Live || {};
+
+  return {
+    codexBudget: normalizeBudgetState(args.codexBudgetState || "unknown"),
+    quickError,
+    agyFound: parseFoundFromStatus(agyStatusText),
+    claudeFound: parseFoundFromStatus(claudeStatusText),
+    cursorHeadlessFound: /\bHeadlessAgentFound:\s*true\b/i.test(cursorStatusText),
+    antigravityReady: setup.ReadyForModelLimits === true && recommendedAvailable.length > 0,
+    antigravityLiveReady: setup.ReadyForLiveUiInspection === true && Number(live.PageCount || 0) > 0,
+    recommendedAvailable,
+    rawLimits: limits,
+  };
+}
+
+function modelLine(model) {
+  if (!model) return "";
+  const label = model.DisplayName || model.Name || model.Id || "<unknown model>";
+  const remaining = model.RemainingPercent ?? model.remainingPercent ?? model.remaining ?? "?";
+  const reset = model.ResetAt || model.ResetTime || model.ResetUtc || model.resetAt || model.resetTime || "";
+  return reset ? `${label} (${remaining}% remaining, reset ${reset})` : `${label} (${remaining}% remaining)`;
+}
+
+function chooseAgyTeamModel(context, preferred) {
+  const explicit = String(preferred || "").trim();
+  if (explicit) return explicit;
+  const available = context.recommendedAvailable || [];
+  const flash = available.find((model) => /flash/i.test(`${model.Id || ""} ${model.DisplayName || ""}`));
+  const first = flash || available[0];
+  return first?.Id || first?.Name || "gemini-3.5-flash-low";
+}
+
+function inferTaskSplit(goal, explicitSplit) {
+  const text = `${goal || ""} ${explicitSplit || ""}`.toLowerCase();
+  const lanes = [];
+  if (/\b(ui|frontend|front-end|css|react|screen|design|dashboard|browser|ux)\b/.test(text)) lanes.push("ui-frontend");
+  if (/\b(api|backend|server|database|schema|auth|worker|queue|runtime|harness)\b/.test(text)) lanes.push("backend-runtime");
+  if (/\b(test|tests|testing|qa|verify|verification|lint|ci|smoke|playwright)\b/.test(text)) lanes.push("testing-verification");
+  if (/\b(docs|readme|release|marketplace|seo|publish)\b/.test(text)) lanes.push("docs-release");
+  if (/\b(review|architecture|plan|refactor|audit)\b/.test(text)) lanes.push("architecture-review");
+  if (!lanes.length) lanes.push("architecture-review", "implementation", "testing-verification");
+  return [...new Set(lanes)];
+}
+
+function buildTeamLanes(args = {}, context = {}) {
+  const goal = String(args.goal || "").trim();
+  const workspace = String(args.workspace || "").trim();
+  const split = inferTaskSplit(goal, args.taskSplit || "");
+  const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  const agyModel = chooseAgyTeamModel(context, args.agyModel);
+  const claudeModel = String(args.claudeModel || "sonnet").trim() || "sonnet";
+  const wantsVisibleChat = Boolean(args.needsVisibleAntigravityChat || args.expectedChat);
+  const includeCursor = Boolean(args.includeCursor);
+
+  const lanes = [
+    {
+      id: "codex-lead",
+      worker: "Codex",
+      available: true,
+      startable: false,
+      mode: "coordinate",
+      model: "current Codex session",
+      owns: "goal framing, task board, conflict control, final integration, targeted verification, user summary",
+      output: "final synthesis plus targeted local checks",
+      nextStep: `Create the shared work board for ${workspace || "the workspace"}, assign non-overlapping file areas, and read only compact artifacts from workers.`,
+    },
+    {
+      id: wantsVisibleChat ? "antigravity-desktop-context" : "antigravity-cli-discovery",
+      worker: wantsVisibleChat ? "Antigravity desktop" : "Antigravity CLI",
+      available: wantsVisibleChat ? context.antigravityLiveReady : context.agyFound,
+      startable: !wantsVisibleChat && context.agyFound,
+      mode: "review",
+      model: wantsVisibleChat ? "active visible Antigravity model" : agyModel,
+      owns: "broad project scan, UI/product surface, integration risks, search-heavy exploration, and proposed task boundaries",
+      output: ".antigravity-bridge/jobs/<jobId>/result.md with max 10 bullets and changed file list",
+      nextStep: `Act as the project scout for ${split.join(", ")}. Inspect locally, map risks and exact file targets, do not edit unless explicitly asked, and return max 10 bullets.`,
+    },
+    {
+      id: "claude-code-implementation",
+      worker: "Claude Code CLI",
+      available: context.claudeFound,
+      startable: context.claudeFound,
+      mode: String(args.mode || "patch").trim() || "patch",
+      model: claudeModel,
+      owns: "implementation lane, backend/runtime changes, tests, refactor details, and patch review when UI context is not required",
+      output: ".antigravity-bridge/jobs/<jobId>/result.md, changed-files.txt, diff.patch, test-output-summary.md",
+      nextStep: `Use the shared goal and the ${split.join(", ")} split. Work only in code/test areas that do not overlap with the Antigravity scout lane. Prefer narrow patches and write compact artifacts.`,
+    },
+  ];
+
+  if (includeCursor) {
+    lanes.push({
+      id: "cursor-agent-ui",
+      worker: "Cursor agent",
+      available: context.cursorHeadlessFound,
+      startable: context.cursorHeadlessFound,
+      mode: "patch",
+      model: String(args.cursorModel || "").trim() || "default Cursor agent model",
+      owns: "Cursor-specific UI/editor workflows only when a true cursor-agent binary is available",
+      output: ".antigravity-bridge/jobs/<jobId>/result.md and diff artifacts",
+      nextStep: "Use only if the task explicitly benefits from Cursor; otherwise leave this lane idle.",
+    });
+  }
+
+  return { lanes, split, horizonHours };
+}
+
+function formatTeamOrchestrationPlan(args = {}, context = {}) {
+  const goal = String(args.goal || "").trim();
+  const workspace = String(args.workspace || "").trim();
+  const { lanes, split, horizonHours } = buildTeamLanes(args, context);
+  const availableModels = (context.recommendedAvailable || []).slice(0, 5).map(modelLine).filter(Boolean);
+  const activeWorkerCount = lanes.filter((lane) => lane.available && lane.worker !== "Codex").length;
+  const complexity = inferTaskSplit(goal, args.taskSplit || "").length + (Number(args.estimatedCodexInputTokens || 0) >= 5000 ? 2 : 0);
+
+  return [
+    "AiMobileTeamOrchestrationPlan:",
+    `Goal: ${goal || "<missing>"}`,
+    `Workspace: ${workspace || "<missing>"}`,
+    `HorizonHours: ${horizonHours}`,
+    `TeamMode: ${activeWorkerCount > 0 ? "parallel-lanes" : "codex-coordinator-only-until-workers-available"}`,
+    `TaskSplit: ${split.join(", ")}`,
+    `ComplexityScoreApprox: ${complexity}`,
+    "",
+    "FiveHourCapacity:",
+    `Codex: ${context.codexBudget.state} (${context.codexBudget.text || "caller/UI only; local plugin cannot read Codex private meter"})`,
+    "CodexCapacitySource: caller-provided UI text only; no private Codex token ledger is exposed to this plugin.",
+    `AntigravityCLI: ${context.agyFound}`,
+    `AntigravityModelsNow: ${availableModels.length ? availableModels.join("; ") : "no local Antigravity model availability reported"}`,
+    "AntigravityNext5h: use models available now; if reset metadata appears above, schedule heavier Antigravity lanes after that reset.",
+    `AntigravityDesktopLive: ${context.antigravityLiveReady}`,
+    `ClaudeCodeCLI: ${context.claudeFound}`,
+    "ClaudeCodeCapacitySource: availability/version only; Claude Code remaining usage is not exposed by this local status call.",
+    `CursorHeadless: ${context.cursorHeadlessFound}`,
+    context.quickError ? `CapacityWarning: ${context.quickError}` : null,
+    "",
+    "LanePlan:",
+    ...lanes.map((lane, index) => `${index + 1}. ${lane.id}: ${lane.worker}; available=${lane.available}; startable=${lane.startable}; model=${lane.model}; owns=${lane.owns}; output=${lane.output}`),
+    "",
+    "FiveHourWorkCadence:",
+    "0-15m: Codex creates/updates the shared work board, assigns file ownership, and starts available lanes.",
+    "15-90m: Antigravity CLI scouts broad UI/product/integration context while Claude Code works implementation/testing lane.",
+    "90-150m: Codex reads only compact artifacts, detects conflicts, and sends one follow-up per weak lane.",
+    "150-240m: Workers run second-pass fixes or validation. Codex avoids broad rereads and only checks diffs/artifacts.",
+    "240-300m: Codex integrates, runs targeted final verification, summarizes remaining blockers and next lane assignments.",
+    "",
+    "CoordinationRules:",
+    "- One shared goal, one workspace, separate lane ownership.",
+    "- Workers write compact artifacts under .antigravity-bridge/jobs/<jobId>/; Codex reads artifacts, not full chats/logs.",
+    "- Do not let two workers patch the same files unless Codex explicitly converts one lane to review-only.",
+    "- If a lane is unavailable or quota-limited, skip it and reassign only its narrow task, not the whole project.",
+    "- Codex is lead, not the only worker: it plans, gates risk, resolves conflicts, verifies, and gives follow-up tasks.",
+    "",
+    "NextCall:",
+    "Use run-team-task with start=true to start available worker lanes, or start=false for plan-only.",
+  ].filter(Boolean).join("\n");
+}
+
+async function buildTeamOrchestrationPlan(args = {}) {
+  const context = await getTeamCapacityContext(args);
+  return formatTeamOrchestrationPlan(args, context);
+}
+
+function actionSummary(action, toolName, workspace) {
+  const jobId = valueFromResult(action, "JobId");
+  const started = /\bStarted:\s*true\b/i.test(action) || /\bState:\s*running\b/i.test(action);
+  const failed = /\bState:\s*failed\b/i.test(action) || /\bBlocker:/i.test(action);
+  return {
+    toolName,
+    jobId,
+    started: started && !failed,
+    failed,
+    readBack: jobId ? `ai-mobile-local.read-job with workspace=${workspace} and jobId=${jobId}` : "no JobId returned",
+    action,
+  };
+}
+
+async function runTeamTask(args = {}) {
+  const context = await getTeamCapacityContext(args);
+  const plan = formatTeamOrchestrationPlan(args, context);
+  const start = args.start !== false;
+  const workspace = String(args.workspace || "").trim();
+  const goal = String(args.goal || "").trim();
+  const { lanes } = buildTeamLanes(args, context);
+
+  if (!start) {
+    return [
+      plan,
+      "",
+      "RunTeamTaskResult:",
+      "Started: false",
+      "Reason: start=false; returned only the team plan.",
+    ].join("\n");
+  }
+
+  const actions = [];
+  const agyLane = lanes.find((lane) => lane.id === "antigravity-cli-discovery" && lane.startable);
+  if (agyLane) {
+    const action = submitAgyJob({
+      goal: `${goal}\n\nTeamLane: ${agyLane.id}\nWorkerRole: ${agyLane.owns}`,
+      workspace,
+      mode: "review",
+      nextStep: agyLane.nextStep,
+      model: args.agyModel || agyLane.model,
+      start: true,
+    });
+    actions.push(actionSummary(action, "submit-agy-job", workspace));
+  }
+
+  const claudeLane = lanes.find((lane) => lane.id === "claude-code-implementation" && lane.startable);
+  if (claudeLane) {
+    const action = submitClaudeJob({
+      goal: `${goal}\n\nTeamLane: ${claudeLane.id}\nWorkerRole: ${claudeLane.owns}`,
+      workspace,
+      mode: claudeLane.mode,
+      nextStep: claudeLane.nextStep,
+      model: args.claudeModel || claudeLane.model,
+      start: true,
+    });
+    actions.push(actionSummary(action, "submit-claude-job", workspace));
+  }
+
+  const cursorLane = lanes.find((lane) => lane.id === "cursor-agent-ui" && lane.startable);
+  if (cursorLane) {
+    const action = submitCursorJob({
+      goal: `${goal}\n\nTeamLane: ${cursorLane.id}\nWorkerRole: ${cursorLane.owns}`,
+      workspace,
+      mode: cursorLane.mode,
+      nextStep: cursorLane.nextStep,
+      model: args.cursorModel || "",
+      start: true,
+    });
+    actions.push(actionSummary(action, "submit-cursor-job", workspace));
+  }
+
+  return [
+    plan,
+    "",
+    "StartedLaneActions:",
+    ...(actions.length
+      ? actions.flatMap((item, index) => [
+          `${index + 1}. Tool: ${item.toolName}`,
+          `   Started: ${item.started}`,
+          `   Failed: ${item.failed}`,
+          item.jobId ? `   JobId: ${item.jobId}` : "   JobId: <none>",
+          `   ReadBack: ${item.readBack}`,
+        ])
+      : ["- No external worker lane was startable. Codex should keep coordination local and report unavailable workers."]),
+    "",
+    "RunTeamTaskResult:",
+    `StartedWorkers: ${actions.filter((item) => item.started).length}`,
+    `FailedWorkers: ${actions.filter((item) => item.failed).length}`,
+    "CodexLane: active coordinator in the current session",
+    "Next: wait briefly, then read each JobId with read-job. Do not import full worker logs or chats.",
+  ].join("\n");
 }
 
 function getDevToolsPort() {
@@ -2856,6 +3171,18 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "team-orchestration-plan") {
+        const text = await buildTeamOrchestrationPlan(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "run-team-task") {
+        const text = await runTeamTask(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "create-job") {
         const created = createJob(params?.arguments || {});
         const text = [
@@ -2982,7 +3309,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "team-orchestration-plan-cli", "run-team-task-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -2999,6 +3326,8 @@ if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", 
     "orchestration-plan-cli": buildOrchestrationPlan,
     "efficiency-flow-cli": buildEfficiencyFlow,
     "run-efficient-task-cli": runEfficientTask,
+    "team-orchestration-plan-cli": buildTeamOrchestrationPlan,
+    "run-team-task-cli": runTeamTask,
     "submit-offload-cli": submitOffloadToCurrentChat,
     "switch-model-cli": switchModelInCurrentChat,
     "select-chat-cli": selectAntigravityChat,
