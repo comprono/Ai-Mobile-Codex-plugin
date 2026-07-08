@@ -74,6 +74,14 @@ Workers write under:
 .antigravity-bridge/jobs/<jobId>/
 ```
 
+Team launches also write:
+
+```text
+.antigravity-bridge/last-team-run.md
+```
+
+Use that file only as a launch-summary fallback if `run-team-task` starts workers but the visible tool output is blank.
+
 Codex should read only:
 
 - `result.md`
@@ -83,6 +91,7 @@ Codex should read only:
 - `status.json`
 
 Do not paste full logs, chats, screenshots, source files, credentials, cookies, or private transcripts into Codex.
+`read-job` may mark dead `running` jobs as failed and will omit binary/UTF-16-like artifacts to keep readback compact.
 
 ## Existing Antigravity Chat Rules
 

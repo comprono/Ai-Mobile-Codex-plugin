@@ -1176,7 +1176,7 @@ async function runTeamTask(args = {}) {
     actions.push(actionSummary(action, "submit-cursor-job", workspace));
   }
 
-  return [
+  const output = [
     plan,
     "",
     "StartedLaneActions:",
@@ -1196,6 +1196,8 @@ async function runTeamTask(args = {}) {
     "CodexLane: active coordinator in the current session",
     "Next: wait briefly, then read each JobId with read-job. Do not import full worker logs or chats.",
   ].join("\n");
+  writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${output}\n`);
+  return output;
 }
 
 function getDevToolsPort() {
@@ -1294,7 +1296,11 @@ function safeWorkspacePath(workspace) {
 }
 
 function jobsRootFor(workspace) {
-  return path.join(safeWorkspacePath(workspace), ".antigravity-bridge", "jobs");
+  return path.join(bridgeRootFor(workspace), "jobs");
+}
+
+function bridgeRootFor(workspace) {
+  return path.join(safeWorkspacePath(workspace), ".antigravity-bridge");
 }
 
 function utcStamp() {
@@ -1331,6 +1337,11 @@ function readJsonFile(filePath, fallback = null) {
 
 function writeJsonFile(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeTextFileEnsuringDir(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, String(value || ""), "utf8");
 }
 
 function modeGuidance(mode) {
@@ -1435,6 +1446,10 @@ function resolveJobId(workspace, jobId = "latest") {
 function summarizeFile(filePath, maxChars = 12000) {
   if (!fs.existsSync(filePath)) return "";
   const text = fs.readFileSync(filePath, "utf8");
+  const nulCount = (text.match(/\u0000/g) || []).length;
+  if (nulCount > Math.max(8, Math.floor(text.length / 20))) {
+    return "[omitted: artifact appears binary or UTF-16 encoded; rerun the worker with UTF-8 text output if this detail is needed]";
+  }
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n\n[truncated ${text.length - maxChars} chars]`;
 }
@@ -1504,12 +1519,45 @@ function readRunningJobHint(status) {
   return lines;
 }
 
+function repairStaleRunningJob(workspace, jobId, jobDir, status) {
+  const state = String(status.state || "").toLowerCase();
+  const pid = Number(status.workerPid);
+  if (state !== "running" || !Number.isInteger(pid) || pid <= 0 || isProcessAlive(pid)) {
+    return { status, repaired: false };
+  }
+
+  const repairedStatus = {
+    ...status,
+    state: "failed",
+    currentStep: "worker-process-gone",
+    completedAt: utcStamp(),
+    blocker: "Worker process is no longer running, but the job status was still running.",
+  };
+  writeJsonFile(path.join(jobDir, "status.json"), { ...repairedStatus, updatedAt: utcStamp() });
+
+  const testsPath = path.join(jobDir, "test-output-summary.md");
+  if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
+    fs.writeFileSync(
+      testsPath,
+      [
+        "WorkerProcessGone: true",
+        `WorkerPid: ${pid}`,
+        "Result: marked failed because the worker process exited before writing compact artifacts.",
+        "Next: retry with a smaller nextStep/maxMinutes, or inspect the worker-specific command manually.",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+  }
+  return { status: repairedStatus, repaired: true };
+}
+
 function readJob(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
   const jobId = resolveJobId(workspace, args.jobId || "latest");
   const jobDir = jobDirFor(workspace, jobId);
   const statusPath = path.join(jobDir, "status.json");
-  const statusObject = readJsonFile(statusPath, {});
+  const repair = repairStaleRunningJob(workspace, jobId, jobDir, readJsonFile(statusPath, {}));
+  const statusObject = repair.status;
   const runningHint = readRunningJobHint(statusObject);
   const status = summarizeFile(statusPath, 4000);
   const result = summarizeFile(path.join(jobDir, "result.md"), 8000);
@@ -1522,6 +1570,8 @@ function readJob(args = {}) {
     "",
     "status.json:",
     status || "{}",
+    repair.repaired ? "" : null,
+    repair.repaired ? "StaleJobRepair: marked failed because worker process was gone while status was running." : null,
     runningHint.length ? "" : null,
     ...runningHint,
     "",
@@ -2047,18 +2097,29 @@ function submitAgyJob(args = {}) {
 function buildClaudeJobPrompt(workspace, jobId, args = {}) {
   const jobDir = jobDirFor(workspace, jobId);
   const request = summarizeFile(path.join(jobDir, "request.md"), 18000);
+  const permissionMode = String(args.permissionMode || "").trim().toLowerCase();
+  const artifactRules = permissionMode === "plan"
+    ? [
+        "Plan-mode output rules:",
+        "- You may be unable to write files in this Claude Code session.",
+        "- Return the compact result in stdout; the AI Mobile bridge will persist stdout into result.md.",
+        "- Do not edit repository files.",
+      ]
+    : [
+        "Artifact rules:",
+        `- Write the final compact result to: ${path.join(jobDir, "result.md")}`,
+        `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
+        `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
+        "- If blocked, write one concise blocker and the next smallest action.",
+        "- Keep result.md to max 10 bullets.",
+      ];
   return [
     "You are Claude Code running as a local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
     "",
     request,
     "",
-    "Artifact rules:",
-    `- Write the final compact result to: ${path.join(jobDir, "result.md")}`,
-    `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
-    `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
-    "- If blocked, write one concise blocker and the next smallest action.",
-    "- Keep result.md to max 10 bullets.",
+    ...artifactRules,
     "",
     `Current next step: ${String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim()}`,
   ].join("\n");
@@ -2103,7 +2164,7 @@ function runClaudeJobWorker(args = {}) {
   const mode = String(args.mode || "fast").trim().toLowerCase();
   const permissionMode = safeClaudeFlag(args.permissionMode || (mode === "review" ? "plan" : "acceptEdits"), "permissionMode");
   const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 10)));
-  const prompt = buildClaudeJobPrompt(workspace, jobId, args);
+  const prompt = buildClaudeJobPrompt(workspace, jobId, { ...args, permissionMode });
   const cliArgs = [
     "-p",
     "--output-format",
@@ -3398,7 +3459,7 @@ if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", 
   const action = actions[process.argv[2]];
   action(args)
     .then((text) => {
-      console.log(text);
+      fs.writeSync(process.stdout.fd, `${String(text || "")}\n`);
       process.exitCode = 0;
     })
     .catch((error) => {

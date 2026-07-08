@@ -1122,13 +1122,114 @@ function Invoke-TeamCommand {
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-team-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    & node $localMcpScript $CliCommand --json-file $payloadFile
-    if ($LASTEXITCODE -ne 0) {
-      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    if ($CliCommand -eq "run-team-task-cli" -and $startValue) {
+      $lastTeamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
+      $previousWrite = if (Test-Path -LiteralPath $lastTeamRunPath) {
+        (Get-Item -LiteralPath $lastTeamRunPath).LastWriteTimeUtc
+      } else {
+        [datetime]::MinValue
+      }
+      $process = $null
+      $nodeArgs = @($localMcpScript, $CliCommand, "--json-file", $payloadFile) | ForEach-Object { Quote-ProcessArgument -Value $_ }
+      $process = Start-Process -FilePath "node" `
+        -ArgumentList $nodeArgs `
+        -PassThru `
+        -WindowStyle Hidden
+      $deadline = (Get-Date).AddSeconds(45)
+      while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $lastTeamRunPath) {
+          $current = Get-Item -LiteralPath $lastTeamRunPath
+          if ($current.LastWriteTimeUtc -gt $previousWrite) {
+            Get-Content -LiteralPath $lastTeamRunPath
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            return
+          }
+        }
+        Start-Sleep -Milliseconds 500
+      }
+      if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      }
+      throw "$CliCommand did not produce .antigravity-bridge\last-team-run.md within 45 seconds."
+    }
+
+    $output = & node $localMcpScript $CliCommand --json-file $payloadFile 2>&1
+    $exitCode = $LASTEXITCODE
+    $hasOutput = Test-HasCommandOutput -Output $output
+    if ($exitCode -ne 0) {
+      if ($hasOutput) { $output | Write-Output }
+      throw "$CliCommand failed with exit code $exitCode"
+    }
+    if ($CliCommand -eq "run-team-task-cli" -and $startValue -and -not [string]::IsNullOrWhiteSpace($Workspace)) {
+      $lastTeamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
+      if (Test-Path -LiteralPath $lastTeamRunPath) {
+        Get-Content -LiteralPath $lastTeamRunPath
+      } elseif ($hasOutput) {
+        $output | Write-Output
+      }
+    } elseif ($hasOutput) {
+      $output | Write-Output
     }
   } finally {
     Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
   }
+}
+
+function Test-HasCommandOutput {
+  param(
+    [object] $Output
+  )
+
+  return -not [string]::IsNullOrWhiteSpace(($Output | Out-String))
+}
+
+function Quote-ProcessArgument {
+  param(
+    [string] $Value
+  )
+
+  return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Write-LatestJobFallback {
+  param(
+    [string] $FallbackLabel
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Workspace)) {
+    return
+  }
+  $jobsRoot = Join-Path $Workspace ".antigravity-bridge\jobs"
+  if (-not (Test-Path -LiteralPath $jobsRoot)) {
+    return
+  }
+  $latest = Get-ChildItem -LiteralPath $jobsRoot -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+  if (-not $latest) {
+    return
+  }
+  $statusPath = Join-Path $latest.FullName "status.json"
+  $state = "unknown"
+  $step = "unknown"
+  if (Test-Path -LiteralPath $statusPath) {
+    try {
+      $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+      $state = [string] $status.state
+      $step = [string] $status.currentStep
+    } catch {
+      $state = "status-read-failed"
+      $step = $_.Exception.Message
+    }
+  }
+  Write-Output "$FallbackLabel"
+  Write-Output "JobId: $($latest.Name)"
+  Write-Output "JobFolder: $($latest.FullName)"
+  Write-Output "State: $state"
+  Write-Output "CurrentStep: $step"
+  Write-Output "OutputFallback: node command emitted no stdout; use read-job with this JobId."
 }
 
 function Invoke-BridgeJobCommand {
@@ -1159,9 +1260,17 @@ function Invoke-BridgeJobCommand {
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-bridge-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    & node $localMcpScript $CliCommand --json-file $payloadFile
-    if ($LASTEXITCODE -ne 0) {
-      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    $output = & node $localMcpScript $CliCommand --json-file $payloadFile 2>&1
+    $exitCode = $LASTEXITCODE
+    $hasOutput = Test-HasCommandOutput -Output $output
+    if ($exitCode -ne 0) {
+      if ($hasOutput) { $output | Write-Output }
+      throw "$CliCommand failed with exit code $exitCode"
+    }
+    if ($hasOutput) {
+      $output | Write-Output
+    } elseif ($CliCommand -match "submit|create|retry|read|list|cancel") {
+      Write-LatestJobFallback -FallbackLabel "BridgeJobResult:"
     }
   } finally {
     Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
@@ -1196,9 +1305,17 @@ function Invoke-ClaudeBridgeCommand {
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-claude-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    & node $localMcpScript $CliCommand --json-file $payloadFile
-    if ($LASTEXITCODE -ne 0) {
-      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    $output = & node $localMcpScript $CliCommand --json-file $payloadFile 2>&1
+    $exitCode = $LASTEXITCODE
+    $hasOutput = Test-HasCommandOutput -Output $output
+    if ($exitCode -ne 0) {
+      if ($hasOutput) { $output | Write-Output }
+      throw "$CliCommand failed with exit code $exitCode"
+    }
+    if ($hasOutput) {
+      $output | Write-Output
+    } elseif ($CliCommand -eq "submit-claude-job-cli") {
+      Write-LatestJobFallback -FallbackLabel "SubmitClaudeJobResult:"
     }
   } finally {
     Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
@@ -1237,9 +1354,17 @@ function Invoke-AgyBridgeCommand {
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-agy-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    & node $localMcpScript $CliCommand --json-file $payloadFile
-    if ($LASTEXITCODE -ne 0) {
-      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    $output = & node $localMcpScript $CliCommand --json-file $payloadFile 2>&1
+    $exitCode = $LASTEXITCODE
+    $hasOutput = Test-HasCommandOutput -Output $output
+    if ($exitCode -ne 0) {
+      if ($hasOutput) { $output | Write-Output }
+      throw "$CliCommand failed with exit code $exitCode"
+    }
+    if ($hasOutput) {
+      $output | Write-Output
+    } elseif ($CliCommand -eq "submit-agy-job-cli") {
+      Write-LatestJobFallback -FallbackLabel "SubmitAgyJobResult:"
     }
   } finally {
     Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
@@ -1277,9 +1402,17 @@ function Invoke-CursorBridgeCommand {
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-cursor-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    & node $localMcpScript $CliCommand --json-file $payloadFile
-    if ($LASTEXITCODE -ne 0) {
-      throw "$CliCommand failed with exit code $LASTEXITCODE"
+    $output = & node $localMcpScript $CliCommand --json-file $payloadFile 2>&1
+    $exitCode = $LASTEXITCODE
+    $hasOutput = Test-HasCommandOutput -Output $output
+    if ($exitCode -ne 0) {
+      if ($hasOutput) { $output | Write-Output }
+      throw "$CliCommand failed with exit code $exitCode"
+    }
+    if ($hasOutput) {
+      $output | Write-Output
+    } elseif ($CliCommand -eq "submit-cursor-job-cli") {
+      Write-LatestJobFallback -FallbackLabel "SubmitCursorJobResult:"
     }
   } finally {
     Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
