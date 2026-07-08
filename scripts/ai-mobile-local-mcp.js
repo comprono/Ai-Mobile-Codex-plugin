@@ -2142,9 +2142,55 @@ function writeGitArtifacts(workspace, jobDir) {
     maxBuffer: 3 * 1024 * 1024,
     windowsHide: true,
   });
-  if (diff.status === 0) {
-    fs.writeFileSync(path.join(jobDir, "diff.patch"), truncateText(diff.stdout || "", 50000), "utf8");
+  let combined = diff.status === 0 ? String(diff.stdout || "") : "";
+
+  // Plain `git diff` never shows untracked files, and Codex reads only
+  // diff.patch (never raw files), so new files would otherwise be invisible
+  // even though changed-files.txt lists them. Build synthetic addition-only
+  // hunks for untracked files instead of `git add --intent-to-add`, which
+  // would mutate the user's index.
+  const untracked = spawnSync(
+    "git",
+    ["-C", workspace, "ls-files", "--others", "--exclude-standard"],
+    { encoding: "utf8", timeout: 15000, windowsHide: true }
+  );
+  if (untracked.status === 0) {
+    const files = String(untracked.stdout || "")
+      .split(/\r?\n/)
+      .map((f) => f.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    const untrackedDiff = buildUntrackedFilesDiff(workspace, files);
+    if (untrackedDiff) {
+      combined = combined ? `${combined}\n${untrackedDiff}` : untrackedDiff;
+    }
   }
+
+  fs.writeFileSync(path.join(jobDir, "diff.patch"), truncateText(combined, 50000), "utf8");
+}
+
+function buildUntrackedFilesDiff(workspace, files, maxCharsPerFile = 8000) {
+  const parts = [];
+  for (const file of files) {
+    const relPath = file.split(path.sep).join("/");
+    let content;
+    try {
+      content = fs.readFileSync(path.join(workspace, file), "utf8");
+    } catch {
+      continue;
+    }
+    const truncated = truncateText(content, maxCharsPerFile);
+    const lines = truncated.split(/\r?\n/);
+    const header = [
+      `diff --git a/${relPath} b/${relPath}`,
+      "new file mode 100644",
+      "--- /dev/null",
+      `+++ b/${relPath}`,
+      `@@ -0,0 +1,${lines.length} @@`,
+    ].join("\n");
+    parts.push(`${header}\n${lines.map((line) => `+${line}`).join("\n")}`);
+  }
+  return parts.join("\n");
 }
 
 function runClaudeJobWorker(args = {}) {
