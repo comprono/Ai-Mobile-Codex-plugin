@@ -28,6 +28,8 @@ Core jobs:
 Primary operating model:
 
 - Codex is the orchestrator. For maximum efficiency, it should call `ai-mobile-local.run-efficient-task` or `antigravity.ps1 run-efficient-task` for nontrivial work when starting a worker is allowed.
+- Tool discovery failure is not a reason to stop. If `ai-mobile-local.run-efficient-task` is not exposed in the current Codex session, immediately run the PowerShell helper equivalent before doing broad Codex-side exploration:
+  `powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -CodexBudgetState unknown -EstimatedCodexInputTokens <n> -Mode fast`
 - `run-efficient-task` is the default because it combines token saving and delivery flow with safe dispatch: budget gate, route gate, submit/start gate, wait gate, compact-read gate, improvement gate, verification gate, and summary gate.
 - Use `efficiency-flow` when Codex should preview the flow without starting a worker.
 - Use `orchestration-plan` only when Codex needs the route/capacity snapshot without the full delivery loop.
@@ -163,6 +165,12 @@ Run and safely start the best worker in one call:
 
 ```text
 Call ai-mobile-local.run-efficient-task with goal, workspace, mode, nextStep, codexBudgetState, estimatedCodexInputTokens, hasWorkspaceWork, needsVisibleAntigravityChat, expectedProject, expectedChat, start=true, and submit=true.
+```
+
+If that MCP tool is not exposed, use the helper directly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -CodexBudgetState "unknown" -EstimatedCodexInputTokens 2000
 ```
 
 Create and submit a durable bridge job:
@@ -407,7 +415,7 @@ Use Antigravity as an offload worker when the user wants to save Codex tokens or
 
 ### Orchestration Gate
 
-Run `ai-mobile-local.run-efficient-task` before `prepare-offload`, `submit-agy-job`, `submit-job`, or `submit-claude-job` for any nontrivial task when starting work is allowed. This is the main AI Mobile behavior: Codex should decide who works, start that worker if safe, and return the compact artifact readback path before it spends tokens reading files or driving UI.
+Run `ai-mobile-local.run-efficient-task` before `prepare-offload`, `submit-agy-job`, `submit-job`, or `submit-claude-job` for any nontrivial task when starting work is allowed. If the direct MCP tool is missing from the current Codex session, run `antigravity.ps1 run-efficient-task` with the same arguments. This is the main AI Mobile behavior: Codex should decide who works, start that worker if safe, and return the compact artifact readback path before it spends tokens reading files or driving UI.
 
 Routing contract:
 

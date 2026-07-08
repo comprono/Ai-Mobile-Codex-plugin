@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Made `run-efficient-task` the mandatory fallback path when Codex cannot see the direct `ai-mobile-local` MCP tools, so sessions use the PowerShell helper instead of stopping after stale tool discovery.
 - Added Cursor bridge support through `cursor-status`, `open-cursor`, and fail-closed `submit-cursor-job`.
 - Documented that the Windows `cursor.cmd` launcher is UI-only unless a separate true `cursor-agent` binary is available.
 - Added optional Claude Code headless bridge support through `claude-status` and `submit-claude-job`.
