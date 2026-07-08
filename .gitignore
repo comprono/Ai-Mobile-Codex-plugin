@@ -2,6 +2,7 @@
 .DS_Store
 Thumbs.db
 *.log
+.claude/
 
 # Node/Python transient files
 node_modules/

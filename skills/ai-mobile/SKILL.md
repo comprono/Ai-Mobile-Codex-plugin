@@ -1,585 +1,134 @@
 ---
 name: ai-mobile
-description: Connect Codex to local Antigravity 2.0, Claude Code, and Cursor workers for mobile-started Codex workflows, with CLI-first routing and UI fallback when visible state is needed.
+description: Connect Codex to local Antigravity 2.0, Claude Code, and Cursor workers for mobile-started Codex workflows, with team orchestration, CLI-first routing, durable artifacts, and UI fallback only when visible state is required.
 license: MIT
 ---
 
 # AI Mobile
 
-Use this skill when the user asks Codex to connect to, set up, inspect, compare, or automate the local Antigravity 2.0 desktop app.
+Use this skill when the user asks Codex to coordinate local AI workers, use Antigravity, use Claude Code, use Cursor, inspect model availability, or continue visible Antigravity project/chat work.
 
-Core jobs:
+## Core Model
 
-- Set up or verify the plugin on another Windows machine.
-- Open Antigravity and report install/runtime status.
-- Read model quota and AI credit state from Antigravity's local language server.
-- Inspect what is happening live in Antigravity.
-- See projects and chats through the live UI.
-- Continue an existing chat after verifying the selected project, conversation, and model.
-- Start a new chat in an existing project.
-- Start a new project and then start a chat there.
-- Report quota, model, UI, or submission errors without repeatedly retrying.
-- Switch the active chat to an available model automatically when the selected model is exhausted or unsuitable for cost-saving handoff.
-- Create durable bridge jobs and read compact artifacts instead of inspecting full Antigravity chats.
-- Use Antigravity CLI (`agy`) for low-RAM Antigravity work when visible desktop UI/project/chat state is not required.
-- Use local Claude Code CLI as an optional headless worker for coding/review bridge jobs when Antigravity UI context is not needed.
-- Use local Cursor as an optional UI worker for Cursor workspace/chat workflows, and use `cursor-agent` headlessly only when a true `cursor-agent` binary is installed.
-- Plan and run team workflows where Codex coordinates while Antigravity CLI and Claude Code handle separate lanes of the same project.
+Codex is the team lead:
 
-Primary operating model:
+- decides the task split,
+- checks exposed capacity,
+- assigns non-overlapping lanes,
+- starts available workers,
+- reads compact artifacts,
+- resolves conflicts,
+- performs final targeted verification,
+- summarizes to the user.
 
-- Codex is the orchestrator. For maximum efficiency, it should call `ai-mobile-local.run-efficient-task` or `antigravity.ps1 run-efficient-task` for nontrivial work when starting a worker is allowed.
-- Tool discovery failure is not a reason to stop. If `ai-mobile-local.run-efficient-task` is not exposed in the current Codex session, immediately run the PowerShell helper equivalent before doing broad Codex-side exploration:
-  `powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -CodexBudgetState unknown -EstimatedCodexInputTokens <n> -Mode fast`
-- `run-efficient-task` is the default because it combines token saving and delivery flow with safe dispatch: budget gate, route gate, submit/start gate, wait gate, compact-read gate, improvement gate, verification gate, and summary gate.
-- Use `efficiency-flow` when Codex should preview the flow without starting a worker.
-- Use `orchestration-plan` only when Codex needs the route/capacity snapshot without the full delivery loop.
-- Use `team-orchestration-plan` for larger goals that should be split across UI, backend, testing, review, documentation, or release lanes over the next planning horizon, usually 5 hours.
-- Use `run-team-task` when Codex should start available lanes in parallel: Codex leads, Antigravity CLI scouts broad UI/product/integration context, and Claude Code handles implementation/testing/review.
-- The orchestrator compares: caller-provided Codex budget state, Antigravity model availability from local limits, Claude Code availability, Cursor headless availability, and whether visible Antigravity UI/chat state is required.
-- Codex token availability is not directly readable by this local plugin. If the Codex UI shows a remaining budget or the user states one, pass it as `codexBudgetState`; otherwise use `unknown` and route conservatively.
-- Claude Code remaining usage is not exposed by `claude-status`; treat Claude Code as availability/version only unless a future Claude API exposes remaining usage.
-- A 5-hour capacity plan can only use exposed local signals: caller-provided Codex budget text, Antigravity model availability/reset metadata from the local model API, Claude Code installed/login availability, and Cursor headless availability.
-- Codex delegates nontrivial work to Antigravity first.
-- Codex waits instead of doing the same exploration itself.
-- Codex reads only compact status artifacts, targeted diffs, or concise visible status.
-- For coding/workspace tasks, Codex should prefer durable bridge jobs under `.antigravity-bridge/jobs/<jobId>/` and later read only `result.md`, `changed-files.txt`, `diff.patch`, `test-output-summary.md`, and `status.json`.
-- Codex reviews Antigravity's result, identifies gaps, and gives Antigravity the next compact improvement task.
-- Codex performs final user-facing synthesis, safety checks, and narrow code patches only when that is cheaper or higher quality than another Antigravity pass.
-- Codex should not duplicate Antigravity's file reading, broad search, browser operation, or long reasoning unless Antigravity is blocked, unavailable, or the task is tiny.
-- For Antigravity tasks that do not need visible desktop UI/project/chat state, `run-efficient-task` normally delegates through `submit-agy-job` and then returns the compact bridge artifact path.
-- For local coding/review tasks that do not need Antigravity context, `run-efficient-task` may delegate to Claude Code through `submit-claude-job` and then return the compact bridge artifact path.
-- For Cursor workflows, Codex should run `cursor-status` first. Use `open-cursor` for UI workflows. Use `submit-cursor-job` only when `HeadlessAgentFound: true`.
+Workers:
 
-Claude routing hard rule:
+- Antigravity CLI: low-RAM broad project scan, UI/product/integration context, research-heavy analysis.
+- Antigravity desktop: visible project/chat/model/composer work only.
+- Claude Code CLI: local implementation, backend/runtime, tests, review, and patch lanes.
+- Cursor: UI workflow only unless `cursor-status` reports a real headless `cursor-agent`.
 
-- "Claude Code" means the local `claude` CLI worker. Use `claude-status` / `submit-claude-job` only when the user asks for Claude Code, a headless Claude worker, or a repository review that does not need Antigravity's visible project/chat context.
-- "Claude", "Sonnet", or "Opus" inside a named Antigravity project/chat means the model selected inside Antigravity UI. Do not route that to Claude Code CLI.
-- If the user says "no Claude CLI", "do not use Claude CLI", or names an Antigravity chat such as `Live review and improvements`, do not call `submit-claude-job`. Select and verify the existing Antigravity chat first, switch the Antigravity model to an available Claude/Sonnet/Opus or requested fallback model, then submit through Antigravity.
-- Codex native subagents in this environment are not Claude workers unless a direct Claude tool is explicitly exposed. Do not claim Claude delegation when only GPT-family subagents are available.
-- If the active Antigravity chat title does not exactly match `expectedChat`, stop before filling/submitting. Call `ai-mobile-local.select-chat` or `antigravity.ps1 select-chat` to activate the existing chat, then rerun the verify/submit step. Never submit to a different visible chat just because the target chat appears in the sidebar.
-- If only `ai-mobile-devtools` is exposed and `ai-mobile-local` is missing from the current Codex session, use the AI Mobile PowerShell helper at `$HOME\plugins\ai-mobile\scripts\antigravity.ps1`. Do not use the older `antigravity-2` helper for AI Mobile routing unless the user explicitly asks for that plugin.
+## Default Calls
 
-## MCP Tool Surfaces
-
-This plugin exposes two MCP servers:
-
-- `ai-mobile-local`: direct tools for `quick`, `setup`, `doctor`, `status`, `open`, `repair-live`, `inspect`, `live`, `devtools-health`, `submission-guide`, `prepare-offload`, `orchestration-plan`, `efficiency-flow`, `run-efficient-task`, `team-orchestration-plan`, `run-team-task`, `create-job`, `submit-job`, `select-chat`, `agy-status`, `agy-models`, `submit-agy-job`, `claude-status`, `submit-claude-job`, `cursor-status`, `open-cursor`, `submit-cursor-job`, `list-jobs`, `read-job`, `cancel-job`, `retry-job`, `switch-model`, `submit-offload`, `limits-summary`, `limits`, `models`, `offload-advice`, `handoff-template`, and `privacy`.
-- `ai-mobile-devtools`: Chromium DevTools controls for inspecting and driving the Antigravity UI.
-
-Prefer `ai-mobile-local.submit-job` for nontrivial coding/workspace work. It creates a durable `.antigravity-bridge/jobs/<jobId>/` folder, asks Antigravity to write compact artifacts, verifies/switches the selected model, submits once, and lets Codex stop watching the UI. Use `ai-mobile-local.read-job` later to read only the artifact files. Use `ai-mobile-local.submit-offload` only for lightweight selected-chat handoffs that do not need a durable job folder. If Sonnet/Opus/GPT-OSS is exhausted, do not wait for the user to say so: call `ai-mobile-local.switch-model` with `modelPreference=flash-medium` or pass `modelPreference=flash-medium` to `submit-job` / `submit-offload`. If the MCP tool list is stale and does not show the job/model tools, use the PowerShell helper equivalents before falling back to DevTools choreography. Use `ai-mobile-local.prepare-offload` when Codex should first show the plan or when the selected chat is uncertain. For any nontrivial workspace, repo, browser, UI, research, planning, debugging, review, implementation, or job-application task, default to Antigravity for exploration and long reasoning, while Codex stays the planner, safety gate, patch reviewer, and final summarizer. Use `ai-mobile-local.quick` for general setup checks. If `ReadyForLiveUiInspection` is false or `PageCount` is zero, call `ai-mobile-local.repair-live` once before using DevTools. If `repair-live` restarts Antigravity, do not keep using an already-started stale DevTools MCP connection; let it reconnect to the new port before UI calls. If `ai-mobile-devtools` fails with `Transport closed`, do not repeatedly call `list_pages` in that session. Call `ai-mobile-local.devtools-health`; if it reports pages are ready, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for a manual paste this turn. Use `limits-summary` for normal quota checks and full `limits` only when complete per-model JSON is needed. Use `ai-mobile-devtools` for project/chat selection only when the selected chat is not already correct. If this skill file cannot be read in a Codex session, run the PowerShell helper fast path.
-
-Use `ai-mobile-local.claude-status` and `ai-mobile-local.submit-claude-job` for headless local coding/review jobs when the user has Claude Code installed and the task does not need Antigravity's visible UI/chat context. `submit-claude-job` creates `.antigravity-bridge/jobs/<jobId>/`, starts Claude Code in non-interactive mode, and returns immediately. Codex should later call `read-job` and inspect only compact artifacts. Do not use Claude Code as a hidden substitute for Antigravity project/chat work; use it as a local worker for code review, patching, and repository analysis. If the user rejects Claude CLI or asks for a named Antigravity chat, this path is forbidden for that turn.
-
-Use `ai-mobile-local.cursor-status` before any Cursor workflow. If it reports `HeadlessAgentFound: true`, Codex may use `submit-cursor-job` for durable compact artifacts. If only the Cursor UI launcher is available, use `open-cursor` for a visual Cursor workspace/chat and do not call it a headless job. On Windows, this plugin treats `cursor.cmd agent -p` as UI-only unless a separate `cursor-agent` binary is found.
-
-Use `ai-mobile-local.agy-status`, `ai-mobile-local.agy-models`, and `ai-mobile-local.submit-agy-job` manually only when bypassing `run-efficient-task`. `submit-agy-job` uses official Antigravity CLI print mode and does not open the desktop app. Prefer the CLI path before desktop UI tools unless the user explicitly asks to inspect/continue a visible Antigravity project/chat or use Manager/Editor UI state.
-
-Existing-chat rule: if the user asks for an existing project/chat, do not create or use a new chat. `expectedChat` must match the active Antigravity document title before model switching or submission. If the helper reports `expectedChatActiveTitle`, `expectedChatActiveContext`, or `activeExistingChat`, call `select-chat` for that exact title and only continue if `Ok: true`.
-
-Submission rule: do not report success or wait for artifacts unless the helper returns `Submitted: true`. If it returns `Submitted: false`, `ComposerStillHasPrompt: true`, or `submit_failed`, tell the user the prompt was not accepted and fix selection/submission first.
-
-Startup rule: plugin MCP startup must be passive. Do not open, close, restart, or repair Antigravity just because Codex opened. Only call `open`, `repair-live`, `switch-model`, `submit-job`, or `submit-offload` after the user asks to use Antigravity or the task explicitly requires it.
-
-## Requirements
-
-- Windows desktop environment.
-- Antigravity installed at the standard per-user location: `%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe`.
-- Antigravity user data at: `%APPDATA%\Antigravity`.
-- Plugin installed at: `%USERPROFILE%\plugins\ai-mobile`.
-- Node.js available on `PATH` when using the bundled `chrome-devtools-mcp` bridge.
-- Optional Antigravity CLI available as `agy` on `PATH` or `%LOCALAPPDATA%\agy\bin\agy.exe` for low-RAM Antigravity jobs.
-- Optional Claude Code CLI available as `claude` on `PATH` and logged in for headless Claude bridge jobs.
-
-The helper scripts compute `%LOCALAPPDATA%`, `%APPDATA%`, and `%USERPROFILE%` at runtime. Do not hardcode another user's home directory, ports, project names, chats, email addresses, or runtime tokens.
-
-## First-Run Setup
-
-After a user clones the GitHub repo into `%USERPROFILE%\plugins\ai-mobile`, run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" setup
-```
-
-Use the setup report to decide the next step:
-
-- If `Installed` is false, ask the user to install Antigravity or provide its install path.
-- If `Node.Found` is false, install or expose Node.js on `PATH` before using the DevTools bridge.
-- If `AntigravityRunning` is false, run the `open` command.
-- If `ReadyForModelLimits` is false after opening Antigravity, wait a few seconds and rerun `setup`.
-- If `ReadyForLiveUiInspection` is false, run `repair-live` once. It restarts Antigravity, clears a stale `DevToolsActivePort`, and waits for inspectable pages. Use Browser/Computer Use fallback only if repair still cannot connect.
-
-## Helper Commands
-
-Check status:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" status
-```
-
-Fast combined readiness and quota summary:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" quick
-```
-
-Open Antigravity:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" open
-```
-
-Repair live DevTools inspection if Antigravity is running but exposes zero pages:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" repair-live
-```
-
-Generate a compact handoff prompt without touching the UI:
+For larger multi-lane work, start here:
 
 ```text
-Call ai-mobile-local.handoff-template with goal, workspace, statusFile, and nextStep.
-```
-
-Check whether a task should be offloaded before using UI tokens:
-
-```text
-Call ai-mobile-local.offload-advice with goal, hasWorkspaceWork, and estimatedCodexInputTokens.
-```
-
-Prepare the whole token-saving handoff in one call:
-
-```text
-Call ai-mobile-local.prepare-offload with goal, workspace, statusFile, nextStep, hasWorkspaceWork, and estimatedCodexInputTokens.
-```
-
-Plan the full Codex / Antigravity / Claude / Cursor route before doing work:
-
-```text
-Call ai-mobile-local.orchestration-plan with goal, workspace, codexBudgetState, estimatedCodexInputTokens, hasWorkspaceWork, needsVisibleAntigravityChat, expectedProject, and expectedChat.
-```
-
-Run the full token-saving delivery flow before doing nontrivial work:
-
-```text
-Call ai-mobile-local.efficiency-flow with goal, workspace, codexBudgetState, estimatedCodexInputTokens, hasWorkspaceWork, needsVisibleAntigravityChat, expectedProject, and expectedChat.
-```
-
-Run and safely start the best worker in one call:
-
-```text
-Call ai-mobile-local.run-efficient-task with goal, workspace, mode, nextStep, codexBudgetState, estimatedCodexInputTokens, hasWorkspaceWork, needsVisibleAntigravityChat, expectedProject, expectedChat, start=true, and submit=true.
-```
-
-If that MCP tool is not exposed, use the helper directly:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -CodexBudgetState "unknown" -EstimatedCodexInputTokens 2000
-```
-
-Plan a multi-worker team workflow:
-
-```text
-Call ai-mobile-local.team-orchestration-plan with goal, workspace, taskSplit, horizonHours=5, codexBudgetState, estimatedCodexInputTokens, expectedProject, and expectedChat.
-```
-
-Run the multi-worker team workflow:
-
-```text
-Call ai-mobile-local.run-team-task with goal, workspace, taskSplit, horizonHours=5, mode, codexBudgetState, agyModel, claudeModel, includeCursor, and start=true.
+Call ai-mobile-local.team-orchestration-plan with goal, workspace, taskSplit, horizonHours=5, codexBudgetState, and estimatedCodexInputTokens.
+Call ai-mobile-local.run-team-task with goal, workspace, taskSplit, horizonHours=5, mode, agyModel, claudeModel, and start=true.
 ```
 
 PowerShell fallback:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" team-orchestration-plan -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -HorizonHours 5 -CodexBudgetState "unknown" -EstimatedCodexInputTokens 8000
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" team-orchestration-plan -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -HorizonHours 5
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -Mode patch -HorizonHours 5
 ```
 
-Create and submit a durable bridge job:
+For one-lane work:
 
 ```text
-Call ai-mobile-local.submit-job with goal, workspace, mode, nextStep, expectedProject, expectedChat, modelPreference=auto, and submit=true.
-```
-
-Select an existing Antigravity chat before model switching or submission:
-
-```text
-Call ai-mobile-local.select-chat with expectedProject and expectedChat.
-```
-
-Use low-RAM Antigravity CLI for non-UI Antigravity jobs:
-
-```text
-Call ai-mobile-local.agy-status.
-Call ai-mobile-local.agy-models.
-Call ai-mobile-local.submit-agy-job with goal, workspace, mode, nextStep, model=gemini-3.5-flash-low, and start=true.
-Call ai-mobile-local.read-job with workspace and the returned jobId.
+Call ai-mobile-local.run-efficient-task with goal, workspace, mode, nextStep, codexBudgetState, estimatedCodexInputTokens, expectedProject, expectedChat, start=true, and submit=true.
 ```
 
 PowerShell fallback:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" agy-status
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" agy-models
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" submit-agy-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -AgyModel gemini-3.5-flash-low
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>"
 ```
 
-Read job results without reading the Antigravity chat:
+Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from the current Codex session, use the PowerShell helper at `$HOME\plugins\ai-mobile\scripts\antigravity.ps1`.
+
+## Capacity Rules
+
+- Antigravity model availability comes from `limits-summary`, `models`, or the local language-server API.
+- Codex remaining tokens are not readable by this plugin. Use visible UI/user-provided budget text only.
+- Claude Code remaining usage is not exposed by `claude-status`; treat Claude as available/unavailable.
+- For a 5-hour plan, use known reset metadata only when Antigravity exposes it. Do not invent budgets.
+- If a lane is unavailable, skip that lane and reassign only its narrow ownership.
+
+## Durable Artifacts
+
+Workers write under:
 
 ```text
-Call ai-mobile-local.list-jobs with workspace.
-Call ai-mobile-local.read-job with workspace and jobId=latest.
+.antigravity-bridge/jobs/<jobId>/
 ```
 
-Use local Claude Code headlessly for coding/review bridge jobs:
+Codex should read only:
 
-```text
-Call ai-mobile-local.claude-status.
-Call ai-mobile-local.submit-claude-job with goal, workspace, mode, nextStep, model=sonnet, and start=true.
-Call ai-mobile-local.read-job with workspace and the returned jobId.
-```
+- `result.md`
+- `changed-files.txt`
+- `diff.patch`
+- `test-output-summary.md`
+- `status.json`
 
-Use Cursor for Cursor-specific workflows:
+Do not paste full logs, chats, screenshots, source files, credentials, cookies, or private transcripts into Codex.
 
-```text
-Call ai-mobile-local.cursor-status.
-If HeadlessAgentFound is true, call ai-mobile-local.submit-cursor-job with goal, workspace, mode, nextStep, and start=true.
-If HeadlessAgentFound is false but UiFound is true, call ai-mobile-local.open-cursor with workspace and chat=true only when a visible Cursor UI workflow is needed.
-```
+## Existing Antigravity Chat Rules
 
-PowerShell fallback:
+Use desktop UI only when visible project/chat state matters.
+
+Before submitting:
+
+- verify the intended project,
+- verify the active chat title/context,
+- verify the selected model,
+- verify the composer is idle,
+- use `select-chat` if the target chat is visible but not active.
+
+Never submit into a different or new chat just because the target appears in the sidebar. If `expectedChat` does not match the active document title/context, stop.
+
+Submission success requires `Submitted: true`, a cleared composer, or a verified worker job with `Started: true`. Otherwise report `submit_failed` and fix selection/submission first.
+
+## Model Routing
+
+- If the user asks for Claude/Sonnet/Opus inside an Antigravity project/chat, select that model in Antigravity. Do not route to Claude Code CLI.
+- If the user asks for Claude Code or headless code review/patch work, use `claude-status` then `submit-claude-job`.
+- If Sonnet/Opus/GPT-OSS is exhausted in Antigravity, switch to an available Flash/Gemini model with `switch-model`.
+- Use `flash-medium` for cost-sensitive Antigravity desktop work unless the user requested another available model.
+
+## Common Commands
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-status
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" submit-claude-job -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>" -ClaudeModel sonnet
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" cursor-status
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" open-cursor -Workspace "<path>" -CursorChat true
-```
-
-Use `-Start false` to validate job creation without starting Claude Code. The helper does not use `--dangerously-skip-permissions` by default; review mode defaults to Claude Code `plan`, and patch/fast/deep default to `acceptEdits`.
-If Claude Code returns `Not logged in`, report that blocker and ask the user to complete `/login` in Claude Code before retrying.
-
-Use modes:
-
-- `fast`: inspect only directly relevant files, make the smallest safe change, run targeted verification.
-- `deep`: inspect related modules and prior patterns, run the strongest practical tests, include risks.
-- `review`: inspect and report only; do not edit.
-- `patch`: make a narrow safe edit, run relevant verification, produce a diff.
-
-Switch the selected Antigravity chat to a cost-saving available model:
-
-```text
-Call ai-mobile-local.switch-model with modelPreference=flash-medium, expectedProject, and expectedChat.
-```
-
-Submit the handoff in one call when the correct Antigravity chat is already selected:
-
-```text
-Call ai-mobile-local.submit-offload with goal, workspace, statusFile, nextStep, expectedProject, expectedChat, modelPreference=auto, and submit=true.
-```
-
-Use `expectedProject` and `expectedChat` when known. If either expected string is not visible, `submit-offload` stops before filling or submitting.
-Use `modelPreference=flash-medium` when the user wants Flash or when a quota warning/exhausted Sonnet/Opus model is visible. `submit-offload` refuses to submit if it cannot verify the chosen model.
-Use `submit=false` for verify-only; it must not fill the composer. Use `fillOnly=true` only when the user wants to manually review the handoff before sending.
-
-If MCP `submit-offload` is not visible in the current Codex session, use the raw helper:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" switch-model -ModelPreference flash-medium -ExpectedProject "<project text>" -ExpectedChat "<chat text>"
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" submit-offload -Goal "<goal>" -Workspace "<path>" -StatusFile "notes/antigravity-status.md" -NextStep "<next step>" -ExpectedProject "<project text>" -ExpectedChat "<chat text>" -ModelPreference auto -Submit true
-```
-
-If MCP tools are unavailable and Codex can only run shell commands, use the PowerShell helper equivalent:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" prepare-offload -Goal "<goal>" -Workspace "<path>" -StatusFile "notes/antigravity-status.md" -NextStep "<next step>"
-```
-
-Inspect integration details:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" inspect
-```
-
-Inspect the live DevTools connection:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" live
-```
-
-Check DevTools transport health after `Transport closed`:
-
-```text
-Call ai-mobile-local.devtools-health.
-```
-
-Check how to submit a chat prompt without invalid key names:
-
-```text
-Call ai-mobile-local.submission-guide.
-```
-
-Report model limits:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" quick
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" models
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" agy-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" cursor-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest
 ```
 
-`limits` is an alias for `models`.
-Use `limits-summary` unless full per-model JSON is required.
-
-Run the public-repo privacy scanner:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" privacy
-```
-
-## Model Limits
-
-Use `models` or `limits` for model quota checks. The helper discovers the running Antigravity `language_server.exe`, reads its CSRF token from the local process command line, finds its local HTTPS gRPC-web port, and calls:
-
-- `exa.language_server_pb.LanguageServerService/GetAvailableModels`
-- `exa.language_server_pb.LanguageServerService/GetLoadCodeAssist`
-
-This is the same local language-server surface the Antigravity Models tab uses. It returns per-model quota fraction/reset metadata and AI credit tier data when Antigravity exposes it. It is not a raw all-model token ledger unless Antigravity exposes one through these responses.
-
-Do not parse old chats, task transcripts, or logs for model limits except as supporting evidence after the language-server path fails.
-
-## Live UI Inspection
-
-For project and chat work, the live UI is the source of truth.
-
-Preferred path:
-
-1. Run `setup` or `live` to confirm DevTools readiness.
-2. Use the plugin MCP server `ai-mobile-devtools` when available. It starts Antigravity's bundled `chrome-devtools-mcp` and connects through `DevToolsActivePort`.
-3. Inspect the visible UI text and interactive elements through DevTools.
-4. Confirm the project, conversation, composer state, and selected model before sending a message.
-
-If `ai-mobile-devtools/list_pages` or another DevTools tool fails with `Transport closed`, the child MCP process has died. This is a transport failure, not proof that Antigravity is unavailable. Call `ai-mobile-local.devtools-health` to confirm the live pages. If pages are ready, restart Codex before trying DevTools again; if the user wants to continue immediately, use `ai-mobile-local.handoff-template` and ask for manual paste into Antigravity.
-
-Manual DevTools endpoint check:
-
-```powershell
-$port = (Get-Content "$env:APPDATA\Antigravity\DevToolsActivePort")[0]
-Invoke-RestMethod "http://127.0.0.1:$port/json/list"
-```
-
-If DevTools cannot interact with a native dialog or OS-level control, use the Computer Use plugin as a fallback.
-
-## Project And Chat Workflows
-
-### See Chats In Projects
-
-Use DevTools to inspect the live Antigravity project list, selected project, conversation list, and conversation titles. If the UI has a project or conversation search control, use it rather than reading private storage first.
-
-Storage under `%APPDATA%\Antigravity\User` can support investigation, but live UI remains authoritative.
-
-### Continue An Existing Chat
-
-Before submitting:
-
-- Verify the intended project is selected.
-- Verify the intended conversation title or visible context.
-- Verify the intended model in the composer.
-- Verify the composer is idle and not already streaming.
-- Check `models` if the user asks about limits or if a quota warning is visible.
-
-Then paste the user's instruction into the composer and submit it. Report whether Antigravity accepted the message, started working, requested confirmation, or showed a quota/error state.
-
-Submission reliability:
-
-- Fill or type the prompt first without a `submitKey`.
-- Prefer clicking the visible Send/arrow button after the prompt is in the composer.
-- If a keyboard submit is needed, use a separate key call with a simple accepted key such as `Enter`.
-- Do not use `Control+Enter`, `Ctrl+Enter`, or chord strings unless the active tool schema explicitly lists that exact value. Some DevTools tools reject those strings with `Unknown key`.
-- After submission, verify a new user message or working state. If one submit method fails once, stop retrying the same method and use `handoff-template` or report the blocker.
-
-### Start A New Chat In An Existing Project
-
-Before submitting:
-
-- Select or search for the existing project.
-- Use the UI control for a new chat/conversation.
-- Verify the new composer belongs to that project.
-- Verify the selected model.
-
-Then submit the user's initial prompt. Report the new conversation title or visible identifier if Antigravity shows one.
-
-### Start A New Project
-
-Before creating:
-
-- Ask for a project name only if the user's intended name cannot be inferred.
-- Use the visible Antigravity project creation flow.
-- Select local folders/workspaces only when the user explicitly requests those paths or they are already visible and clearly intended.
-- Avoid broad filesystem access without explicit user instruction.
-
-After creation, verify the project is selected, then start a chat if requested.
-
-### Tell What Is Happening Live
-
-Inspect the active page text and state through DevTools. Summarize:
-
-- selected project,
-- selected conversation,
-- selected model,
-- whether the agent is idle, working, waiting for approval, or blocked,
-- visible quota/errors,
-- last visible meaningful action.
-
-Do not expose unrelated private chat content unless the user asked for that specific context.
-
-## Token-Saving Offload Workflow
-
-Use Antigravity as an offload worker when the user wants to save Codex tokens or asks Codex to "ride on" Antigravity.
-
-## Team Orchestration Workflow
-
-Use this workflow when the user wants Codex, Antigravity CLI, and Claude Code to work together on the same project instead of choosing only one worker.
-
-Core contract:
-
-- Codex is the team lead: it turns the user goal into a shared work board, assigns non-overlapping lanes, checks conflicts, runs targeted final verification, and summarizes.
-- Antigravity CLI is the scout/product lane: broad project scan, UI/product/integration context, search-heavy exploration, and risk mapping.
-- Claude Code is the implementation/testing lane: backend/runtime changes, patch work, refactor details, tests, and code review when UI context is not required.
-- Cursor is optional and only used when a true `cursor-agent` is available or the user explicitly wants Cursor UI work.
-- All workers use the same workspace and write compact artifacts under `.antigravity-bridge/jobs/<jobId>/`.
-- Codex reads `result.md`, `changed-files.txt`, `diff.patch`, `test-output-summary.md`, and `status.json`; it does not paste full worker logs or chats into the prompt.
-
-Before starting larger work, call `team-orchestration-plan` with `horizonHours=5`. The plan must state:
-
-- what capacity is actually known for Codex, Antigravity, Claude Code, and Cursor,
-- which model pool is available now or appears to reset during the planning window,
-- which lane owns UI, backend, testing, documentation, review, or release tasks,
-- which lanes are startable now and which are blocked,
-- how Codex will reconcile artifacts and send follow-up tasks.
-
-Then call `run-team-task` when starting workers is allowed. If one lane is unavailable, skip that lane and reassign only its narrow ownership; do not collapse the entire workflow back into broad Codex exploration.
-
-### Orchestration Gate
-
-Run `ai-mobile-local.run-efficient-task` before `prepare-offload`, `submit-agy-job`, `submit-job`, or `submit-claude-job` for any nontrivial task when starting work is allowed. If the direct MCP tool is missing from the current Codex session, run `antigravity.ps1 run-efficient-task` with the same arguments. This is the main AI Mobile behavior: Codex should decide who works, start that worker if safe, and return the compact artifact readback path before it spends tokens reading files or driving UI.
-
-Routing contract:
-
-- Codex keeps strategy, safety, final patch review, verification, and user summary.
-- Antigravity CLI handles low-RAM broad workspace work when visible chat/UI state is not needed.
-- Antigravity desktop handles existing project/chat work, model picker work, and visible UI state.
-- Claude Code handles local code/review jobs when Antigravity UI context is unnecessary and the user has not said "no Claude CLI".
-- Cursor is used only for Cursor-specific UI work unless a true `cursor-agent` is available.
-- If Codex budget is low or critical, Codex should avoid broad file reads and should send compact tasks to Antigravity CLI, Antigravity desktop, or Claude Code according to the plan.
-- If all workers are blocked, Codex should perform one narrow local step or report the blocker; do not silently fall back to expensive broad Codex exploration.
-
-### Offload Decision Gate
-
-Run `ai-mobile-local.prepare-offload` before opening or driving the Antigravity UI unless the user explicitly asks to inspect the live UI. This is the cheapest token-saving step because it replaces several separate checks.
-
-Do not offload:
-
-- arithmetic, short factual answers, tiny transformations, or simple status questions,
-- small shell checks where Codex can run one command and summarize compactly,
-- prompts that can be answered without reading project files, logs, browser state, or long chat history,
-- tests inside an existing project chat when the task does not need that project's workspace.
-
-Do offload:
-
-- most nontrivial workspace tasks that would make Codex read files, large logs, browser state, or transcripts,
-- non-UI Antigravity tasks to Antigravity CLI (`submit-agy-job`) before opening desktop UI,
-- ongoing Antigravity project/chat work where the Antigravity context is already useful,
-- local coding/review tasks to Claude Code when the `claude` CLI is installed and Antigravity UI context would add friction,
-- debugging, implementation, job-search/application workflows, UI operation, reviews, planning, research, and analysis that can write a compact artifact,
-- tasks where Antigravity can keep working while Codex waits and then reads only a small result.
-
-Cost split:
-
-- Antigravity explores, searches, reads files, inspects UI, drafts plans, and writes status artifacts.
-- Codex gives Antigravity tasks, waits, reviews the compact output, tells Antigravity how to improve, verifies final diffs/tests, and explains the result to the user.
-- If Antigravity output is incomplete, Codex should usually send a short follow-up task back to Antigravity rather than expanding its own context with broad file reads.
-
-Important lesson from project chats: Antigravity may automatically inspect attached folders before answering, even for a tiny prompt. That is useful for real project work but wasteful for tests like `2+2`. If Antigravity starts broad folder exploration for a small task, cancel it and report that offload is not token-efficient.
-
-Core rule:
-
-- Codex is the router, verifier, and final summarizer.
-- Antigravity CLI is the default low-RAM Antigravity worker.
-- Antigravity desktop UI is the visual project/chat worker only when UI state matters.
-- Claude Code is the headless local worker when UI/project chat context is unnecessary.
-- Cursor is a UI worker unless `cursor-status` reports a true headless `cursor-agent`.
-- Files are the compact memory between them.
-
-Do not copy large files, long logs, full source, or full Antigravity chat transcripts into Codex. Savings happen only when Codex sends compact instructions, lets Antigravity inspect the workspace locally, and reads back a small artifact or status checkpoint.
-
-Fast preferred flow:
-
-1. Call `ai-mobile-local.run-efficient-task` with the goal, workspace, visible Codex budget state if known, expected project/chat when relevant, and estimated direct Codex tokens.
-2. If `RunEfficientTaskResult` returns `Started: true` or `Submitted: true`, stop watching every step and later call `read-job` with the returned `JobId`.
-3. If it returns a visible chat/project verification blocker, fix selection first; do not submit into a wrong or new chat.
-4. If it routes to `codex-direct` or `codex-minimal`, do one narrow Codex action only; if the task expands, rerun `run-efficient-task`.
-5. If the artifact is weak, issue one compact follow-up or `retry-job` with the exact missing point. Do not pull broad context back into Codex unless needed for final verification.
-
-Detailed fallback flow:
-
-1. Run `ai-mobile-local.efficiency-flow` when the user wants a preview or when starting a worker is not allowed.
-2. Run `ai-mobile-local.quick` only for health debugging, not as a replacement for `run-efficient-task`.
-3. If `ReadyForLiveUiInspection` is false and the selected route requires desktop UI, run `ai-mobile-local.repair-live` once.
-4. Use `ai-mobile-devtools` only if needed to verify/select the target project, chat, idle composer, and model.
-5. Use `handoff-template` only when direct submit is blocked; otherwise prefer durable job tools and `read-job`.
-6. Stop monitoring every step. Wait for the compact artifact or job state.
-7. Read only the small artifact or changed-file list, then summarize to the user in a few bullets.
-
-If DevTools UI submission fails because a stale port is still attached, do not spend more tokens probing CDP from Codex. Use `ai-mobile-local.handoff-template` to prepare the compact prompt, report that UI submission was blocked by stale DevTools, and ask the user to restart Codex or paste the handoff manually. The next Codex session should load the new DevTools port.
-
-Recommended handoff prompt:
-
-```text
-Goal: <goal>
-Workspace: <path>
-Constraints: inspect files locally; do not paste full files, full logs, or full source; use search before reading whole files.
-Token rule: work token-efficiently; write progress to <small-status-file>; output max 10 bullets plus changed file list.
-Next step: <specific next action>
-If blocked: ask one concise question; otherwise continue autonomously.
-```
-
-Recommended artifacts:
-
-- `notes/antigravity-status.md`
-- `plans/antigravity-next.md`
-- `reports/antigravity-result.json`
-- a Git diff, branch, or commit with a short summary
-
-When checking back, Codex should read only the artifact, targeted diffs, or a compact visible UI status. Do not ask Antigravity to restate the whole conversation. Use delta prompts such as:
-
-```text
-Continue from reports/antigravity-result.json. Only fix the failing item. Return max 5 bullets and changed file paths.
-```
-
-Report back to the user with:
-
-- project/chat used,
-- model selected,
-- whether Antigravity accepted the task,
-- current status,
-- next action needed.
-
-## Public Plugin Hygiene
-
-Before committing or publishing:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" privacy
-git diff --check
-```
-
-Also run a local targeted scan for any private terms the current user mentions. Do not commit names, emails, project names, runtime ports, CSRF tokens, OAuth tokens, cookies, logs, screenshots, or Antigravity user data.
+## Startup And Transport
+
+- Startup must be passive. Do not open, close, restart, or repair Antigravity just because Codex opened.
+- Call `open`, `repair-live`, `switch-model`, `submit-job`, or `submit-offload` only after the user asks to use Antigravity or the task requires it.
+- If `ai-mobile-devtools/list_pages` fails with `Transport closed`, call `devtools-health` once. If pages are live, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for manual paste.
 
 ## Boundaries
 
-- This plugin is a local bridge, not a cloud service.
-- It does not patch Antigravity internals.
-- It does not commit runtime language-server tokens.
-- It does not bypass Antigravity quota, billing, authentication, or safety controls.
-- It should not read sensitive files, credentials, browser cookies, or private chat contents unless the user asks for that specific context.
-- If Antigravity reports quota limits, do not keep resubmitting. Report the reset time and prepare the next action plan.
+- Local bridge only; not a cloud service.
+- Does not patch Antigravity internals.
+- Does not bypass quotas, billing, authentication, or safety controls.
+- Does not commit runtime tokens or private user data.
+- Run `privacy` before publishing.

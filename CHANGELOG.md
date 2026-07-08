@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Streamlined README and skill instructions to remove repeated operating guidance and make team orchestration the primary workflow.
 - Added team orchestration commands: `team-orchestration-plan` for 5-hour capacity-aware lane planning and `run-team-task` for starting Codex-led Antigravity CLI / Claude Code parallel worker lanes.
 - Made `run-efficient-task` the mandatory fallback path when Codex cannot see the direct `ai-mobile-local` MCP tools, so sessions use the PowerShell helper instead of stopping after stale tool discovery.
 - Added Cursor bridge support through `cursor-status`, `open-cursor`, and fail-closed `submit-cursor-job`.
