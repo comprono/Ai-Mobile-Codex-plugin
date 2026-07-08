@@ -103,7 +103,7 @@ Submission success requires `Submitted: true`, a cleared composer, or a verified
 ## Model Routing
 
 - If the user asks for Claude/Sonnet/Opus inside an Antigravity project/chat, select that model in Antigravity. Do not route to Claude Code CLI.
-- If the user asks for Claude Code or headless code review/patch work, use `claude-status` then `submit-claude-job`.
+- If the user asks for Claude Code or headless code review/patch work, use `claude-status` then `submit-claude-job`; keep `maxMinutes`/`ClaudeMaxMinutes` near 10 unless the user asks for a long run.
 - If Sonnet/Opus/GPT-OSS is exhausted in Antigravity, switch to an available Flash/Gemini model with `switch-model`.
 - Use `flash-medium` for cost-sensitive Antigravity desktop work unless the user requested another available model.
 

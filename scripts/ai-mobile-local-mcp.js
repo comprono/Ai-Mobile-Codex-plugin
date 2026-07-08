@@ -288,7 +288,7 @@ const tools = [
         permissionMode: { type: "string", description: "Claude Code permission mode. Defaults to plan for review and acceptEdits otherwise." },
         maxBudgetUsd: { type: "number", description: "Optional Claude Code maximum spend for this job." },
         start: { type: "boolean", description: "Set false to create the job and payload without starting Claude Code.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Claude worker may run.", default: 30 },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Claude worker may run.", default: 10 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -1467,11 +1467,51 @@ function listJobs(args = {}) {
   ].join("\n");
 }
 
+function isProcessAlive(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) return false;
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function minutesSinceUtc(value) {
+  const time = Date.parse(String(value || ""));
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.round((Date.now() - time) / 60000));
+}
+
+function readRunningJobHint(status) {
+  const state = String(status.state || "").toLowerCase();
+  if (state !== "running") return [];
+  const ageMinutes = minutesSinceUtc(status.startedAt || status.updatedAt || status.createdAt);
+  const alive = isProcessAlive(status.workerPid);
+  const lines = [
+    "RunningJobHint:",
+    `WorkerPidAlive: ${alive}`,
+    ageMinutes === null ? "AgeMinutes: unknown" : `AgeMinutes: ${ageMinutes}`,
+  ];
+  if (!alive) {
+    lines.push("Action: Worker process is gone but status is still running. Retry the job or inspect test-output-summary.md.");
+  } else if (ageMinutes !== null && ageMinutes >= 5) {
+    lines.push("Action: Worker is still active and artifacts are empty. Wait briefly, or cancel/retry with a smaller maxMinutes and narrower nextStep.");
+  } else {
+    lines.push("Action: Worker has started. Read again after it writes compact artifacts.");
+  }
+  return lines;
+}
+
 function readJob(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
   const jobId = resolveJobId(workspace, args.jobId || "latest");
   const jobDir = jobDirFor(workspace, jobId);
-  const status = summarizeFile(path.join(jobDir, "status.json"), 4000);
+  const statusPath = path.join(jobDir, "status.json");
+  const statusObject = readJsonFile(statusPath, {});
+  const runningHint = readRunningJobHint(statusObject);
+  const status = summarizeFile(statusPath, 4000);
   const result = summarizeFile(path.join(jobDir, "result.md"), 8000);
   const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 4000);
   const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 6000);
@@ -1482,6 +1522,8 @@ function readJob(args = {}) {
     "",
     "status.json:",
     status || "{}",
+    runningHint.length ? "" : null,
+    ...runningHint,
     "",
     "result.md:",
     result || "<empty>",
@@ -1554,13 +1596,14 @@ function safeClaudeFlag(value, name) {
 function runClaudeCli(command, args, options = {}) {
   const safeArgs = args.map((arg) => String(arg));
   if (process.platform === "win32") {
-    const commandLine = [String(command), ...safeArgs].join(" ");
-    return spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/c", commandLine], {
+    const commandLine = [quoteCmdArg(command), ...safeArgs.map(quoteCmdArg)].join(" ");
+    return spawnSync(commandLine, {
       ...options,
       input: options.input || undefined,
       encoding: "utf8",
       timeout: options.timeout || 10000,
       windowsHide: true,
+      shell: true,
     });
   }
   return spawnSync(command, safeArgs, {
@@ -2059,7 +2102,7 @@ function runClaudeJobWorker(args = {}) {
 
   const mode = String(args.mode || "fast").trim().toLowerCase();
   const permissionMode = safeClaudeFlag(args.permissionMode || (mode === "review" ? "plan" : "acceptEdits"), "permissionMode");
-  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 30)));
+  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 10)));
   const prompt = buildClaudeJobPrompt(workspace, jobId, args);
   const cliArgs = [
     "-p",

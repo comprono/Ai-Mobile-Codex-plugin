@@ -23,6 +23,7 @@ param(
   [string] $ClaudeFallbackModel = "",
   [string] $ClaudePermissionMode = "",
   [string] $ClaudeMaxBudgetUsd = "",
+  [int] $ClaudeMaxMinutes = 10,
   [string] $CursorModel = "",
   [object] $CursorChat = $false,
   [object] $CursorNewWindow = $false,
@@ -1189,7 +1190,7 @@ function Invoke-ClaudeBridgeCommand {
     maxBudgetUsd = $ClaudeMaxBudgetUsd
     start = $startValue
     jobId = $JobId
-    maxMinutes = 30
+    maxMinutes = $ClaudeMaxMinutes
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-claude-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
