@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Orchestrate mobile-started Codex sessions across local Antigravity, Claude Code, and Cursor workers.",
-    "longDescription": "AI Mobile turns Codex into a local team orchestrator for Windows. It can plan and run coordinated lanes across Codex, Antigravity CLI, Antigravity desktop, Claude Code, and Cursor when available. The plugin exposes MCP tools for setup/status checks, Antigravity model availability, 5-hour team planning, one-call worker dispatch, durable .antigravity-bridge job artifacts, existing Antigravity chat selection, model switching, compact job readback, DevTools UI fallback, and privacy scanning. Startup is passive: Antigravity opens or repairs only when a user-requested workflow requires it.",
+    "longDescription": "AI Mobile turns Codex into a local team orchestrator for Windows. It preserves explicit task lanes, checks exposed capacity, routes non-overlapping work across Antigravity CLI, Claude Code, and optional Cursor workers, waits for a bounded interval, and returns one compact fail-closed team result. It also supports Antigravity desktop project/chat selection and model switching when visible state is required. Startup is passive: Antigravity opens or repairs only when a user-requested workflow requires it.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -46,6 +46,9 @@
       "Five-hour capacity planning",
       "Parallel worker lanes",
       "Capacity-aware routing",
+      "Bounded team monitoring",
+      "Aggregate team readback",
+      "Fail-closed worker cancellation",
       "Compact quick status",
       "Local MCP setup tools",
       "Model quota inspection",
@@ -64,6 +67,7 @@
     "defaultPrompt": [
       "Plan AI Mobile team orchestration",
       "Run AI Mobile team task",
+      "Read latest AI Mobile team run",
       "Run efficient task",
       "Quick check AI Mobile bridge",
       "Show Antigravity model limits",

@@ -17,8 +17,13 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 For larger team work:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" team-orchestration-plan -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -HorizonHours 5
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -Mode patch -HorizonHours 5
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -Mode patch -HorizonHours 5 -WaitSeconds 30
+```
+
+The command preserves the explicit split, assigns non-overlapping lanes, starts only available workers, waits for a bounded interval, and returns one compact result. If it returns `State: running`, resume without reading each worker separately:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 ```
 
 Workers write compact artifacts under:
@@ -31,6 +36,9 @@ Workers write compact artifacts under:
   changed-files.txt
   diff.patch
   test-output-summary.md
+
+.antigravity-bridge/last-team-run.json
+.antigravity-bridge/last-team-run.md
 ```
 
 Codex should read those artifacts instead of watching full chats, logs, or source dumps.
@@ -63,7 +71,8 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 # Team planning and execution
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestration-plan -Goal "<goal>" -Workspace "<path>"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" team-orchestration-plan -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -WaitSeconds 30
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 
 # Worker lanes
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" submit-agy-job -Goal "<goal>" -Workspace "<path>" -Mode review
@@ -82,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 - `ai-mobile-local`: setup, status, capacity, team orchestration, durable jobs, model switching, worker submission, job readback, and privacy scan.
 - `ai-mobile-devtools`: Chromium DevTools bridge for live Antigravity UI inspection and interaction.
 
-Important local tools include `quick`, `models`, `limits-summary`, `orchestration-plan`, `team-orchestration-plan`, `run-team-task`, `run-efficient-task`, `submit-agy-job`, `submit-claude-job`, `submit-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
+Important local tools include `quick`, `models`, `limits-summary`, `orchestration-plan`, `team-orchestration-plan`, `run-team-task`, `read-team-run`, `run-efficient-task`, `submit-agy-job`, `submit-claude-job`, `submit-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
 
 ## Operating Rules
 
@@ -90,9 +99,11 @@ Important local tools include `quick`, `models`, `limits-summary`, `orchestratio
 - Use Antigravity CLI before desktop UI when visible project/chat state is not required.
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
 - Use Claude Code for local code, review, patch, and test lanes when UI context is not required.
-- Treat “Claude/Sonnet/Opus in an Antigravity chat” as an Antigravity model choice, not Claude Code CLI.
+- Treat "Claude/Sonnet/Opus in an Antigravity chat" as an Antigravity model choice, not Claude Code CLI.
 - Do not submit into an existing chat unless `expectedChat` matches the active Antigravity document title/context.
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
+- Do not report team completion unless `read-team-run` returns `State: completed`.
+- `cancel-job` stops the recorded local worker process tree before marking the job cancelled.
 - If DevTools says `Transport closed`, call `devtools-health` once; do not keep retrying `list_pages`.
 
 ## Capacity Limits
@@ -106,6 +117,7 @@ This is a local bridge. It does not patch Antigravity internals, bypass model qu
 Before publishing:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
 git diff --check
 python -m pipx run plugin-scanner lint .

@@ -4,6 +4,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
+const crypto = require("node:crypto");
 
 const pluginRoot = path.resolve(__dirname, "..");
 const helperScript = path.join(pluginRoot, "scripts", "antigravity.ps1");
@@ -168,7 +169,7 @@ const tools = [
   },
   {
     name: "run-team-task",
-    description: "Start available team lanes for one shared project goal: Codex coordinates, Antigravity CLI handles broad/product/UI analysis, and Claude Code handles code/testing/review.",
+    description: "One-call team execution: preserve explicit lanes, route them to available workers, start jobs, wait for a bounded interval, and return one compact fail-closed team result.",
     inputSchema: {
       type: "object",
       properties: {
@@ -179,12 +180,27 @@ const tools = [
         codexBudgetState: { type: "string", description: "Caller-observed Codex budget/capacity state.", default: "unknown" },
         estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled without team lanes.", default: 5000 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
-        agyModel: { type: "string", description: "Optional Antigravity CLI model id.", default: "gemini-3.5-flash-low" },
+        agyModel: { type: "string", description: "Optional Antigravity CLI model id. Use auto or omit it for capacity-aware Flash-first selection.", default: "auto" },
         claudeModel: { type: "string", description: "Claude Code model alias.", default: "sonnet" },
         includeCursor: { type: "boolean", description: "Include Cursor as a possible lane only when a true headless cursor-agent is available.", default: false },
         start: { type: "boolean", description: "Start available worker lanes. Use false for plan-only dry runs.", default: true },
+        waitSeconds: { type: "number", description: "Bounded time to wait for worker artifacts before returning a resumable running result.", default: 30 },
+        includePlan: { type: "boolean", description: "Include the full five-hour plan in the launch output. Defaults false to save tokens.", default: false },
       },
       required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "read-team-run",
+    description: "Read and optionally wait for the latest team run as one compact aggregate. Repairs stale jobs and never reports completion while a worker is running or failed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string", description: "Workspace containing .antigravity-bridge/last-team-run.json." },
+        waitSeconds: { type: "number", description: "Optional bounded wait for running jobs before returning.", default: 0 },
+      },
+      required: ["workspace"],
       additionalProperties: false,
     },
   },
@@ -926,31 +942,61 @@ async function runEfficientTask(args = {}) {
   ].filter(Boolean).join("\n");
 }
 
+function resolveCommandFast(command, fallbackPaths = []) {
+  const resolver = process.platform === "win32" ? "where.exe" : "which";
+  const result = spawnSync(resolver, [command], { encoding: "utf8", timeout: 2000, windowsHide: true });
+  const resolved = String(result.stdout || "").split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  if (result.status === 0 && resolved) return { found: true, command: resolved };
+  const fallback = fallbackPaths.find((candidate) => candidate && fs.existsSync(candidate));
+  return fallback ? { found: true, command: fallback } : { found: false, command: "" };
+}
+
+async function probeAntigravityDevTools(timeoutMs = 1200) {
+  if (!devToolsPortFile || !fs.existsSync(devToolsPortFile)) return { live: false, pageCount: 0 };
+  const port = fs.readFileSync(devToolsPortFile, "utf8").split(/\r?\n/)[0]?.trim();
+  if (!/^\d+$/.test(String(port || ""))) return { live: false, pageCount: 0 };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: controller.signal });
+    const pages = response.ok ? await response.json() : [];
+    return { live: Array.isArray(pages) && pages.length > 0, pageCount: Array.isArray(pages) ? pages.length : 0 };
+  } catch {
+    return { live: false, pageCount: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function getTeamCapacityContext(args = {}) {
+  const agy = resolveCommandFast("agy", [process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe") : ""]);
+  const claude = resolveCommandFast("claude");
+  const cursorAgent = args.includeCursor ? resolveCommandFast("cursor-agent") : { found: false, command: "" };
+  const liveProbe = await probeAntigravityDevTools();
   let quick = null;
   let quickError = "";
-  try {
-    quick = await runHelper("quick");
-  } catch (error) {
-    quickError = error?.message || String(error);
+
+  if (liveProbe.live) {
+    try {
+      quick = await runHelper("quick");
+    } catch (error) {
+      quickError = error?.message || String(error);
+    }
   }
 
-  const agyStatusText = getAgyStatusText();
-  const claudeStatusText = getClaudeStatusText();
-  const cursorStatusText = getCursorStatusText();
   const limits = quick?.Limits || {};
   const recommendedAvailable = Array.isArray(limits.RecommendedAvailable) ? limits.RecommendedAvailable : [];
   const setup = quick?.Setup || {};
-  const live = quick?.Live || {};
 
   return {
     codexBudget: normalizeBudgetState(args.codexBudgetState || "unknown"),
     quickError,
-    agyFound: parseFoundFromStatus(agyStatusText),
-    claudeFound: parseFoundFromStatus(claudeStatusText),
-    cursorHeadlessFound: /\bHeadlessAgentFound:\s*true\b/i.test(cursorStatusText),
+    capacityProbe: liveProbe.live ? "live Antigravity limits plus fast CLI detection" : "fast CLI detection; desktop stopped so quota probe was skipped",
+    agyFound: agy.found,
+    claudeFound: claude.found,
+    cursorHeadlessFound: cursorAgent.found,
     antigravityReady: setup.ReadyForModelLimits === true && recommendedAvailable.length > 0,
-    antigravityLiveReady: setup.ReadyForLiveUiInspection === true && Number(live.PageCount || 0) > 0,
+    antigravityLiveReady: liveProbe.live,
     recommendedAvailable,
     rawLimits: limits,
   };
@@ -966,15 +1012,31 @@ function modelLine(model) {
 
 function chooseAgyTeamModel(context, preferred) {
   const explicit = String(preferred || "").trim();
-  if (explicit) return explicit;
+  if (explicit && explicit.toLowerCase() !== "auto") return explicit;
   const available = context.recommendedAvailable || [];
-  const flash = available.find((model) => /flash/i.test(`${model.Id || ""} ${model.DisplayName || ""}`));
+  const flash = available.find((model) => /flash.*(medium|low)|(medium|low).*flash/i.test(`${model.Id || ""} ${model.DisplayName || ""}`))
+    || available.find((model) => /flash/i.test(`${model.Id || ""} ${model.DisplayName || ""}`));
   const first = flash || available[0];
   return first?.Id || first?.Name || "gemini-3.5-flash-low";
 }
 
+function normalizeTaskLane(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
 function inferTaskSplit(goal, explicitSplit) {
-  const text = `${goal || ""} ${explicitSplit || ""}`.toLowerCase();
+  const explicit = String(explicitSplit || "")
+    .split(/[,;|\n]+/)
+    .map(normalizeTaskLane)
+    .filter(Boolean);
+  if (explicit.length) return [...new Set(explicit)].slice(0, 8);
+
+  const text = String(goal || "").toLowerCase();
   const lanes = [];
   if (/\b(ui|frontend|front-end|css|react|screen|design|dashboard|browser|ux)\b/.test(text)) lanes.push("ui-frontend");
   if (/\b(api|backend|server|database|schema|auth|worker|queue|runtime|harness)\b/.test(text)) lanes.push("backend-runtime");
@@ -983,6 +1045,45 @@ function inferTaskSplit(goal, explicitSplit) {
   if (/\b(review|architecture|plan|refactor|audit)\b/.test(text)) lanes.push("architecture-review");
   if (!lanes.length) lanes.push("architecture-review", "implementation", "testing-verification");
   return [...new Set(lanes)];
+}
+
+function scoreTaskComplexity(args, split) {
+  const goal = String(args.goal || "");
+  const lower = goal.toLowerCase();
+  let score = 0;
+  if (split.length > 2) score += 3;
+  if (/\b(refactor|architecture|migration|redesign)\b/.test(lower)) score += 3;
+  if (/\b(css|design system|frontend overhaul)\b/.test(lower)) score += 2;
+  if (/\b(debug|error|failure|stack trace|logs?)\b/.test(lower)) score += 2;
+  if (/\b(test failure|build failure|failing tests?|ci failure)\b/.test(lower)) score += 2;
+  if (goal.length > 800) score += 1;
+  if (Number(args.estimatedCodexInputTokens || 0) >= 5000) score += 1;
+  return score;
+}
+
+function assignTeamTasks(split, context, includeCursor) {
+  const assigned = { agy: [], claude: [], cursor: [] };
+  const uiPattern = /\b(ui|frontend|front-end|css|react|screen|design|dashboard|browser|ux)\b/;
+  const agyPattern = /\b(ui|frontend|design|docs|release|seo|research|architecture|review|audit|product|discovery|policy)\b/;
+  const claudePattern = /\b(api|backend|server|database|schema|auth|worker|queue|runtime|bridge|implementation|refactor|debug|fix|patch|test|testing|verification|lint|ci|smoke)\b/;
+
+  for (const lane of split) {
+    if (includeCursor && context.cursorHeadlessFound && uiPattern.test(lane)) assigned.cursor.push(lane);
+    else if (agyPattern.test(lane)) assigned.agy.push(lane);
+    else if (claudePattern.test(lane)) assigned.claude.push(lane);
+    else if (assigned.agy.length <= assigned.claude.length) assigned.agy.push(lane);
+    else assigned.claude.push(lane);
+  }
+
+  if (!context.agyFound && context.claudeFound) assigned.claude.push(...assigned.agy.splice(0));
+  if (!context.claudeFound && context.agyFound) assigned.agy.push(...assigned.claude.splice(0));
+  if (!context.cursorHeadlessFound && assigned.cursor.length) {
+    const fallback = context.claudeFound ? assigned.claude : assigned.agy;
+    fallback.push(...assigned.cursor.splice(0));
+  }
+
+  for (const key of Object.keys(assigned)) assigned[key] = [...new Set(assigned[key])];
+  return assigned;
 }
 
 function buildTeamLanes(args = {}, context = {}) {
@@ -994,6 +1095,7 @@ function buildTeamLanes(args = {}, context = {}) {
   const claudeModel = String(args.claudeModel || "sonnet").trim() || "sonnet";
   const wantsVisibleChat = Boolean(args.needsVisibleAntigravityChat || args.expectedChat);
   const includeCursor = Boolean(args.includeCursor);
+  const assigned = assignTeamTasks(split, context, includeCursor);
 
   const lanes = [
     {
@@ -1011,23 +1113,25 @@ function buildTeamLanes(args = {}, context = {}) {
       id: wantsVisibleChat ? "antigravity-desktop-context" : "antigravity-cli-discovery",
       worker: wantsVisibleChat ? "Antigravity desktop" : "Antigravity CLI",
       available: wantsVisibleChat ? context.antigravityLiveReady : context.agyFound,
-      startable: !wantsVisibleChat && context.agyFound,
+      startable: !wantsVisibleChat && context.agyFound && assigned.agy.length > 0,
       mode: "review",
       model: wantsVisibleChat ? "active visible Antigravity model" : agyModel,
-      owns: "broad project scan, UI/product surface, integration risks, search-heavy exploration, and proposed task boundaries",
+      owns: `review/scout: ${assigned.agy.join(", ") || "no assigned lane"}`,
       output: ".antigravity-bridge/jobs/<jobId>/result.md with max 10 bullets and changed file list",
-      nextStep: `Act as the project scout for ${split.join(", ")}. Inspect locally, map risks and exact file targets, do not edit unless explicitly asked, and return max 10 bullets.`,
+      nextStep: `Review only these assigned lanes: ${assigned.agy.join(", ") || "none"}. Inspect locally, map risks and exact file targets, do not edit, and return max 10 bullets.`,
+      assignedTasks: assigned.agy,
     },
     {
       id: "claude-code-implementation",
       worker: "Claude Code CLI",
       available: context.claudeFound,
-      startable: context.claudeFound,
+      startable: context.claudeFound && assigned.claude.length > 0,
       mode: String(args.mode || "patch").trim() || "patch",
       model: claudeModel,
-      owns: "implementation lane, backend/runtime changes, tests, refactor details, and patch review when UI context is not required",
+      owns: `${String(args.mode || "patch").trim() || "patch"}: ${assigned.claude.join(", ") || "no assigned lane"}`,
       output: ".antigravity-bridge/jobs/<jobId>/result.md, changed-files.txt, diff.patch, test-output-summary.md",
-      nextStep: `Use the shared goal and the ${split.join(", ")} split. Work only in code/test areas that do not overlap with the Antigravity scout lane. Prefer narrow patches and write compact artifacts.`,
+      nextStep: `Work only on these assigned lanes: ${assigned.claude.join(", ") || "none"}. Do not take Antigravity or Cursor lanes. Prefer narrow patches and write compact artifacts.`,
+      assignedTasks: assigned.claude,
     },
   ];
 
@@ -1036,12 +1140,13 @@ function buildTeamLanes(args = {}, context = {}) {
       id: "cursor-agent-ui",
       worker: "Cursor agent",
       available: context.cursorHeadlessFound,
-      startable: context.cursorHeadlessFound,
+      startable: context.cursorHeadlessFound && assigned.cursor.length > 0,
       mode: "patch",
       model: String(args.cursorModel || "").trim() || "default Cursor agent model",
-      owns: "Cursor-specific UI/editor workflows only when a true cursor-agent binary is available",
+      owns: `UI/editor implementation: ${assigned.cursor.join(", ") || "no assigned lane"}`,
       output: ".antigravity-bridge/jobs/<jobId>/result.md and diff artifacts",
-      nextStep: "Use only if the task explicitly benefits from Cursor; otherwise leave this lane idle.",
+      nextStep: `Work only on these assigned UI lanes: ${assigned.cursor.join(", ") || "none"}.`,
+      assignedTasks: assigned.cursor,
     });
   }
 
@@ -1054,7 +1159,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
   const { lanes, split, horizonHours } = buildTeamLanes(args, context);
   const availableModels = (context.recommendedAvailable || []).slice(0, 5).map(modelLine).filter(Boolean);
   const activeWorkerCount = lanes.filter((lane) => lane.available && lane.worker !== "Codex").length;
-  const complexity = inferTaskSplit(goal, args.taskSplit || "").length + (Number(args.estimatedCodexInputTokens || 0) >= 5000 ? 2 : 0);
+  const complexity = scoreTaskComplexity(args, split);
 
   return [
     "AiMobileTeamOrchestrationPlan:",
@@ -1066,6 +1171,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     `ComplexityScoreApprox: ${complexity}`,
     "",
     "FiveHourCapacity:",
+    `CapacityProbe: ${context.capacityProbe}`,
     `Codex: ${context.codexBudget.state} (${context.codexBudget.text || "caller/UI only; local plugin cannot read Codex private meter"})`,
     "CodexCapacitySource: caller-provided UI text only; no private Codex token ledger is exposed to this plugin.",
     `AntigravityCLI: ${context.agyFound}`,
@@ -1104,12 +1210,16 @@ async function buildTeamOrchestrationPlan(args = {}) {
   return formatTeamOrchestrationPlan(args, context);
 }
 
-function actionSummary(action, toolName, workspace) {
+function actionSummary(action, toolName, workspace, lane = {}) {
   const jobId = valueFromResult(action, "JobId");
   const started = /\bStarted:\s*true\b/i.test(action) || /\bState:\s*running\b/i.test(action);
   const failed = /\bState:\s*failed\b/i.test(action) || /\bBlocker:/i.test(action);
   return {
     toolName,
+    laneId: lane.id || toolName,
+    worker: lane.worker || toolName,
+    assignedTasks: lane.assignedTasks || [],
+    model: lane.model || "",
     jobId,
     started: started && !failed,
     failed,
@@ -1118,13 +1228,120 @@ function actionSummary(action, toolName, workspace) {
   };
 }
 
+function lastTeamRunJsonPath(workspace) {
+  return path.join(bridgeRootFor(workspace), "last-team-run.json");
+}
+
+function writeTeamRunManifest(workspace, manifest) {
+  const manifestPath = lastTeamRunJsonPath(workspace);
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  writeJsonFile(manifestPath, { ...manifest, updatedAt: utcStamp() });
+}
+
+function teamStateFromJobs(jobs) {
+  if (!jobs.length) return "blocked";
+  const states = jobs.map((job) => String(job.state || "unknown").toLowerCase());
+  if (states.some((state) => ["queued", "running", "unknown"].includes(state))) return "running";
+  const completed = states.filter((state) => state === "completed").length;
+  if (completed === states.length) return "completed";
+  if (completed > 0) return "partial";
+  return "failed";
+}
+
+function refreshTeamRunManifest(workspace, suppliedManifest = null) {
+  const manifestPath = lastTeamRunJsonPath(workspace);
+  const manifest = suppliedManifest || readJsonFile(manifestPath, null);
+  if (!manifest || !Array.isArray(manifest.jobs)) {
+    throw new Error(`No team run manifest found at ${manifestPath}. Start run-team-task first.`);
+  }
+
+  const jobs = manifest.jobs.map((job) => {
+    if (!job.jobId) return { ...job, state: "failed", currentStep: "missing-job-id", blocker: "Worker launch did not return a JobId." };
+    const jobDir = jobDirFor(workspace, job.jobId);
+    const statusPath = path.join(jobDir, "status.json");
+    if (!fs.existsSync(statusPath)) return { ...job, state: "failed", currentStep: "missing-status", blocker: "status.json is missing." };
+    const repair = repairStaleRunningJob(workspace, job.jobId, jobDir, readJsonFile(statusPath, {}));
+    return {
+      ...job,
+      state: repair.status.state || "unknown",
+      currentStep: repair.status.currentStep || "",
+      blocker: repair.status.blocker || "",
+      workerPid: repair.status.workerPid || job.workerPid || null,
+      jobUpdatedAt: repair.status.updatedAt || "",
+    };
+  });
+  const state = teamStateFromJobs(jobs);
+  const refreshed = {
+    ...manifest,
+    state,
+    jobs,
+    counts: {
+      total: jobs.length,
+      completed: jobs.filter((job) => job.state === "completed").length,
+      running: jobs.filter((job) => ["queued", "running", "unknown"].includes(job.state)).length,
+      failed: jobs.filter((job) => ["failed", "cancelled"].includes(job.state)).length,
+    },
+  };
+  writeTeamRunManifest(workspace, refreshed);
+  return refreshed;
+}
+
+async function waitForTeamRun(workspace, waitSeconds = 0, suppliedManifest = null) {
+  const boundedWait = Math.max(0, Math.min(300, Number(waitSeconds || 0)));
+  const deadline = Date.now() + (boundedWait * 1000);
+  let snapshot = refreshTeamRunManifest(workspace, suppliedManifest);
+  while (snapshot.state === "running" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(100, deadline - Date.now()))));
+    snapshot = refreshTeamRunManifest(workspace);
+  }
+  return snapshot;
+}
+
+function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
+  const lines = [
+    "AiMobileTeamRun:",
+    `State: ${snapshot.state}`,
+    `Workspace: ${workspace}`,
+    `WaitedSeconds: ${waitedSeconds}`,
+    `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
+    "WorkerResults:",
+  ];
+
+  for (const [index, job] of snapshot.jobs.entries()) {
+    const jobDir = jobDirFor(workspace, job.jobId);
+    const result = summarizeFile(path.join(jobDir, "result.md"), 2500).trim();
+    const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 1000).trim();
+    const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 1200).trim();
+    lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
+    lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
+    if (job.blocker) lines.push(`   Blocker: ${truncateText(job.blocker, 500)}`);
+    if (result) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
+    if (changed) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
+    if (tests) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
+  }
+
+  if (snapshot.state === "completed") lines.push("Next: Codex should perform targeted integration verification; all worker jobs completed successfully.");
+  else if (snapshot.state === "running") lines.push(`Next: call read-team-run for ${workspace}; completion is not yet claimed.`);
+  else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
+  return lines.join("\n");
+}
+
+async function readTeamRun(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const waitSeconds = Math.max(0, Math.min(300, Number(args.waitSeconds || 0)));
+  const snapshot = await waitForTeamRun(workspace, waitSeconds);
+  const output = formatTeamRunSnapshot(workspace, snapshot, waitSeconds);
+  writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${output}\n`);
+  return output;
+}
+
 async function runTeamTask(args = {}) {
   const context = await getTeamCapacityContext(args);
   const plan = formatTeamOrchestrationPlan(args, context);
   const start = args.start !== false;
   const workspace = String(args.workspace || "").trim();
   const goal = String(args.goal || "").trim();
-  const { lanes } = buildTeamLanes(args, context);
+  const { lanes, split } = buildTeamLanes(args, context);
 
   if (!start) {
     return [
@@ -1147,7 +1364,7 @@ async function runTeamTask(args = {}) {
       model: args.agyModel || agyLane.model,
       start: true,
     });
-    actions.push(actionSummary(action, "submit-agy-job", workspace));
+    actions.push(actionSummary(action, "submit-agy-job", workspace, agyLane));
   }
 
   const claudeLane = lanes.find((lane) => lane.id === "claude-code-implementation" && lane.startable);
@@ -1160,7 +1377,7 @@ async function runTeamTask(args = {}) {
       model: args.claudeModel || claudeLane.model,
       start: true,
     });
-    actions.push(actionSummary(action, "submit-claude-job", workspace));
+    actions.push(actionSummary(action, "submit-claude-job", workspace, claudeLane));
   }
 
   const cursorLane = lanes.find((lane) => lane.id === "cursor-agent-ui" && lane.startable);
@@ -1173,29 +1390,46 @@ async function runTeamTask(args = {}) {
       model: args.cursorModel || "",
       start: true,
     });
-    actions.push(actionSummary(action, "submit-cursor-job", workspace));
+    actions.push(actionSummary(action, "submit-cursor-job", workspace, cursorLane));
   }
 
-  const output = [
-    plan,
-    "",
-    "StartedLaneActions:",
-    ...(actions.length
-      ? actions.flatMap((item, index) => [
-          `${index + 1}. Tool: ${item.toolName}`,
-          `   Started: ${item.started}`,
-          `   Failed: ${item.failed}`,
-          item.jobId ? `   JobId: ${item.jobId}` : "   JobId: <none>",
-          `   ReadBack: ${item.readBack}`,
-        ])
-      : ["- No external worker lane was startable. Codex should keep coordination local and report unavailable workers."]),
-    "",
+  const manifest = {
+    version: 1,
+    createdAt: utcStamp(),
+    goal,
+    workspace,
+    taskSplit: split,
+    complexityScore: scoreTaskComplexity(args, split),
+    capacityProbe: context.capacityProbe,
+    state: actions.length ? "running" : "blocked",
+    jobs: actions.map((item) => ({
+      toolName: item.toolName,
+      laneId: item.laneId,
+      worker: item.worker,
+      assignedTasks: item.assignedTasks,
+      model: item.model,
+      jobId: item.jobId,
+      state: item.failed ? "failed" : item.started ? "running" : "queued",
+    })),
+  };
+  writeTeamRunManifest(workspace, manifest);
+
+  const waitSeconds = Math.max(0, Math.min(300, Number(args.waitSeconds ?? 30)));
+  const snapshot = await waitForTeamRun(workspace, waitSeconds, manifest);
+  const compactResult = formatTeamRunSnapshot(workspace, snapshot, waitSeconds);
+  const launch = [
     "RunTeamTaskResult:",
+    `Goal: ${goal}`,
+    `TaskSplit: ${split.join(", ")}`,
+    `CapacityProbe: ${context.capacityProbe}`,
     `StartedWorkers: ${actions.filter((item) => item.started).length}`,
-    `FailedWorkers: ${actions.filter((item) => item.failed).length}`,
-    "CodexLane: active coordinator in the current session",
-    "Next: wait briefly, then read each JobId with read-job. Do not import full worker logs or chats.",
+    `FailedLaunches: ${actions.filter((item) => item.failed).length}`,
+    `WaitSeconds: ${waitSeconds}`,
+    "CodexLane: coordinator, integration owner, and final verifier",
+    "",
+    compactResult,
   ].join("\n");
+  const output = args.includePlan === true ? `${plan}\n\n${launch}` : launch;
   writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${output}\n`);
   return output;
 }
@@ -1422,6 +1656,12 @@ function createJob(args = {}) {
     const target = path.join(jobDir, file);
     if (!fs.existsSync(target)) fs.writeFileSync(target, "", "utf8");
   }
+  const gitBaseline = collectGitState(workspace);
+  writeJsonFile(path.join(jobDir, "git-baseline.json"), {
+    available: gitBaseline.available,
+    status: gitBaseline.status,
+    diffHash: crypto.createHash("sha256").update(gitBaseline.diff).digest("hex"),
+  });
   return { workspace, jobId, jobDir, status, request };
 }
 
@@ -1595,12 +1835,14 @@ function cancelJob(args = {}) {
   const jobDir = jobDirFor(workspace, jobId);
   const statusPath = path.join(jobDir, "status.json");
   const status = readJsonFile(statusPath, { jobId });
+  const termination = terminateProcessTree(status.workerPid, status.workerCommandMarker || status.jobId);
   status.state = "cancelled";
   status.updatedAt = utcStamp();
   status.currentStep = "cancelled";
   status.blocker = String(args.reason || "Cancelled by Codex.").trim();
+  status.processTermination = termination;
   writeJsonFile(statusPath, status);
-  return `CancelJobResult:\nJobId: ${jobId}\nState: cancelled\nNote: This marks the bridge job only; stop a live Antigravity UI run separately if needed.`;
+  return `CancelJobResult:\nJobId: ${jobId}\nState: cancelled\nProcessTreeStopped: ${termination.stopped}\nProcessNote: ${termination.note}`;
 }
 
 function markJobSubmitted(workspace, jobId) {
@@ -1626,6 +1868,117 @@ function updateJobStatus(workspace, jobId, patch = {}) {
   const statusPath = path.join(jobDirFor(workspace, jobId), "status.json");
   const status = readJsonFile(statusPath, { jobId });
   writeJsonFile(statusPath, { ...status, ...patch, updatedAt: utcStamp() });
+}
+
+function processCommandLine(pid) {
+  if (process.platform === "win32") {
+    const script = "$targetPid = [int]$env:AI_MOBILE_TARGET_PID; $p = Get-CimInstance Win32_Process -Filter (\"ProcessId = {0}\" -f $targetPid) -ErrorAction SilentlyContinue; if ($p) { $p.CommandLine }";
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
+      encoding: "utf8",
+      timeout: 10000,
+      windowsHide: true,
+      env: { ...process.env, AI_MOBILE_TARGET_PID: String(pid) },
+    });
+    return result.status === 0 ? String(result.stdout || "").trim() : "";
+  }
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8", timeout: 5000, windowsHide: true });
+  return result.status === 0 ? String(result.stdout || "").trim() : "";
+}
+
+function terminateProcessTree(pid, expectedMarker = "") {
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) return { stopped: false, note: "No valid worker PID was recorded." };
+  if (!isProcessAlive(numericPid)) return { stopped: true, note: "Worker process was already stopped." };
+  const commandLine = processCommandLine(numericPid);
+  const marker = String(expectedMarker || "").trim();
+  if (!commandLine || (marker && !commandLine.toLowerCase().includes(marker.toLowerCase()))) {
+    return { stopped: false, note: "Refused to stop PID because its command line did not match the recorded AI Mobile job." };
+  }
+  try {
+    if (process.platform === "win32") {
+      const result = spawnSync("taskkill.exe", ["/PID", String(numericPid), "/T", "/F"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+      return {
+        stopped: result.status === 0 || !isProcessAlive(numericPid),
+        note: truncateText(String(result.stdout || result.stderr || "taskkill completed").trim(), 500),
+      };
+    }
+    try {
+      process.kill(-numericPid, "SIGTERM");
+    } catch {
+      process.kill(numericPid, "SIGTERM");
+    }
+    return { stopped: !isProcessAlive(numericPid), note: "Sent SIGTERM to the worker process group." };
+  } catch (error) {
+    return { stopped: false, note: truncateText(error?.message || String(error), 500) };
+  }
+}
+
+function writeJobFailureArtifacts(workspace, jobId, worker, error) {
+  const jobDir = jobDirFor(workspace, jobId);
+  const message = truncateText(error?.message || String(error || "Unknown worker failure."), 2000);
+  const resultPath = path.join(jobDir, "result.md");
+  if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
+    fs.writeFileSync(resultPath, `- ${worker} failed before producing a result.\n- Blocker: ${message}\n- Next: retry only this lane with a narrower task.\n`, "utf8");
+  }
+  const testsPath = path.join(jobDir, "test-output-summary.md");
+  fs.writeFileSync(testsPath, `BridgeExecution:\nWorker: ${worker}\nResult: failed\nError: ${message}\n`, "utf8");
+}
+
+function writeAuthoritativeExecutionSummary(jobDir, worker, result, stderr) {
+  const testsPath = path.join(jobDir, "test-output-summary.md");
+  const workerSummary = fs.existsSync(testsPath) ? fs.readFileSync(testsPath, "utf8").trim() : "";
+  const timedOut = Boolean(result.error && result.error.code === "ETIMEDOUT");
+  const authoritative = [
+    "BridgeExecution:",
+    `Worker: ${worker}`,
+    `ExitCode: ${result.status ?? "<unknown>"}`,
+    `TimedOut: ${timedOut}`,
+    `Result: ${result.status === 0 && !result.error ? "success" : "failed"}`,
+    String(stderr || "").trim() ? `Stderr: ${truncateText(String(stderr).trim(), 2000)}` : "Stderr: <empty>",
+    workerSummary ? "" : null,
+    workerSummary ? "WorkerReportedSummary:" : null,
+    workerSummary ? truncateText(workerSummary, 3000) : null,
+  ].filter((line) => line !== null).join("\n");
+  fs.writeFileSync(testsPath, `${authoritative}\n`, "utf8");
+}
+
+function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
+  const current = collectGitState(workspace);
+  const baseline = readJsonFile(path.join(jobDir, "git-baseline.json"), null);
+  const currentHash = crypto.createHash("sha256").update(current.diff).digest("hex");
+  const reviewMutationDetected = String(mode || "").toLowerCase() === "review"
+    && current.available
+    && baseline?.available
+    && (baseline.status !== current.status || baseline.diffHash !== currentHash);
+
+  if (String(mode || "").toLowerCase() === "review" && !reviewMutationDetected) {
+    fs.writeFileSync(path.join(jobDir, "changed-files.txt"), "NONE\n", "utf8");
+    fs.writeFileSync(path.join(jobDir, "diff.patch"), "", "utf8");
+    return { reviewMutationDetected: false };
+  }
+  writeGitArtifacts(workspace, jobDir, current);
+  return { reviewMutationDetected };
+}
+
+async function runWorkerFailClosed(worker, args, runner) {
+  try {
+    return await runner(args);
+  } catch (error) {
+    try {
+      const workspace = safeWorkspacePath(args.workspace);
+      const jobId = resolveJobId(workspace, args.jobId);
+      writeJobFailureArtifacts(workspace, jobId, worker, error);
+      updateJobStatus(workspace, jobId, {
+        state: "failed",
+        currentStep: "worker-exception",
+        completedAt: utcStamp(),
+        blocker: truncateText(error?.message || String(error), 1000),
+      });
+      return `${worker}WorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${truncateText(error?.message || String(error), 1000)}`;
+    } catch {
+      throw error;
+    }
+  }
 }
 
 function truncateText(value, maxChars = 24000) {
@@ -1950,6 +2303,7 @@ function runAgyJobWorker(args = {}) {
       currentStep: "agy-cli-not-found",
       blocker: status.message,
     });
+    writeJobFailureArtifacts(workspace, jobId, "antigravity-cli", status.message);
     return `AgyJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${status.message}`;
   }
 
@@ -1992,28 +2346,18 @@ function runAgyJobWorker(args = {}) {
     fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Antigravity CLI produced no output>", 24000), "utf8");
   }
 
-  const testsPath = path.join(jobDir, "test-output-summary.md");
-  if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
-    fs.writeFileSync(
-      testsPath,
-      [
-        `AgyCliExitCode: ${result.status ?? "<unknown>"}`,
-        `TimedOut: ${Boolean(result.error && result.error.code === "ETIMEDOUT")}`,
-        stderr.trim() ? `Stderr: ${truncateText(stderr.trim(), 4000)}` : "Stderr: <empty>",
-      ].join("\n") + "\n",
-      "utf8",
-    );
-  }
+  writeAuthoritativeExecutionSummary(jobDir, "antigravity-cli", result, stderr);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
 
-  writeGitArtifacts(workspace, jobDir);
-
-  const failed = result.status !== 0 || Boolean(result.error);
+  const failed = result.status !== 0 || Boolean(result.error) || gitOutcome.reviewMutationDetected;
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
-    currentStep: failed ? "agy-cli-failed" : "agy-cli-completed",
+    currentStep: gitOutcome.reviewMutationDetected ? "review-worker-modified-files" : failed ? "agy-cli-failed" : "agy-cli-completed",
     completedAt: utcStamp(),
     exitCode: result.status,
-    blocker: failed ? truncateText(result.error?.message || stderr || stdout || "Antigravity CLI exited non-zero.", 1000) : "",
+    blocker: gitOutcome.reviewMutationDetected
+      ? "Review-only Antigravity worker changed workspace files; inspect diff.patch before accepting any result."
+      : failed ? truncateText(result.error?.message || stderr || stdout || "Antigravity CLI exited non-zero.", 1000) : "",
   });
 
   return [
@@ -2050,6 +2394,7 @@ function submitAgyJob(args = {}) {
       currentStep: "agy-cli-not-found",
       blocker: status.message,
     });
+    writeJobFailureArtifacts(created.workspace, created.jobId, "antigravity-cli", status.message);
     return [
       "SubmitAgyJobResult:",
       `JobId: ${created.jobId}`,
@@ -2079,6 +2424,7 @@ function submitAgyJob(args = {}) {
     state: "running",
     currentStep: "agy-cli-background-started",
     workerPid: child.pid,
+    workerCommandMarker: created.jobId,
     agyCommand: status.command,
     agyVersion: status.version,
   });
@@ -2125,18 +2471,16 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
   ].join("\n");
 }
 
-function writeGitArtifacts(workspace, jobDir) {
-  const status = spawnSync("git", ["-C", workspace, "status", "--short"], {
+function collectGitState(workspace) {
+  const bridgeExclude = ":(exclude).antigravity-bridge/**";
+  const status = spawnSync("git", ["-C", workspace, "status", "--short", "--", ".", bridgeExclude], {
     encoding: "utf8",
     timeout: 15000,
     windowsHide: true,
   });
-  if (status.status === 0) {
-    const changed = String(status.stdout || "").trim();
-    fs.writeFileSync(path.join(jobDir, "changed-files.txt"), changed ? `${changed}\n` : "NONE\n", "utf8");
-  }
+  const statusText = status.status === 0 ? String(status.stdout || "").trim() : "";
 
-  const diff = spawnSync("git", ["-C", workspace, "diff", "--", "."], {
+  const diff = spawnSync("git", ["-C", workspace, "diff", "--", ".", bridgeExclude], {
     encoding: "utf8",
     timeout: 30000,
     maxBuffer: 3 * 1024 * 1024,
@@ -2151,7 +2495,7 @@ function writeGitArtifacts(workspace, jobDir) {
   // would mutate the user's index.
   const untracked = spawnSync(
     "git",
-    ["-C", workspace, "ls-files", "--others", "--exclude-standard"],
+    ["-C", workspace, "ls-files", "--others", "--exclude-standard", "--", ".", bridgeExclude],
     { encoding: "utf8", timeout: 15000, windowsHide: true }
   );
   if (untracked.status === 0) {
@@ -2166,7 +2510,13 @@ function writeGitArtifacts(workspace, jobDir) {
     }
   }
 
-  fs.writeFileSync(path.join(jobDir, "diff.patch"), truncateText(combined, 50000), "utf8");
+  return { available: status.status === 0, status: statusText, diff: truncateText(combined, 50000) };
+}
+
+function writeGitArtifacts(workspace, jobDir, suppliedState = null) {
+  const state = suppliedState || collectGitState(workspace);
+  fs.writeFileSync(path.join(jobDir, "changed-files.txt"), state.status ? `${state.status}\n` : "NONE\n", "utf8");
+  fs.writeFileSync(path.join(jobDir, "diff.patch"), state.diff, "utf8");
 }
 
 function buildUntrackedFilesDiff(workspace, files, maxCharsPerFile = 8000) {
@@ -2204,6 +2554,7 @@ function runClaudeJobWorker(args = {}) {
       currentStep: "claude-code-not-found",
       blocker: status.message,
     });
+    writeJobFailureArtifacts(workspace, jobId, "claude-code", status.message);
     return `ClaudeJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${status.message}`;
   }
 
@@ -2254,28 +2605,18 @@ function runClaudeJobWorker(args = {}) {
     fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Claude Code produced no output>", 24000), "utf8");
   }
 
-  const testsPath = path.join(jobDir, "test-output-summary.md");
-  if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
-    fs.writeFileSync(
-      testsPath,
-      [
-        `ClaudeCodeExitCode: ${result.status ?? "<unknown>"}`,
-        `TimedOut: ${Boolean(result.error && result.error.code === "ETIMEDOUT")}`,
-        stderr.trim() ? `Stderr: ${truncateText(stderr.trim(), 4000)}` : "Stderr: <empty>",
-      ].join("\n") + "\n",
-      "utf8",
-    );
-  }
+  writeAuthoritativeExecutionSummary(jobDir, "claude-code", result, stderr);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, mode);
 
-  writeGitArtifacts(workspace, jobDir);
-
-  const failed = result.status !== 0 || Boolean(result.error);
+  const failed = result.status !== 0 || Boolean(result.error) || gitOutcome.reviewMutationDetected;
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
-    currentStep: failed ? "claude-code-failed" : "claude-code-completed",
+    currentStep: gitOutcome.reviewMutationDetected ? "review-worker-modified-files" : failed ? "claude-code-failed" : "claude-code-completed",
     completedAt: utcStamp(),
     exitCode: result.status,
-    blocker: failed ? truncateText(result.error?.message || stderr || stdout || "Claude Code exited non-zero.", 1000) : "",
+    blocker: gitOutcome.reviewMutationDetected
+      ? "Review-only Claude Code worker changed workspace files; inspect diff.patch before accepting any result."
+      : failed ? truncateText(result.error?.message || stderr || stdout || "Claude Code exited non-zero.", 1000) : "",
   });
 
   return [
@@ -2312,6 +2653,7 @@ function submitClaudeJob(args = {}) {
       currentStep: "claude-code-not-found",
       blocker: status.message,
     });
+    writeJobFailureArtifacts(created.workspace, created.jobId, "claude-code", status.message);
     return [
       "SubmitClaudeJobResult:",
       `JobId: ${created.jobId}`,
@@ -2340,6 +2682,7 @@ function submitClaudeJob(args = {}) {
     state: "running",
     currentStep: "claude-code-background-started",
     workerPid: child.pid,
+    workerCommandMarker: created.jobId,
     claudeCommand: status.command,
     claudeVersion: status.version,
   });
@@ -2391,14 +2734,12 @@ function runCursorJobWorker(args = {}) {
   const status = findCursorAgent();
   if (!status.found) {
     const blocker = status.message;
-    fs.writeFileSync(path.join(jobDir, "result.md"), `${blocker}\n`, "utf8");
-    fs.writeFileSync(path.join(jobDir, "changed-files.txt"), "NONE\n", "utf8");
-    fs.writeFileSync(path.join(jobDir, "test-output-summary.md"), "CursorAgentExitCode: <not started>\n", "utf8");
     updateJobStatus(workspace, jobId, {
       state: "failed",
       currentStep: "cursor-agent-not-found",
       blocker,
     });
+    writeJobFailureArtifacts(workspace, jobId, "cursor-agent", blocker);
     return `CursorJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${blocker}`;
   }
 
@@ -2434,28 +2775,18 @@ function runCursorJobWorker(args = {}) {
     fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Cursor agent produced no output>", 24000), "utf8");
   }
 
-  const testsPath = path.join(jobDir, "test-output-summary.md");
-  if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
-    fs.writeFileSync(
-      testsPath,
-      [
-        `CursorAgentExitCode: ${result.status ?? "<unknown>"}`,
-        `TimedOut: ${Boolean(result.error && result.error.code === "ETIMEDOUT")}`,
-        stderr.trim() ? `Stderr: ${truncateText(stderr.trim(), 4000)}` : "Stderr: <empty>",
-      ].join("\n") + "\n",
-      "utf8",
-    );
-  }
+  writeAuthoritativeExecutionSummary(jobDir, "cursor-agent", result, stderr);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
 
-  writeGitArtifacts(workspace, jobDir);
-
-  const failed = result.status !== 0 || Boolean(result.error);
+  const failed = result.status !== 0 || Boolean(result.error) || gitOutcome.reviewMutationDetected;
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
-    currentStep: failed ? "cursor-agent-failed" : "cursor-agent-completed",
+    currentStep: gitOutcome.reviewMutationDetected ? "review-worker-modified-files" : failed ? "cursor-agent-failed" : "cursor-agent-completed",
     completedAt: utcStamp(),
     exitCode: result.status,
-    blocker: failed ? truncateText(result.error?.message || stderr || stdout || "Cursor agent exited non-zero.", 1000) : "",
+    blocker: gitOutcome.reviewMutationDetected
+      ? "Review-only Cursor worker changed workspace files; inspect diff.patch before accepting any result."
+      : failed ? truncateText(result.error?.message || stderr || stdout || "Cursor agent exited non-zero.", 1000) : "",
   });
 
   return [
@@ -2492,9 +2823,7 @@ function submitCursorJob(args = {}) {
       currentStep: "cursor-agent-not-found",
       blocker: status.message,
     });
-    fs.writeFileSync(path.join(created.jobDir, "result.md"), `${status.message}\n`, "utf8");
-    fs.writeFileSync(path.join(created.jobDir, "changed-files.txt"), "NONE\n", "utf8");
-    fs.writeFileSync(path.join(created.jobDir, "test-output-summary.md"), "CursorAgentExitCode: <not started>\n", "utf8");
+    writeJobFailureArtifacts(created.workspace, created.jobId, "cursor-agent", status.message);
     return [
       "SubmitCursorJobResult:",
       `JobId: ${created.jobId}`,
@@ -2523,6 +2852,7 @@ function submitCursorJob(args = {}) {
     state: "running",
     currentStep: "cursor-agent-background-started",
     workerPid: child.pid,
+    workerCommandMarker: created.jobId,
     cursorCommand: status.command,
     cursorVersion: status.version,
   });
@@ -3242,6 +3572,70 @@ function buildSubmissionGuide() {
   ].join("\n");
 }
 
+function runSelfTest() {
+  const passed = [];
+  const assert = (condition, name) => {
+    if (!condition) throw new Error(`Self-test failed: ${name}`);
+    passed.push(name);
+  };
+
+  const split = inferTaskSplit("ignored when explicit lanes exist", "UI, backend, testing");
+  assert(split.join(",") === "ui,backend,testing", "explicit task split is preserved");
+  const assigned = assignTeamTasks(split, { agyFound: true, claudeFound: true, cursorHeadlessFound: false }, false);
+  assert(assigned.agy.includes("ui"), "UI lane routes to Antigravity scout");
+  assert(assigned.claude.includes("backend") && assigned.claude.includes("testing"), "backend and testing lanes route to Claude Code");
+  assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
+  assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
+
+  const tempRoot = path.resolve(os.tmpdir());
+  const workspace = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-self-test-"));
+  let sleeper = null;
+  try {
+    const init = spawnSync("git", ["init", "--quiet", workspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
+    assert(init.status === 0, "temporary git workspace initializes");
+    const samplePath = path.join(workspace, "sample.txt");
+    fs.writeFileSync(samplePath, "before\n", "utf8");
+    const created = createJob({ goal: "self-test", workspace, mode: "review", worker: "self-test" });
+    const unchanged = finalizeWorkerGitArtifacts(workspace, created.jobDir, "review");
+    assert(unchanged.reviewMutationDetected === false, "unchanged review workspace reports no worker diff");
+    fs.writeFileSync(samplePath, "after\n", "utf8");
+    const changed = finalizeWorkerGitArtifacts(workspace, created.jobDir, "review");
+    assert(changed.reviewMutationDetected === true, "review workspace mutation is detected");
+
+    updateJobStatus(workspace, created.jobId, { state: "completed", currentStep: "self-test-completed" });
+    fs.writeFileSync(path.join(created.jobDir, "result.md"), "- self-test completed\n", "utf8");
+    const manifest = {
+      version: 1,
+      createdAt: utcStamp(),
+      goal: "self-test",
+      workspace,
+      taskSplit: ["testing"],
+      state: "running",
+      jobs: [{ jobId: created.jobId, laneId: "self-test", worker: "self-test", assignedTasks: ["testing"], model: "none", state: "running" }],
+    };
+    writeTeamRunManifest(workspace, manifest);
+    assert(refreshTeamRunManifest(workspace).state === "completed", "aggregate team state reaches completed only after job completion");
+    writeTeamRunManifest(workspace, { ...manifest, jobs: [] });
+    assert(refreshTeamRunManifest(workspace).state === "blocked", "team with no startable jobs reports blocked");
+
+    const cancellable = createJob({ goal: "cancel self-test", workspace, mode: "fast", worker: "self-test" });
+    sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore", windowsHide: true });
+    sleeper.unref();
+    updateJobStatus(workspace, cancellable.jobId, { state: "running", currentStep: "self-test-sleeper", workerPid: sleeper.pid, workerCommandMarker: "setInterval" });
+    assert(isProcessAlive(sleeper.pid), "cancellation fixture process starts");
+    const refused = terminateProcessTree(sleeper.pid, "not-the-worker-command");
+    assert(refused.stopped === false && isProcessAlive(sleeper.pid), "cancellation refuses a mismatched process identity");
+    cancelJob({ workspace, jobId: cancellable.jobId, reason: "self-test" });
+    assert(!isProcessAlive(sleeper.pid), "cancel-job stops the worker process tree");
+  } finally {
+    if (sleeper?.pid && isProcessAlive(sleeper.pid)) terminateProcessTree(sleeper.pid);
+    const resolved = path.resolve(workspace);
+    if (resolved.startsWith(`${tempRoot}${path.sep}`)) fs.rmSync(resolved, { recursive: true, force: true });
+  }
+
+  return ["AiMobileSelfTest:", `Passed: ${passed.length}`, ...passed.map((name) => `- ${name}`)].join("\n");
+}
+
 async function handleRequest(message) {
   const { id, method, params } = message;
 
@@ -3329,6 +3723,12 @@ async function handleRequest(message) {
 
       if (name === "run-team-task") {
         const text = await runTeamTask(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "read-team-run") {
+        const text = await readTeamRun(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
         return;
       }
@@ -3459,7 +3859,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "team-orchestration-plan-cli", "run-team-task-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -3473,11 +3873,13 @@ if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", 
   }
 
   const actions = {
+    "self-test-cli": async () => runSelfTest(),
     "orchestration-plan-cli": buildOrchestrationPlan,
     "efficiency-flow-cli": buildEfficiencyFlow,
     "run-efficient-task-cli": runEfficientTask,
     "team-orchestration-plan-cli": buildTeamOrchestrationPlan,
     "run-team-task-cli": runTeamTask,
+    "read-team-run-cli": readTeamRun,
     "submit-offload-cli": submitOffloadToCurrentChat,
     "switch-model-cli": switchModelInCurrentChat,
     "select-chat-cli": selectAntigravityChat,
@@ -3489,14 +3891,14 @@ if (["orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", 
     "agy-status-cli": async () => getAgyStatusText(),
     "agy-models-cli": async () => getAgyModelsText(),
     "submit-agy-job-cli": async (value) => submitAgyJob(value),
-    "agy-job-worker-cli": async (value) => runAgyJobWorker(value),
+    "agy-job-worker-cli": async (value) => runWorkerFailClosed("antigravity-cli", value, runAgyJobWorker),
     "claude-status-cli": async () => getClaudeStatusText(),
     "submit-claude-job-cli": async (value) => submitClaudeJob(value),
-    "claude-job-worker-cli": async (value) => runClaudeJobWorker(value),
+    "claude-job-worker-cli": async (value) => runWorkerFailClosed("claude-code", value, runClaudeJobWorker),
     "cursor-status-cli": async () => getCursorStatusText(),
     "open-cursor-cli": async (value) => openCursorUi(value),
     "submit-cursor-job-cli": async (value) => submitCursorJob(value),
-    "cursor-job-worker-cli": async (value) => runCursorJobWorker(value),
+    "cursor-job-worker-cli": async (value) => runWorkerFailClosed("cursor-agent", value, runCursorJobWorker),
     "list-jobs-cli": async (value) => listJobs(value),
     "read-job-cli": async (value) => readJob(value),
     "cancel-job-cli": async (value) => cancelJob(value),

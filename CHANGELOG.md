@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Made `run-team-task` a bounded one-call lifecycle: preserve explicit task lanes, route them to available workers, launch, wait, and return a compact fail-closed aggregate.
+- Added `read-team-run` and `.antigravity-bridge/last-team-run.json` so Codex can resume and read all team workers with one command.
+- Reduced stopped-desktop planning latency by using fast CLI detection and skipping Antigravity quota probes when no live DevTools page exists.
+- Added deterministic non-overlapping lane ownership and narrow reassignment when a worker is unavailable.
+- Made worker exceptions fail closed, made `cancel-job` terminate the recorded process tree, and made bridge-owned exit status authoritative in test summaries.
+- Prevented review-only workers from reporting unrelated workspace diffs as their own changes.
+- Added a deterministic `self-test` command for lane routing, aggregate state, and review-mode mutation detection.
 - Streamlined README and skill instructions to remove repeated operating guidance and make team orchestration the primary workflow.
 - Added team orchestration commands: `team-orchestration-plan` for 5-hour capacity-aware lane planning and `run-team-task` for starting Codex-led Antigravity CLI / Claude Code parallel worker lanes.
 - Made `run-efficient-task` the mandatory fallback path when Codex cannot see the direct `ai-mobile-local` MCP tools, so sessions use the PowerShell helper instead of stopping after stale tool discovery.

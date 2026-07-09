@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "team-orchestration-plan", "run-team-task", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -13,7 +13,7 @@ param(
   [string] $ExpectedChat = "",
   [string] $CodexBudgetState = "unknown",
   [string] $ModelPreference = "auto",
-  [string] $AgyModel = "gemini-3.5-flash-low",
+  [string] $AgyModel = "",
   [string] $AgyProject = "",
   [string] $AgyConversation = "",
   [string] $AgyPrintTimeout = "5m",
@@ -38,6 +38,8 @@ param(
   [object] $SkipModelSwitch = $false,
   [object] $HasWorkspaceWork = $true,
   [object] $IncludeCursor = $false,
+  [object] $IncludePlan = $false,
+  [int] $WaitSeconds = 30,
   [int] $EstimatedCodexInputTokens = 2000
 )
 
@@ -1097,6 +1099,7 @@ function Invoke-TeamCommand {
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
+  $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
   $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
     throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
@@ -1113,6 +1116,8 @@ function Invoke-TeamCommand {
     agyModel = $AgyModel
     claudeModel = $ClaudeModel
     includeCursor = $includeCursorValue
+    includePlan = $includePlanValue
+    waitSeconds = $WaitSeconds
     expectedProject = $ExpectedProject
     expectedChat = $ExpectedChat
     needsVisibleAntigravityChat = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
@@ -1135,7 +1140,7 @@ function Invoke-TeamCommand {
         -ArgumentList $nodeArgs `
         -PassThru `
         -WindowStyle Hidden
-      $deadline = (Get-Date).AddSeconds(45)
+      $deadline = (Get-Date).AddSeconds([Math]::Max(60, [Math]::Min(360, $WaitSeconds + 45)))
       while ((Get-Date) -lt $deadline) {
         if (Test-Path -LiteralPath $lastTeamRunPath) {
           $current = Get-Item -LiteralPath $lastTeamRunPath
@@ -1255,6 +1260,7 @@ function Invoke-BridgeJobCommand {
     jobId = $JobId
     reason = $Reason
     limit = $Limit
+    waitSeconds = $WaitSeconds
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-bridge-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
@@ -1540,6 +1546,14 @@ switch ($Command) {
 
   "run-team-task" {
     Invoke-TeamCommand -CliCommand "run-team-task-cli"
+  }
+
+  "read-team-run" {
+    Invoke-BridgeJobCommand -CliCommand "read-team-run-cli"
+  }
+
+  "self-test" {
+    Invoke-BridgeJobCommand -CliCommand "self-test-cli"
   }
 
   "create-job" {

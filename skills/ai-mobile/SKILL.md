@@ -1,7 +1,6 @@
 ---
 name: ai-mobile
-description: Connect Codex to local Antigravity 2.0, Claude Code, and Cursor workers for mobile-started Codex workflows, with team orchestration, CLI-first routing, durable artifacts, and UI fallback only when visible state is required.
-license: MIT
+description: Orchestrate Codex with local Antigravity 2.0, Claude Code, and Cursor workers for mobile-started workflows. Use for automatic capacity-aware task splitting, bounded team execution, compact durable result readback, CLI-first routing, or visible Antigravity project/chat work.
 ---
 
 # AI Mobile
@@ -30,18 +29,18 @@ Workers:
 
 ## Default Calls
 
-For larger multi-lane work, start here:
+For nontrivial multi-lane work, call one execution tool first. Preserve the user's comma-separated `taskSplit`; do not call the separate plan tool unless the user asks for a detailed plan.
 
 ```text
-Call ai-mobile-local.team-orchestration-plan with goal, workspace, taskSplit, horizonHours=5, codexBudgetState, and estimatedCodexInputTokens.
-Call ai-mobile-local.run-team-task with goal, workspace, taskSplit, horizonHours=5, mode, agyModel, claudeModel, and start=true.
+Call ai-mobile-local.run-team-task with goal, workspace, taskSplit, horizonHours=5, mode, agyModel=auto, claudeModel=sonnet, waitSeconds=30, and start=true.
+If State is running, later call ai-mobile-local.read-team-run with workspace and waitSeconds=30.
 ```
 
 PowerShell fallback:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" team-orchestration-plan -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -HorizonHours 5
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -Mode patch -HorizonHours 5
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-team-task -Goal "<goal>" -Workspace "<path>" -TaskSplit "UI, backend, testing" -Mode patch -HorizonHours 5 -WaitSeconds 30
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 ```
 
 For one-lane work:
@@ -61,6 +60,7 @@ Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from th
 ## Capacity Rules
 
 - Antigravity model availability comes from `limits-summary`, `models`, or the local language-server API.
+- When Antigravity desktop is stopped, use fast CLI detection and skip its quota probe; never open the desktop just to plan CLI work.
 - Codex remaining tokens are not readable by this plugin. Use visible UI/user-provided budget text only.
 - Claude Code remaining usage is not exposed by `claude-status`; treat Claude as available/unavailable.
 - For a 5-hour plan, use known reset metadata only when Antigravity exposes it. Do not invent budgets.
@@ -78,9 +78,10 @@ Team launches also write:
 
 ```text
 .antigravity-bridge/last-team-run.md
+.antigravity-bridge/last-team-run.json
 ```
 
-Use that file only as a launch-summary fallback if `run-team-task` starts workers but the visible tool output is blank.
+Use `read-team-run` for the aggregate state. Use `read-job` only for a failed or partial lane that needs detail.
 
 Codex should read only:
 
@@ -92,6 +93,7 @@ Codex should read only:
 
 Do not paste full logs, chats, screenshots, source files, credentials, cookies, or private transcripts into Codex.
 `read-job` may mark dead `running` jobs as failed and will omit binary/UTF-16-like artifacts to keep readback compact.
+Only report team completion when `read-team-run` returns `State: completed`; `running`, `partial`, `failed`, and `blocked` are not completion.
 
 ## Existing Antigravity Chat Rules
 
@@ -125,6 +127,7 @@ powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigr
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" agy-status
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-status
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" cursor-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest
 ```
 
