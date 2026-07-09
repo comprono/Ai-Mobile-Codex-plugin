@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -11,7 +11,12 @@ param(
   [int] $HorizonHours = 5,
   [string] $ExpectedProject = "",
   [string] $ExpectedChat = "",
+  [string] $CodexModel = "current Codex session",
   [string] $CodexBudgetState = "unknown",
+  [string] $CodexRemainingPercent = "",
+  [string] $CodexResetAt = "",
+  [string] $WorkItemsJson = "",
+  [string] $WorkItemsFile = "",
   [string] $ModelPreference = "auto",
   [string] $AgyModel = "",
   [string] $AgyProject = "",
@@ -39,6 +44,7 @@ param(
   [object] $HasWorkspaceWork = $true,
   [object] $IncludeCursor = $false,
   [object] $IncludePlan = $false,
+  [object] $RefreshInventory = $false,
   [int] $WaitSeconds = 30,
   [int] $EstimatedCodexInputTokens = 2000
 )
@@ -497,7 +503,7 @@ function Get-PrivacyReport {
   foreach ($pattern in $patterns) {
     $matches = @($scanFiles |
       Select-String -Pattern $pattern -ErrorAction SilentlyContinue |
-      Where-Object { $_.Line -notmatch "csrfToken|csrf_token|x-codeium-csrf-token" } |
+      Where-Object { $_.Line -notmatch "csrfToken|csrf_token|x-codeium-csrf-token|privacy-detector" } |
       Select-Object Path, LineNumber, Pattern)
     foreach ($match in $matches) {
       $findings += [PSCustomObject]@{
@@ -1100,34 +1106,60 @@ function Invoke-TeamCommand {
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
   $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
+  $refreshInventoryValue = ConvertTo-BooleanValue -Value $RefreshInventory -Default $false
   $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
     throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
   }
 
-  $payload = [PSCustomObject]@{
+  $payloadObject = [ordered]@{
     goal = $Goal
     workspace = $Workspace
     taskSplit = $TaskSplit
     horizonHours = $HorizonHours
+    codexModel = $CodexModel
     codexBudgetState = $CodexBudgetState
+    codexResetAt = $CodexResetAt
     estimatedCodexInputTokens = $EstimatedCodexInputTokens
     mode = $Mode
     agyModel = $AgyModel
     claudeModel = $ClaudeModel
     includeCursor = $includeCursorValue
     includePlan = $includePlanValue
+    refreshInventory = $refreshInventoryValue
+    refresh = $refreshInventoryValue
     waitSeconds = $WaitSeconds
     expectedProject = $ExpectedProject
     expectedChat = $ExpectedChat
     needsVisibleAntigravityChat = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
     start = $startValue
-  } | ConvertTo-Json -Compress
+  }
+  $remainingPercentValue = 0.0
+  if ([double]::TryParse($CodexRemainingPercent, [ref]$remainingPercentValue)) {
+    $payloadObject.codexRemainingPercent = $remainingPercentValue
+  }
+  $workItemsSource = $WorkItemsJson
+  if (-not [string]::IsNullOrWhiteSpace($WorkItemsFile)) {
+    if (-not (Test-Path -LiteralPath $WorkItemsFile -PathType Leaf)) {
+      throw "WorkItemsFile was not found: $WorkItemsFile"
+    }
+    $workItemsSource = Get-Content -LiteralPath $WorkItemsFile -Raw
+  }
+  if (-not [string]::IsNullOrWhiteSpace($workItemsSource)) {
+    try {
+      $parsedWorkItems = ConvertFrom-Json -InputObject $workItemsSource
+      $payloadObject.workItems = @($parsedWorkItems | ForEach-Object { $_ })
+    } catch {
+      throw "Work items must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
+  $payload = [PSCustomObject]$payloadObject | ConvertTo-Json -Depth 8 -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-team-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    if ($CliCommand -eq "run-team-task-cli" -and $startValue) {
+    $isOrchestratorRun = @("run-team-task-cli", "orchestrate-project-cli") -contains $CliCommand
+    if ($isOrchestratorRun -and $startValue) {
       $lastTeamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
       $previousWrite = if (Test-Path -LiteralPath $lastTeamRunPath) {
         (Get-Item -LiteralPath $lastTeamRunPath).LastWriteTimeUtc
@@ -1167,7 +1199,7 @@ function Invoke-TeamCommand {
       if ($hasOutput) { $output | Write-Output }
       throw "$CliCommand failed with exit code $exitCode"
     }
-    if ($CliCommand -eq "run-team-task-cli" -and $startValue -and -not [string]::IsNullOrWhiteSpace($Workspace)) {
+    if ($isOrchestratorRun -and $startValue -and -not [string]::IsNullOrWhiteSpace($Workspace)) {
       $lastTeamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
       if (Test-Path -LiteralPath $lastTeamRunPath) {
         Get-Content -LiteralPath $lastTeamRunPath
@@ -1538,6 +1570,14 @@ switch ($Command) {
 
   "run-efficient-task" {
     Invoke-RunEfficientTask
+  }
+
+  "resource-inventory" {
+    Invoke-TeamCommand -CliCommand "resource-inventory-cli"
+  }
+
+  "orchestrate-project" {
+    Invoke-TeamCommand -CliCommand "orchestrate-project-cli"
   }
 
   "team-orchestration-plan" {

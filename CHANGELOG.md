@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Reframed AI Mobile from a fixed lane scheduler into a goal-driven resource orchestrator with Codex as coach, critic, integrator, and final verifier.
+- Added passive `resource-inventory` discovery for Codex caller state, Claude auth/observed models, Antigravity CLI model roster/live quota evidence, Cursor headless availability, cooldowns, and evidence freshness.
+- Added `orchestrate-project` with structured work items, capability/quality/capacity scoring, dependency-aware dispatch, one-writer safety, independent read-only review, and a compatibility path through `run-team-task`.
+- Added one bounded failover for quota, rate-limit, timeout, outage, auth, model-unavailable, and worker failures; project outcome/cooldown history now persists under `.antigravity-bridge/orchestrator/`.
+- Switched Claude worker output to structured JSON and added compact `worker-telemetry.json` with exact observed model, duration, token/cache usage, and provider-reported cost equivalent.
+- Added safe machine-level resource caching under `%LOCALAPPDATA%\AI Mobile` without emails, organization ids, credentials, prompts, or private transcripts.
+- Added active-run locking, atomic state writes, PID identity checks, timeout descendant cleanup, sensitive-data redaction for untracked files, and optional writer file-boundary enforcement.
 - Made `run-team-task` a bounded one-call lifecycle: preserve explicit task lanes, route them to available workers, launch, wait, and return a compact fail-closed aggregate.
 - Added `read-team-run` and `.antigravity-bridge/last-team-run.json` so Codex can resume and read all team workers with one command.
 - Reduced stopped-desktop planning latency by using fast CLI detection and skipping Antigravity quota probes when no live DevTools page exists.

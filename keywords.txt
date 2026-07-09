@@ -1,4 +1,8 @@
 ai mobile codex plugin
+codex resource orchestrator
+multi model codex orchestration
+claude antigravity codex team
+capacity aware model routing
 mobile codex desktop bridge
 openai codex antigravity
 antigravity 2.0 codex plugin

@@ -9,6 +9,9 @@ const crypto = require("node:crypto");
 const pluginRoot = path.resolve(__dirname, "..");
 const helperScript = path.join(pluginRoot, "scripts", "antigravity.ps1");
 const devToolsPortFile = path.join(process.env.APPDATA || "", "Antigravity", "DevToolsActivePort");
+const resourceCacheFile = path.join(process.env.LOCALAPPDATA || os.tmpdir(), "AI Mobile", "resource-cache.json");
+const resourceCacheTtlMs = 10 * 60 * 1000;
+const processIdentityCache = new Map();
 
 const tools = [
   {
@@ -148,7 +151,7 @@ const tools = [
   },
   {
     name: "team-orchestration-plan",
-    description: "Plan a 5-hour team workflow across Codex, Antigravity CLI, Claude Code, and optional Cursor lanes, with capacity-aware role assignment.",
+    description: "Compatibility planning view for the resource orchestrator. Understands the goal, inventories local AI teams/models, builds a work graph, and explains capacity-aware assignments.",
     inputSchema: {
       type: "object",
       properties: {
@@ -168,8 +171,76 @@ const tools = [
     },
   },
   {
+    name: "resource-inventory",
+    description: "Inspect the local AI team without starting apps or work: Codex caller state, Claude Code, Antigravity CLI/models/live quota when already running, Cursor, cooldowns, and evidence freshness.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string", description: "Optional project workspace used for continuity and recent outcome evidence." },
+        codexModel: { type: "string", description: "Caller-visible current Codex model label. The plugin cannot read Codex's private model/session ledger.", default: "current Codex session" },
+        codexBudgetState: { type: "string", description: "Caller-visible Codex capacity, such as healthy, medium, low, critical, unknown, or exact UI text.", default: "unknown" },
+        codexRemainingPercent: { type: "number", description: "Optional caller-visible Codex remaining percentage." },
+        codexResetAt: { type: "string", description: "Optional caller-visible Codex reset time." },
+        horizonHours: { type: "number", description: "Decision horizon for resets and cooldowns.", default: 5 },
+        includeCursor: { type: "boolean", description: "Probe for a true headless Cursor agent.", default: false },
+        refresh: { type: "boolean", description: "Refresh CLI model/auth probes instead of accepting a recent safe cache.", default: false },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "orchestrate-project",
+    description: "Primary AI Mobile call. Act as a resource orchestrator: understand the goal, discover available teams/models and capacity evidence, create a dependency-aware work graph, dispatch CLI workers, monitor compact artifacts, fail over once when justified, and return Codex integration actions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "The complete project outcome, not merely a lane name." },
+        workspace: { type: "string", description: "Local project workspace shared by the team." },
+        workItems: {
+          type: "array",
+          description: "Optional goal-derived work graph. Codex should provide this for complex work; the orchestrator creates a conservative graph when omitted.",
+          maxItems: 12,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Stable short work item id." },
+              objective: { type: "string", description: "Concrete outcome for this item." },
+              kind: { type: "string", description: "Examples: discovery, architecture, implementation, debugging, verification, review, integration, docs." },
+              complexity: { type: "string", enum: ["low", "medium", "high", "critical"], default: "medium" },
+              requiredCapabilities: { type: "array", items: { type: "string" }, description: "Capabilities required from the selected model." },
+              dependsOn: { type: "array", items: { type: "string" }, description: "Ids that must complete before this item can be finalized." },
+              expectedFiles: { type: "array", items: { type: "string" }, description: "Optional file ownership boundary." },
+              readOnly: { type: "boolean", description: "True for scouts/reviewers; false for implementation.", default: true },
+              preferredPlatform: { type: "string", description: "Optional caller preference: codex, claude, antigravity, or cursor." },
+              priority: { type: "number", description: "Higher values dispatch first.", default: 50 },
+            },
+            required: ["id", "objective"],
+            additionalProperties: false,
+          },
+        },
+        taskSplit: { type: "string", description: "Legacy compatibility hint. Prefer workItems for nontrivial goals." },
+        horizonHours: { type: "number", description: "Capacity and continuity decision horizon.", default: 5 },
+        codexModel: { type: "string", description: "Caller-visible current Codex model label.", default: "current Codex session" },
+        codexBudgetState: { type: "string", description: "Caller-visible Codex capacity state.", default: "unknown" },
+        codexRemainingPercent: { type: "number", description: "Optional caller-visible Codex remaining percentage." },
+        codexResetAt: { type: "string", description: "Optional caller-visible Codex reset time." },
+        estimatedCodexInputTokens: { type: "number", description: "Rough direct-work cost used only as a routing signal.", default: 5000 },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
+        agyModel: { type: "string", description: "Optional Antigravity model override. Auto lets the orchestrator choose by capability and capacity.", default: "auto" },
+        claudeModel: { type: "string", description: "Claude Code alias; local sonnet currently resolves to the strongest available Sonnet subscription model.", default: "sonnet" },
+        includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
+        start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
+        waitSeconds: { type: "number", description: "Bounded wait for compact worker artifacts.", default: 30 },
+        refreshInventory: { type: "boolean", description: "Force fresh CLI probes before assigning work.", default: false },
+        includePlan: { type: "boolean", description: "Include detailed decisions; false returns the compact operating result.", default: false },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "run-team-task",
-    description: "One-call team execution: preserve explicit lanes, route them to available workers, start jobs, wait for a bounded interval, and return one compact fail-closed team result.",
+    description: "Compatibility alias for orchestrate-project. Existing taskSplit callers still work; new callers should use a structured work graph.",
     inputSchema: {
       type: "object",
       properties: {
@@ -968,14 +1039,144 @@ async function probeAntigravityDevTools(timeoutMs = 1200) {
   }
 }
 
+function isFreshTimestamp(value, ttlMs = resourceCacheTtlMs) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) && (Date.now() - timestamp) >= 0 && (Date.now() - timestamp) <= ttlMs;
+}
+
+function readSafeResourceCache() {
+  return readJsonFile(resourceCacheFile, { version: 1, updatedAt: "" }) || { version: 1, updatedAt: "" };
+}
+
+function updateSafeResourceCache(patch = {}) {
+  return withFileLock(resourceCacheFile, () => {
+    const current = readSafeResourceCache();
+    const next = {
+      ...current,
+      ...patch,
+      antigravity: { ...(current.antigravity || {}), ...(patch.antigravity || {}) },
+      claude: { ...(current.claude || {}), ...(patch.claude || {}) },
+      cursor: { ...(current.cursor || {}), ...(patch.cursor || {}) },
+      updatedAt: utcStamp(),
+    };
+    writeJsonFile(resourceCacheFile, next);
+    return next;
+  });
+}
+
+function agyModelIdFromDisplayName(displayName) {
+  const normalized = String(displayName || "")
+    .toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized.replace(/-thinking$/, "-thinking");
+}
+
+function parseAgyModelRoster(output) {
+  return String(output || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^(Gemini|Claude|GPT)/i.test(line))
+    .map((displayName) => ({ id: agyModelIdFromDisplayName(displayName), displayName }))
+    .filter((model, index, rows) => rows.findIndex((row) => row.id === model.id) === index);
+}
+
+function safeClaudeAuthProbe(command) {
+  const result = runClaudeCli(command, ["auth", "status", "--json"], { timeout: 8000 });
+  if (result.status !== 0) return { checked: true, loggedIn: null, error: truncateText(result.stderr || result.error?.message || "auth status unavailable", 300) };
+  try {
+    const parsed = JSON.parse(String(result.stdout || "{}"));
+    return {
+      checked: true,
+      loggedIn: parsed.loggedIn === true,
+      authMethod: String(parsed.authMethod || ""),
+      apiProvider: String(parsed.apiProvider || ""),
+      subscriptionType: String(parsed.subscriptionType || ""),
+    };
+  } catch {
+    return { checked: true, loggedIn: null, error: "Claude auth status returned non-JSON output." };
+  }
+}
+
+function workspaceResourceStatePath(workspace) {
+  return path.join(bridgeRootFor(workspace), "orchestrator", "resource-state.json");
+}
+
+function readWorkspaceResourceState(workspace) {
+  if (!workspace) return { version: 1, outcomes: {}, decisions: [] };
+  return readJsonFile(workspaceResourceStatePath(workspace), { version: 1, outcomes: {}, decisions: [] })
+    || { version: 1, outcomes: {}, decisions: [] };
+}
+
+function writeWorkspaceResourceState(workspace, next) {
+  if (!workspace) return;
+  const target = workspaceResourceStatePath(workspace);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  writeJsonFile(target, { ...next, version: 1, updatedAt: utcStamp() });
+}
+
+function mutateWorkspaceResourceState(workspace, mutator) {
+  const target = workspaceResourceStatePath(workspace);
+  return withFileLock(target, () => {
+    const current = readWorkspaceResourceState(workspace);
+    const next = mutator(current) || current;
+    writeWorkspaceResourceState(workspace, next);
+    return next;
+  });
+}
+
+function resourceCooldownState(outcome = {}) {
+  const resetAt = Date.parse(String(outcome.cooldownUntil || outcome.resetAt || ""));
+  if (Number.isFinite(resetAt) && resetAt > Date.now()) {
+    return { state: "cooldown", resetAt: new Date(resetAt).toISOString() };
+  }
+  if (outcome.lastState === "unavailable" && !outcome.lastSuccessAt) return { state: "unavailable", resetAt: "" };
+  return { state: "available", resetAt: "" };
+}
+
+function compactOutcome(outcome = {}) {
+  return {
+    lastState: String(outcome.lastState || "unknown"),
+    lastCategory: String(outcome.lastCategory || ""),
+    lastSuccessAt: String(outcome.lastSuccessAt || ""),
+    lastFailureAt: String(outcome.lastFailureAt || ""),
+    cooldownUntil: String(outcome.cooldownUntil || ""),
+    observedModel: String(outcome.observedModel || ""),
+    recentKinds: Array.isArray(outcome.recentKinds) ? outcome.recentKinds.slice(-5) : [],
+  };
+}
+
 async function getTeamCapacityContext(args = {}) {
+  const refresh = args.refreshInventory === true || args.refresh === true;
+  const workspace = args.workspace ? safeWorkspacePath(args.workspace) : "";
+  let cache = readSafeResourceCache();
   const agy = resolveCommandFast("agy", [process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe") : ""]);
   const claude = resolveCommandFast("claude");
   const cursorAgent = args.includeCursor ? resolveCommandFast("cursor-agent") : { found: false, command: "" };
   const liveProbe = await probeAntigravityDevTools();
+
+  let agyModels = Array.isArray(cache.antigravity?.models) ? cache.antigravity.models : [];
+  if (agy.found && (refresh || !isFreshTimestamp(cache.antigravity?.modelsCheckedAt) || agyModels.length === 0)) {
+    const modelProbe = commandCheck(agy.command, ["models"], { timeout: 15000 });
+    if (modelProbe.ok) {
+      agyModels = parseAgyModelRoster(modelProbe.stdout);
+      cache = updateSafeResourceCache({
+        antigravity: { found: true, models: agyModels, modelsCheckedAt: utcStamp() },
+      });
+    }
+  }
+
+  let claudeAuth = cache.claude?.auth || { checked: false, loggedIn: null };
+  if (claude.found && (refresh || !isFreshTimestamp(cache.claude?.authCheckedAt))) {
+    claudeAuth = safeClaudeAuthProbe(claude.command);
+    cache = updateSafeResourceCache({
+      claude: { found: true, auth: claudeAuth, authCheckedAt: utcStamp() },
+    });
+  }
+
   let quick = null;
   let quickError = "";
-
   if (liveProbe.live) {
     try {
       quick = await runHelper("quick");
@@ -987,37 +1188,229 @@ async function getTeamCapacityContext(args = {}) {
   const limits = quick?.Limits || {};
   const recommendedAvailable = Array.isArray(limits.RecommendedAvailable) ? limits.RecommendedAvailable : [];
   const setup = quick?.Setup || {};
+  const workspaceState = workspace ? readWorkspaceResourceState(workspace) : { outcomes: {}, decisions: [] };
+
+  updateSafeResourceCache({
+    antigravity: { found: agy.found, live: liveProbe.live, lastSeenAt: utcStamp() },
+    claude: { found: claude.found, lastSeenAt: utcStamp() },
+    cursor: { headlessFound: cursorAgent.found, lastSeenAt: utcStamp() },
+  });
 
   return {
+    codexModel: String(args.codexModel || "current Codex session").trim() || "current Codex session",
     codexBudget: normalizeBudgetState(args.codexBudgetState || "unknown"),
+    codexRemainingPercent: Number.isFinite(Number(args.codexRemainingPercent)) ? Number(args.codexRemainingPercent) : null,
+    codexResetAt: String(args.codexResetAt || ""),
     quickError,
-    capacityProbe: liveProbe.live ? "live Antigravity limits plus fast CLI detection" : "fast CLI detection; desktop stopped so quota probe was skipped",
+    capacityProbe: liveProbe.live
+      ? "live Antigravity quota plus local CLI/auth evidence"
+      : "passive CLI/auth evidence; Antigravity desktop was not opened for quota inspection",
     agyFound: agy.found,
     claudeFound: claude.found,
+    claudeAuth,
+    claudeObservedModel: String(cache.claude?.observedModel || ""),
     cursorHeadlessFound: cursorAgent.found,
     antigravityReady: setup.ReadyForModelLimits === true && recommendedAvailable.length > 0,
     antigravityLiveReady: liveProbe.live,
     recommendedAvailable,
+    agyModels,
     rawLimits: limits,
+    workspaceState,
+    cacheUpdatedAt: String(cache.updatedAt || ""),
   };
 }
 
-function modelLine(model) {
-  if (!model) return "";
-  const label = model.DisplayName || model.Name || model.Id || "<unknown model>";
-  const remaining = model.RemainingPercent ?? model.remainingPercent ?? model.remaining ?? "?";
-  const reset = model.ResetAt || model.ResetTime || model.ResetUtc || model.resetAt || model.resetTime || "";
-  return reset ? `${label} (${remaining}% remaining, reset ${reset})` : `${label} (${remaining}% remaining)`;
+function normalizedModelText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9.]+/g, " ").trim();
 }
 
-function chooseAgyTeamModel(context, preferred) {
-  const explicit = String(preferred || "").trim();
-  if (explicit && explicit.toLowerCase() !== "auto") return explicit;
-  const available = context.recommendedAvailable || [];
-  const flash = available.find((model) => /flash.*(medium|low)|(medium|low).*flash/i.test(`${model.Id || ""} ${model.DisplayName || ""}`))
-    || available.find((model) => /flash/i.test(`${model.Id || ""} ${model.DisplayName || ""}`));
-  const first = flash || available[0];
-  return first?.Id || first?.Name || "gemini-3.5-flash-low";
+function liveAgyEvidence(context, model) {
+  const needle = normalizedModelText(`${model.id} ${model.displayName}`);
+  const live = (context.recommendedAvailable || []).find((candidate) => {
+    const candidateText = normalizedModelText(`${candidate.Id || ""} ${candidate.Name || ""} ${candidate.DisplayName || ""}`);
+    return candidateText && (needle.includes(candidateText) || candidateText.includes(normalizedModelText(model.displayName)));
+  });
+  if (!live) return { remainingPercent: null, resetAt: "", evidence: context.antigravityLiveReady ? "live-unknown" : "observed-roster" };
+  const remaining = Number(live.RemainingPercent ?? live.remainingPercent ?? live.remaining);
+  return {
+    remainingPercent: Number.isFinite(remaining) ? remaining : null,
+    resetAt: String(live.ResetAt || live.ResetTime || live.ResetUtc || live.resetAt || live.resetTime || ""),
+    evidence: "measured-live",
+  };
+}
+
+function agyModelProfile(model) {
+  const text = `${model.id} ${model.displayName}`.toLowerCase();
+  const capabilities = new Set(["general-reasoning", "discovery", "review", "research", "docs"]);
+  let quality = 68;
+  let speed = 75;
+  let cost = 85;
+  if (/flash/.test(text)) {
+    capabilities.add("fast-analysis");
+    capabilities.add("testing");
+    quality = /high/.test(text) ? 78 : /medium/.test(text) ? 74 : 69;
+    speed = /low/.test(text) ? 95 : /medium/.test(text) ? 90 : 82;
+    cost = 95;
+  }
+  if (/(pro|sonnet|opus)/.test(text)) {
+    capabilities.add("architecture");
+    capabilities.add("debugging");
+    capabilities.add("implementation");
+    capabilities.add("testing");
+    quality = /opus/.test(text) ? 94 : /sonnet/.test(text) ? 90 : /high/.test(text) ? 87 : 83;
+    speed = /opus/.test(text) ? 45 : /sonnet/.test(text) ? 58 : 65;
+    cost = /opus/.test(text) ? 35 : /sonnet/.test(text) ? 50 : 60;
+  }
+  if (/gpt-oss/.test(text)) {
+    capabilities.add("implementation");
+    capabilities.add("debugging");
+    capabilities.add("testing");
+    quality = 76;
+    speed = 70;
+    cost = 80;
+  }
+  return { capabilities: [...capabilities], quality, speed, cost };
+}
+
+function candidateAvailability(found, authState, outcome = {}, measured = {}) {
+  if (!found) return { state: "unavailable", resetAt: "" };
+  if (authState === false) return { state: "unavailable", resetAt: "" };
+  const cooldown = resourceCooldownState(outcome);
+  if (cooldown.state !== "available") return cooldown;
+  if (Number.isFinite(measured.remainingPercent) && measured.remainingPercent <= 0) {
+    return { state: "exhausted", resetAt: measured.resetAt || "" };
+  }
+  return { state: "available", resetAt: measured.resetAt || "" };
+}
+
+function buildResourceCandidates(args = {}, context = {}) {
+  const outcomes = context.workspaceState?.outcomes || {};
+  const codexState = ["critical", "low"].includes(context.codexBudget.state) ? "constrained" : "available";
+  const candidates = [{
+    id: "codex:current",
+    platform: "codex",
+    team: "Codex",
+    model: context.codexModel,
+    displayName: context.codexModel,
+    dispatchable: false,
+    state: codexState,
+    evidence: context.codexRemainingPercent === null ? "caller-or-unknown" : "caller-measured",
+    remainingPercent: context.codexRemainingPercent,
+    resetAt: context.codexResetAt,
+    capabilities: ["orchestration", "architecture", "risk-gating", "integration", "final-verification", "general-reasoning"],
+    quality: 100,
+    speed: 65,
+    cost: 10,
+    role: "goal owner, resource orchestrator, critic, integrator, and final verifier",
+    outcome: compactOutcome(outcomes["codex:current"] || {}),
+  }];
+
+  const claudeOutcome = outcomes["claude:sonnet"] || {};
+  const claudeAvailability = candidateAvailability(context.claudeFound, context.claudeAuth?.loggedIn, claudeOutcome);
+  candidates.push({
+    id: "claude:sonnet",
+    platform: "claude",
+    team: "Claude Code CLI",
+    model: "sonnet",
+    displayName: context.claudeObservedModel || "Claude Sonnet (local alias)",
+    dispatchable: true,
+    state: claudeAvailability.state,
+    evidence: claudeOutcome.lastSuccessAt ? "observed-run" : context.claudeAuth?.checked ? "observed-auth" : "detected-cli",
+    remainingPercent: null,
+    resetAt: claudeAvailability.resetAt,
+    capabilities: ["general-reasoning", "architecture", "implementation", "debugging", "testing", "review", "docs"],
+    quality: 93,
+    speed: 68,
+    cost: 55,
+    role: "high-value implementation, architecture, debugging, and independent review",
+    outcome: compactOutcome(claudeOutcome),
+  });
+
+  const agyRoster = context.agyModels?.length
+    ? context.agyModels
+    : (context.recommendedAvailable || []).map((model) => ({
+        id: String(model.Id || model.Name || agyModelIdFromDisplayName(model.DisplayName)),
+        displayName: String(model.DisplayName || model.Name || model.Id || "Antigravity model"),
+      }));
+  for (const model of agyRoster) {
+    const id = `antigravity:${model.id}`;
+    const outcome = outcomes[id] || {};
+    const measured = liveAgyEvidence(context, model);
+    const availability = candidateAvailability(context.agyFound, true, outcome, measured);
+    const profile = agyModelProfile(model);
+    candidates.push({
+      id,
+      platform: "antigravity",
+      team: "Antigravity CLI",
+      model: model.id,
+      displayName: model.displayName,
+      dispatchable: true,
+      state: availability.state,
+      evidence: outcome.lastSuccessAt ? "observed-run" : measured.evidence,
+      remainingPercent: measured.remainingPercent,
+      resetAt: availability.resetAt,
+      capabilities: profile.capabilities,
+      quality: profile.quality,
+      speed: profile.speed,
+      cost: profile.cost,
+      role: /flash/i.test(model.displayName) ? "fast scout, research, drafting, and low-cost validation" : "reasoning, review, and bounded implementation",
+      outcome: compactOutcome(outcome),
+    });
+  }
+
+  if (args.includeCursor === true) {
+    const cursorOutcome = outcomes["cursor:agent"] || {};
+    const cursorAvailability = candidateAvailability(context.cursorHeadlessFound, true, cursorOutcome);
+    candidates.push({
+      id: "cursor:agent",
+      platform: "cursor",
+      team: "Cursor agent",
+      model: String(args.cursorModel || "default"),
+      displayName: "Cursor headless agent",
+      dispatchable: true,
+      state: cursorAvailability.state,
+      evidence: context.cursorHeadlessFound ? "detected-cli" : "missing-cli",
+      remainingPercent: null,
+      resetAt: cursorAvailability.resetAt,
+      capabilities: ["implementation", "ui", "editor-workflow", "testing"],
+      quality: 78,
+      speed: 75,
+      cost: 60,
+      role: "editor-native UI implementation when a real headless agent exists",
+      outcome: compactOutcome(cursorOutcome),
+    });
+  }
+  return candidates;
+}
+
+function formatResourceInventory(args = {}, context = {}, candidates = buildResourceCandidates(args, context)) {
+  const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  const lines = [
+    "AiMobileResourceInventory:",
+    `GeneratedAtUtc: ${utcStamp()}`,
+    `HorizonHours: ${horizonHours}`,
+    `Evidence: ${context.capacityProbe}`,
+    "TeamsAndModels:",
+  ];
+  for (const candidate of candidates) {
+    const capacity = candidate.remainingPercent === null ? "remaining=unknown" : `remaining=${candidate.remainingPercent}%`;
+    const reset = candidate.resetAt ? `; reset=${candidate.resetAt}` : "";
+    lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}`);
+  }
+  lines.push(
+    "TruthBoundary:",
+    "- Codex capacity is caller-visible only; this plugin cannot read Codex's private token ledger.",
+    "- Claude subscription remaining usage is not exposed by the local CLI; availability is inferred from auth and recent real runs.",
+    "- Antigravity percentage/reset values are measured only while its local service is already running; inventory never opens the UI just to inspect quota.",
+    "- Unknown is preserved as unknown. The orchestrator uses success/failure evidence and bounded failover instead of inventing capacity.",
+  );
+  return lines.join("\n");
+}
+
+async function getResourceInventory(args = {}) {
+  const context = await getTeamCapacityContext(args);
+  const candidates = buildResourceCandidates(args, context);
+  return formatResourceInventory(args, context, candidates);
 }
 
 function normalizeTaskLane(value) {
@@ -1053,6 +1446,8 @@ function scoreTaskComplexity(args, split) {
   let score = 0;
   if (split.length > 2) score += 3;
   if (/\b(refactor|architecture|migration|redesign)\b/.test(lower)) score += 3;
+  if (/\b(orchestrat|multi-model|cross-platform|coordination|resource manager)\w*/.test(lower)) score += 4;
+  if (/\b(plugin|bridge|integration)\b/.test(lower)) score += 2;
   if (/\b(css|design system|frontend overhaul)\b/.test(lower)) score += 2;
   if (/\b(debug|error|failure|stack trace|logs?)\b/.test(lower)) score += 2;
   if (/\b(test failure|build failure|failing tests?|ci failure)\b/.test(lower)) score += 2;
@@ -1061,147 +1456,248 @@ function scoreTaskComplexity(args, split) {
   return score;
 }
 
-function assignTeamTasks(split, context, includeCursor) {
-  const assigned = { agy: [], claude: [], cursor: [] };
-  const uiPattern = /\b(ui|frontend|front-end|css|react|screen|design|dashboard|browser|ux)\b/;
-  const agyPattern = /\b(ui|frontend|design|docs|release|seo|research|architecture|review|audit|product|discovery|policy)\b/;
-  const claudePattern = /\b(api|backend|server|database|schema|auth|worker|queue|runtime|bridge|implementation|refactor|debug|fix|patch|test|testing|verification|lint|ci|smoke)\b/;
-
-  for (const lane of split) {
-    if (includeCursor && context.cursorHeadlessFound && uiPattern.test(lane)) assigned.cursor.push(lane);
-    else if (agyPattern.test(lane)) assigned.agy.push(lane);
-    else if (claudePattern.test(lane)) assigned.claude.push(lane);
-    else if (assigned.agy.length <= assigned.claude.length) assigned.agy.push(lane);
-    else assigned.claude.push(lane);
-  }
-
-  if (!context.agyFound && context.claudeFound) assigned.claude.push(...assigned.agy.splice(0));
-  if (!context.claudeFound && context.agyFound) assigned.agy.push(...assigned.claude.splice(0));
-  if (!context.cursorHeadlessFound && assigned.cursor.length) {
-    const fallback = context.claudeFound ? assigned.claude : assigned.agy;
-    fallback.push(...assigned.cursor.splice(0));
-  }
-
-  for (const key of Object.keys(assigned)) assigned[key] = [...new Set(assigned[key])];
-  return assigned;
+function normalizeComplexity(value, fallback = "medium") {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  return ["low", "medium", "high", "critical"].includes(normalized) ? normalized : fallback;
 }
 
-function buildTeamLanes(args = {}, context = {}) {
+function capabilitiesForWorkItem(kind, objective) {
+  const text = `${kind || ""} ${objective || ""}`.toLowerCase();
+  const capabilities = new Set(["general-reasoning"]);
+  if (/discover|research|inspect|context|explor|requirements?/.test(text)) capabilities.add("discovery");
+  if (/architect|design|plan|system|migration|refactor/.test(text)) capabilities.add("architecture");
+  if (/implement|code|patch|fix|backend|frontend|ui|api|database|schema/.test(text)) capabilities.add("implementation");
+  if (/debug|failure|error|outage|root cause/.test(text)) capabilities.add("debugging");
+  if (/test|verify|validation|qa|lint|build|ci/.test(text)) capabilities.add("testing");
+  if (/review|audit|critique|risk/.test(text)) capabilities.add("review");
+  if (/docs|readme|release|seo|marketplace/.test(text)) capabilities.add("docs");
+  if (/\b(ui|frontend|css|screen|design|ux)\b/.test(text)) capabilities.add("ui");
+  return [...capabilities];
+}
+
+function normalizeWorkItem(item, index, fallbackComplexity) {
+  const kind = normalizeTaskLane(item.kind || "general") || "general";
+  const objective = String(item.objective || "").trim();
+  const inferredReadOnly = !/(implementation|implement|patch|fix|debug|migration|refactor)/.test(kind);
+  return {
+    id: normalizeTaskLane(item.id || `work-${index + 1}`) || `work-${index + 1}`,
+    objective: objective || `Complete work item ${index + 1}`,
+    kind,
+    complexity: normalizeComplexity(item.complexity, fallbackComplexity),
+    requiredCapabilities: [...new Set([
+      ...capabilitiesForWorkItem(kind, objective),
+      ...(Array.isArray(item.requiredCapabilities) ? item.requiredCapabilities.map(normalizeTaskLane).filter(Boolean) : []),
+    ])],
+    dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.map(normalizeTaskLane).filter(Boolean) : [],
+    expectedFiles: Array.isArray(item.expectedFiles) ? item.expectedFiles.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 20) : [],
+    readOnly: typeof item.readOnly === "boolean" ? item.readOnly : inferredReadOnly,
+    preferredPlatform: normalizeTaskLane(item.preferredPlatform || ""),
+    priority: Math.max(0, Math.min(100, Number(item.priority ?? 50))),
+    state: "pending",
+    failoverCount: 0,
+  };
+}
+
+function buildGoalWorkGraph(args = {}) {
   const goal = String(args.goal || "").trim();
-  const workspace = String(args.workspace || "").trim();
-  const split = inferTaskSplit(goal, args.taskSplit || "");
-  const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
-  const agyModel = chooseAgyTeamModel(context, args.agyModel);
-  const claudeModel = String(args.claudeModel || "sonnet").trim() || "sonnet";
-  const wantsVisibleChat = Boolean(args.needsVisibleAntigravityChat || args.expectedChat);
-  const includeCursor = Boolean(args.includeCursor);
-  const assigned = assignTeamTasks(split, context, includeCursor);
+  const legacySplit = inferTaskSplit(goal, args.taskSplit || "");
+  const score = scoreTaskComplexity(args, legacySplit);
+  const fallbackComplexity = score >= 8 ? "critical" : score >= 5 ? "high" : score >= 2 ? "medium" : "low";
+  let rawItems = Array.isArray(args.workItems)
+    ? args.workItems.flat(1).filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    : [];
 
-  const lanes = [
-    {
-      id: "codex-lead",
-      worker: "Codex",
-      available: true,
-      startable: false,
-      mode: "coordinate",
-      model: "current Codex session",
-      owns: "goal framing, task board, conflict control, final integration, targeted verification, user summary",
-      output: "final synthesis plus targeted local checks",
-      nextStep: `Create the shared work board for ${workspace || "the workspace"}, assign non-overlapping file areas, and read only compact artifacts from workers.`,
-    },
-    {
-      id: wantsVisibleChat ? "antigravity-desktop-context" : "antigravity-cli-discovery",
-      worker: wantsVisibleChat ? "Antigravity desktop" : "Antigravity CLI",
-      available: wantsVisibleChat ? context.antigravityLiveReady : context.agyFound,
-      startable: !wantsVisibleChat && context.agyFound && assigned.agy.length > 0,
-      mode: "review",
-      model: wantsVisibleChat ? "active visible Antigravity model" : agyModel,
-      owns: `review/scout: ${assigned.agy.join(", ") || "no assigned lane"}`,
-      output: ".antigravity-bridge/jobs/<jobId>/result.md with max 10 bullets and changed file list",
-      nextStep: `Review only these assigned lanes: ${assigned.agy.join(", ") || "none"}. Inspect locally, map risks and exact file targets, do not edit, and return max 10 bullets.`,
-      assignedTasks: assigned.agy,
-    },
-    {
-      id: "claude-code-implementation",
-      worker: "Claude Code CLI",
-      available: context.claudeFound,
-      startable: context.claudeFound && assigned.claude.length > 0,
-      mode: String(args.mode || "patch").trim() || "patch",
-      model: claudeModel,
-      owns: `${String(args.mode || "patch").trim() || "patch"}: ${assigned.claude.join(", ") || "no assigned lane"}`,
-      output: ".antigravity-bridge/jobs/<jobId>/result.md, changed-files.txt, diff.patch, test-output-summary.md",
-      nextStep: `Work only on these assigned lanes: ${assigned.claude.join(", ") || "none"}. Do not take Antigravity or Cursor lanes. Prefer narrow patches and write compact artifacts.`,
-      assignedTasks: assigned.claude,
-    },
-  ];
-
-  if (includeCursor) {
-    lanes.push({
-      id: "cursor-agent-ui",
-      worker: "Cursor agent",
-      available: context.cursorHeadlessFound,
-      startable: context.cursorHeadlessFound && assigned.cursor.length > 0,
-      mode: "patch",
-      model: String(args.cursorModel || "").trim() || "default Cursor agent model",
-      owns: `UI/editor implementation: ${assigned.cursor.join(", ") || "no assigned lane"}`,
-      output: ".antigravity-bridge/jobs/<jobId>/result.md and diff artifacts",
-      nextStep: `Work only on these assigned UI lanes: ${assigned.cursor.join(", ") || "none"}.`,
-      assignedTasks: assigned.cursor,
-    });
+  if (!rawItems.length && String(args.taskSplit || "").trim()) {
+    rawItems = legacySplit.map((lane, index) => ({
+      id: lane,
+      objective: `Own the ${lane} part of the common goal: ${goal}`,
+      kind: lane,
+      complexity: fallbackComplexity,
+      readOnly: /review|audit|research|docs|test|verification/.test(lane),
+      priority: 80 - index,
+    }));
   }
 
-  return { lanes, split, horizonHours };
+  if (!rawItems.length) {
+    const reviewOnly = String(args.mode || "patch").toLowerCase() === "review";
+    if (fallbackComplexity !== "low") {
+      rawItems.push({
+        id: "goal-context",
+        objective: `Inspect the project and identify the smallest high-leverage path to: ${goal}`,
+        kind: "discovery-architecture",
+        complexity: fallbackComplexity,
+        readOnly: true,
+        priority: 85,
+      });
+    }
+    rawItems.push({
+      id: reviewOnly ? "independent-review" : "goal-implementation",
+      objective: reviewOnly ? `Independently review the project against this goal: ${goal}` : `Implement the safest complete change that achieves: ${goal}`,
+      kind: reviewOnly ? "review" : "implementation-debugging",
+      complexity: fallbackComplexity,
+      readOnly: reviewOnly,
+      priority: 95,
+    });
+    if (!reviewOnly) {
+      rawItems.push({
+        id: "independent-verification",
+        objective: `Verify the implementation against the complete goal and report concrete gaps only: ${goal}`,
+        kind: "testing-review",
+        complexity: fallbackComplexity,
+        readOnly: true,
+        dependsOn: ["goal-implementation"],
+        priority: 90,
+      });
+    }
+  }
+
+  const normalized = rawItems.slice(0, 12).map((item, index) => normalizeWorkItem(item, index, fallbackComplexity));
+  const unique = [];
+  const ids = new Set();
+  for (const item of normalized) {
+    let id = item.id;
+    let suffix = 2;
+    while (ids.has(id)) id = `${item.id}-${suffix++}`;
+    ids.add(id);
+    unique.push({ ...item, id });
+  }
+  const validIds = new Set(unique.map((item) => item.id));
+  return unique.map((item) => ({ ...item, dependsOn: item.dependsOn.filter((id) => validIds.has(id) && id !== item.id) }));
+}
+
+function requiredQuality(complexity) {
+  return { low: 55, medium: 68, high: 82, critical: 90 }[normalizeComplexity(complexity)] || 68;
+}
+
+function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = "") {
+  if (!candidate.dispatchable || candidate.state !== "available") return Number.NEGATIVE_INFINITY;
+  const availableCapabilities = new Set(candidate.capabilities || []);
+  const required = item.requiredCapabilities || [];
+  const matched = required.filter((capability) => availableCapabilities.has(capability));
+  const capabilityScore = required.length ? (matched.length / required.length) * 42 : 25;
+  const qualityFloor = requiredQuality(item.complexity);
+  const qualityGap = candidate.quality - qualityFloor;
+  let score = capabilityScore + Math.min(30, Math.max(-30, 18 + qualityGap));
+  score += candidate.speed * (item.complexity === "low" ? 0.16 : 0.08);
+  score += candidate.cost * (item.complexity === "low" || item.kind.includes("discovery") ? 0.14 : 0.05);
+  if (candidate.remainingPercent !== null) score += Math.max(-20, Math.min(15, (candidate.remainingPercent - 30) / 4));
+  if (candidate.evidence === "observed-run" || candidate.evidence === "measured-live") score += 7;
+  if ((candidate.outcome?.recentKinds || []).includes(item.kind)) score += 8;
+  if (item.preferredPlatform && item.preferredPlatform === candidate.platform) score += 25;
+  if (String(args.agyModel || "auto").toLowerCase() !== "auto" && candidate.platform === "antigravity") {
+    const preference = normalizedModelText(args.agyModel);
+    if (normalizedModelText(`${candidate.model} ${candidate.displayName}`).includes(preference)) score += 40;
+    else score -= 20;
+  }
+  if (candidate.platform === "claude" && !item.readOnly) score += ["high", "critical"].includes(item.complexity) ? 22 : 14;
+  if (candidate.platform === "antigravity" && /flash/i.test(candidate.displayName) && item.readOnly && !["critical"].includes(item.complexity)) score += 18;
+  if (candidate.platform === "cursor" && item.requiredCapabilities.includes("ui")) score += 15;
+  if (item.readOnly && primaryWriterId && candidate.id !== primaryWriterId) score += 10;
+  if (item.readOnly && primaryWriterId === candidate.id) score -= 12;
+  return Math.round(score * 10) / 10;
+}
+
+function rankResourcesForWorkItem(candidates, item, args = {}, primaryWriterId = "") {
+  return candidates
+    .map((candidate) => ({ candidate, score: scoreResourceForWorkItem(candidate, item, args, primaryWriterId) }))
+    .filter((row) => Number.isFinite(row.score))
+    .sort((a, b) => b.score - a.score || b.candidate.quality - a.candidate.quality);
+}
+
+function buildResourceOrchestrationDecision(args = {}, context = {}) {
+  const candidates = buildResourceCandidates(args, context);
+  const workItems = buildGoalWorkGraph(args);
+  const writable = workItems.filter((item) => !item.readOnly).sort((a, b) => b.priority - a.priority);
+  let primaryWriterId = "";
+  if (writable.length) {
+    primaryWriterId = rankResourcesForWorkItem(candidates, writable[0], args)[0]?.candidate.id || "";
+  }
+
+  const decisions = [];
+  const assignedItems = workItems.map((item) => {
+    const ranked = rankResourcesForWorkItem(candidates, item, args, primaryWriterId);
+    let selected = ranked[0];
+    if (!item.readOnly && primaryWriterId) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
+    const alternates = ranked.filter((row) => row.candidate.id !== selected?.candidate.id).slice(0, 3).map((row) => row.candidate.id);
+    const assignment = selected?.candidate || null;
+    const reason = assignment
+      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${item.readOnly ? "independent read-only work" : "single workspace writer"}`
+      : "no dispatchable resource currently satisfies the work item";
+    decisions.push({
+      workItemId: item.id,
+      resourceId: assignment?.id || "codex:current",
+      model: assignment?.model || context.codexModel,
+      score: selected?.score ?? null,
+      reason,
+      alternates,
+    });
+    return {
+      ...item,
+      assignment: assignment?.id || "codex:current",
+      assignedModel: assignment?.platform === "claude" ? String(args.claudeModel || "sonnet") : (assignment?.model || context.codexModel),
+      alternates,
+      decisionReason: reason,
+    };
+  });
+
+  return { candidates, workItems: assignedItems, decisions, primaryWriterId };
+}
+
+function persistOrchestrationDecision(workspace, goal, decision) {
+  const goalHash = crypto.createHash("sha256").update(String(goal || "")).digest("hex").slice(0, 16);
+  const safeDecisions = decision.decisions.map((item) => ({
+    at: utcStamp(),
+    goalHash,
+    workItemId: item.workItemId,
+    resourceId: item.resourceId,
+    model: item.model,
+    reason: item.reason,
+  }));
+  mutateWorkspaceResourceState(workspace, (state) => ({
+    ...state,
+    lastGoalHash: goalHash,
+    decisions: [...(state.decisions || []), ...safeDecisions].slice(-50),
+  }));
 }
 
 function formatTeamOrchestrationPlan(args = {}, context = {}) {
   const goal = String(args.goal || "").trim();
   const workspace = String(args.workspace || "").trim();
-  const { lanes, split, horizonHours } = buildTeamLanes(args, context);
-  const availableModels = (context.recommendedAvailable || []).slice(0, 5).map(modelLine).filter(Boolean);
-  const activeWorkerCount = lanes.filter((lane) => lane.available && lane.worker !== "Codex").length;
-  const complexity = scoreTaskComplexity(args, split);
+  const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  const decision = buildResourceOrchestrationDecision(args, context);
+  const resources = new Map(decision.candidates.map((candidate) => [candidate.id, candidate]));
+  const dispatchable = decision.candidates.filter((candidate) => candidate.dispatchable && candidate.state === "available");
 
   return [
-    "AiMobileTeamOrchestrationPlan:",
+    "AiMobileResourceOrchestrationPlan:",
     `Goal: ${goal || "<missing>"}`,
     `Workspace: ${workspace || "<missing>"}`,
     `HorizonHours: ${horizonHours}`,
-    `TeamMode: ${activeWorkerCount > 0 ? "parallel-lanes" : "codex-coordinator-only-until-workers-available"}`,
-    `TaskSplit: ${split.join(", ")}`,
-    `ComplexityScoreApprox: ${complexity}`,
+    `OperatingMode: ${dispatchable.length ? "goal-driven-team" : "codex-only-until-workers-available"}`,
+    "Orchestrator: Codex owns goal interpretation, risk, feedback, integration, and final verification; workers own bounded execution.",
     "",
-    "FiveHourCapacity:",
-    `CapacityProbe: ${context.capacityProbe}`,
-    `Codex: ${context.codexBudget.state} (${context.codexBudget.text || "caller/UI only; local plugin cannot read Codex private meter"})`,
-    "CodexCapacitySource: caller-provided UI text only; no private Codex token ledger is exposed to this plugin.",
-    `AntigravityCLI: ${context.agyFound}`,
-    `AntigravityModelsNow: ${availableModels.length ? availableModels.join("; ") : "no local Antigravity model availability reported"}`,
-    "AntigravityNext5h: use models available now; if reset metadata appears above, schedule heavier Antigravity lanes after that reset.",
-    `AntigravityDesktopLive: ${context.antigravityLiveReady}`,
-    `ClaudeCodeCLI: ${context.claudeFound}`,
-    "ClaudeCodeCapacitySource: availability/version only; Claude Code remaining usage is not exposed by this local status call.",
-    `CursorHeadless: ${context.cursorHeadlessFound}`,
-    context.quickError ? `CapacityWarning: ${context.quickError}` : null,
+    "ResourceEvidence:",
+    ...decision.candidates.map((candidate) => {
+      const remaining = candidate.remainingPercent === null ? "unknown" : `${candidate.remainingPercent}%`;
+      return `- ${candidate.id}: state=${candidate.state}; remaining=${remaining}; evidence=${candidate.evidence}; model=${candidate.displayName}`;
+    }),
     "",
-    "LanePlan:",
-    ...lanes.map((lane, index) => `${index + 1}. ${lane.id}: ${lane.worker}; available=${lane.available}; startable=${lane.startable}; model=${lane.model}; owns=${lane.owns}; output=${lane.output}`),
+    "WorkGraphAndAssignments:",
+    ...decision.workItems.map((item, index) => {
+      const resource = resources.get(item.assignment);
+      return `${index + 1}. ${item.id}: ${item.objective}; kind=${item.kind}; complexity=${item.complexity}; readOnly=${item.readOnly}; dependsOn=${item.dependsOn.join(",") || "none"}; assigned=${resource?.team || "Codex"}/${item.assignedModel}; reason=${item.decisionReason}`;
+    }),
     "",
-    "FiveHourWorkCadence:",
-    "0-15m: Codex creates/updates the shared work board, assigns file ownership, and starts available lanes.",
-    "15-90m: Antigravity CLI scouts broad UI/product/integration context while Claude Code works implementation/testing lane.",
-    "90-150m: Codex reads only compact artifacts, detects conflicts, and sends one follow-up per weak lane.",
-    "150-240m: Workers run second-pass fixes or validation. Codex avoids broad rereads and only checks diffs/artifacts.",
-    "240-300m: Codex integrates, runs targeted final verification, summarizes remaining blockers and next lane assignments.",
-    "",
-    "CoordinationRules:",
-    "- One shared goal, one workspace, separate lane ownership.",
-    "- Workers write compact artifacts under .antigravity-bridge/jobs/<jobId>/; Codex reads artifacts, not full chats/logs.",
-    "- Do not let two workers patch the same files unless Codex explicitly converts one lane to review-only.",
-    "- If a lane is unavailable or quota-limited, skip it and reassign only its narrow task, not the whole project.",
-    "- Codex is lead, not the only worker: it plans, gates risk, resolves conflicts, verifies, and gives follow-up tasks.",
+    "ControlLoop:",
+    "1. Inventory measured, observed, cached, caller-provided, and unknown capacity without opening desktop apps.",
+    "2. Dispatch dependency-ready work; keep one writer per workspace and parallelize independent read-only scouts/reviewers.",
+    "3. Read compact artifacts and per-run telemetry, then continue dependent work automatically within the bounded wait.",
+    "4. On quota, outage, timeout, auth, or model failure, cool down that resource and fail over the narrow work item once.",
+    "5. Codex critiques worker output, requests a narrow correction when needed, integrates the accepted result, and performs final verification.",
+    "6. Persist only compact decision/outcome evidence so the next run benefits from project continuity.",
     "",
     "NextCall:",
-    "Use run-team-task with start=true to start available worker lanes, or start=false for plan-only.",
+    "Use orchestrate-project with this goal/work graph. Existing run-team-task callers are routed through the same orchestrator.",
   ].filter(Boolean).join("\n");
 }
 
@@ -1226,6 +1722,307 @@ function actionSummary(action, toolName, workspace, lane = {}) {
     readBack: jobId ? `ai-mobile-local.read-job with workspace=${workspace} and jobId=${jobId}` : "no JobId returned",
     action,
   };
+}
+
+function candidateFromManifest(manifest, resourceId) {
+  return (manifest.resources || []).find((candidate) => candidate.id === resourceId) || null;
+}
+
+function workItemBrief(items) {
+  return items.map((item) => {
+    const files = item.expectedFiles?.length ? `; file boundary: ${item.expectedFiles.join(", ")}` : "";
+    return `- ${item.id} [${item.kind}, ${item.complexity}, readOnly=${item.readOnly}]: ${item.objective}${files}`;
+  }).join("\n");
+}
+
+function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
+  const workspace = manifest.workspace;
+  const readOnly = items.every((item) => item.readOnly);
+  const mode = readOnly ? "review" : (manifest.mode || "patch");
+  const complexityRank = Math.max(...items.map((item) => ({ low: 1, medium: 2, high: 3, critical: 4 }[item.complexity] || 2)));
+  const goal = [
+    manifest.goal,
+    "",
+    `ResourceOrchestratorRun: ${manifest.runId}`,
+    `AssignedResource: ${resource.team} / ${resource.displayName}`,
+    "Assigned work items:",
+    workItemBrief(items),
+    "",
+    "Coordinate against the common goal, stay inside these work items, and produce the required compact artifacts. Do not duplicate another worker's file ownership.",
+  ].join("\n");
+  const nextStep = [
+    `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
+    readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
+    "State assumptions and blockers explicitly. Keep result.md to ten bullets or fewer.",
+  ].join(" ");
+  const expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
+  let action = "";
+  let toolName = "";
+
+  if (resource.platform === "claude") {
+    toolName = "submit-claude-job";
+    action = submitClaudeJob({
+      goal,
+      workspace,
+      mode,
+      nextStep,
+      model: items[0]?.assignedModel || resource.model || "sonnet",
+      permissionMode: readOnly ? "plan" : "acceptEdits",
+      effort: complexityRank >= 4 ? "high" : complexityRank === 3 ? "medium" : "low",
+      maxMinutes: complexityRank >= 4 ? 20 : complexityRank === 3 ? 10 : complexityRank === 2 ? 5 : 3,
+      resourceId: resource.id,
+      workItemKinds: items.map((item) => item.kind),
+      expectedFiles,
+      start: true,
+    });
+  } else if (resource.platform === "antigravity") {
+    toolName = "submit-agy-job";
+    action = submitAgyJob({
+      goal,
+      workspace,
+      mode,
+      nextStep,
+      model: items[0]?.assignedModel || resource.model,
+      maxMinutes: complexityRank >= 4 ? 30 : complexityRank === 3 ? 20 : complexityRank === 2 ? 10 : 5,
+      printTimeout: complexityRank >= 3 ? "8m" : complexityRank === 2 ? "4m" : "2m",
+      resourceId: resource.id,
+      workItemKinds: items.map((item) => item.kind),
+      expectedFiles,
+      start: true,
+    });
+  } else if (resource.platform === "cursor") {
+    toolName = "submit-cursor-job";
+    action = submitCursorJob({
+      goal,
+      workspace,
+      mode,
+      nextStep,
+      model: items[0]?.assignedModel || resource.model,
+      resourceId: resource.id,
+      workItemKinds: items.map((item) => item.kind),
+      expectedFiles,
+      start: true,
+    });
+  } else {
+    return { launched: false, blocker: `Resource ${resource.id} is not dispatchable by AI Mobile.` };
+  }
+
+  const summary = actionSummary(action, toolName, workspace, {
+    id: `orchestrator-${resource.id.replace(/[^a-z0-9]+/gi, "-")}`,
+    worker: resource.team,
+    assignedTasks: items.map((item) => item.id),
+    model: items[0]?.assignedModel || resource.model,
+  });
+  return {
+    launched: Boolean(summary.jobId),
+    blocker: summary.jobId ? "" : truncateText(action, 1000),
+    job: {
+      toolName,
+      laneId: summary.laneId,
+      worker: resource.team,
+      resourceId: resource.id,
+      assignedTasks: items.map((item) => item.id),
+      workItemIds: items.map((item) => item.id),
+      model: summary.model,
+      jobId: summary.jobId,
+      state: summary.failed ? "failed" : summary.started ? "running" : "queued",
+      failoverOf,
+      failoverDepth: failoverOf ? 1 : 0,
+    },
+  };
+}
+
+function failureCategoryFromText(value) {
+  const text = String(value || "").toLowerCase();
+  if (/review-worker-modified|review-only.*changed/.test(text)) return "policy-violation";
+  if (/rate.?limit|too many requests|429/.test(text)) return "rate-limit";
+  if (/quota|usage limit|limit exceeded|exhausted|capacity/.test(text)) return "quota";
+  if (/timed?\s*out|etimedout|deadline/.test(text)) return "timeout";
+  if (/transport closed|connection reset|unavailable|service outage|econn/.test(text)) return "outage";
+  if (/model.*(not found|unavailable|unsupported)|invalid model/.test(text)) return "model-unavailable";
+  if (/auth|login|credential|unauthori[sz]ed|forbidden|401|403/.test(text)) return "auth";
+  if (/cancelled|canceled/.test(text)) return "cancelled";
+  return "worker-failure";
+}
+
+function failoverAllowed(category) {
+  return ["rate-limit", "quota", "timeout", "outage", "model-unavailable", "auth", "worker-failure"].includes(category);
+}
+
+function deriveOrchestrationState(manifest) {
+  const items = manifest.workItems || [];
+  if (!items.length) return "blocked";
+  if (items.some((item) => ["running", "pending"].includes(item.state))) return "running";
+  if (items.every((item) => ["completed", "codex"].includes(item.state))) return "ready-for-codex";
+  if (items.some((item) => item.state === "blocked")) return "blocked";
+  if (items.some((item) => item.state === "completed")) return "partial";
+  return "failed";
+}
+
+function syncWorkItemsFromJobs(manifest) {
+  if (Number(manifest.version || 1) < 2 || !Array.isArray(manifest.workItems)) return manifest;
+  const jobs = manifest.jobs || [];
+  const workItems = manifest.workItems.map((item) => {
+    const matching = jobs.filter((job) => (job.workItemIds || job.assignedTasks || []).includes(item.id));
+    const latest = matching[matching.length - 1];
+    if (!latest) return item;
+    if (["queued", "running", "unknown"].includes(latest.state)) return { ...item, state: "running", activeJobId: latest.jobId };
+    if (latest.state === "completed") return { ...item, state: "completed", activeJobId: latest.jobId };
+    if (["failed", "cancelled"].includes(latest.state)) {
+      return {
+        ...item,
+        state: "failed",
+        activeJobId: latest.jobId,
+        failureCategory: latest.failureCategory || failureCategoryFromText(`${latest.currentStep || ""} ${latest.blocker || ""}`),
+      };
+    }
+    return item;
+  });
+  return { ...manifest, workItems, state: deriveOrchestrationState({ ...manifest, workItems }) };
+}
+
+function appendOrchestrationDecision(manifest, entry) {
+  return {
+    ...manifest,
+    decisions: [...(manifest.decisions || []), { at: utcStamp(), ...entry }].slice(-100),
+  };
+}
+
+function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false) {
+  if (!lockHeld) {
+    return withFileLock(lastTeamRunJsonPath(workspace), () => {
+      const latest = readJsonFile(lastTeamRunJsonPath(workspace), suppliedManifest) || suppliedManifest;
+      const refreshed = refreshTeamRunManifest(workspace, latest);
+      return advanceOrchestrationRun(workspace, refreshed, true);
+    });
+  }
+  let manifest = syncWorkItemsFromJobs(suppliedManifest);
+  if (Number(manifest.version || 1) < 2) return manifest;
+
+  let changed = false;
+  manifest.resources = (manifest.resources || []).map((resource) => {
+    const cooldownUntil = Date.parse(String(resource.cooldownUntil || ""));
+    if (resource.state === "cooldown" && Number.isFinite(cooldownUntil) && cooldownUntil <= Date.now()) {
+      changed = true;
+      return { ...resource, state: "available", cooldownUntil: "", evidence: "cooldown-expired" };
+    }
+    return resource;
+  });
+  const newlyFailedJobs = (manifest.jobs || [])
+    .filter((job) => ["failed", "cancelled"].includes(job.state) && failoverAllowed(job.failureCategory) && !job.cooldownApplied && job.resourceId);
+  if (newlyFailedJobs.length) {
+    const failuresByResource = new Map(newlyFailedJobs.map((job) => [job.resourceId, job.failureCategory || "worker-failure"]));
+    manifest.resources = (manifest.resources || []).map((resource) => {
+      const category = failuresByResource.get(resource.id);
+      if (!category) return resource;
+      const minutes = cooldownMinutesForFailure(category) || 10;
+      return {
+        ...resource,
+        state: "cooldown",
+        evidence: "observed-failure",
+        cooldownUntil: new Date(Date.now() + minutes * 60000).toISOString(),
+      };
+    });
+    manifest.jobs = (manifest.jobs || []).map((job) => newlyFailedJobs.some((failed) => failed.jobId === job.jobId)
+      ? { ...job, cooldownApplied: true }
+      : job);
+    changed = true;
+  }
+  const recoveredItems = manifest.workItems.map((item) => {
+    if (item.state !== "failed" || Number(item.failoverCount || 0) >= 1 || !failoverAllowed(item.failureCategory)) return item;
+    const latestJob = [...(manifest.jobs || [])].reverse().find((job) => (job.workItemIds || []).includes(item.id));
+    const failedResource = candidateFromManifest(manifest, latestJob?.resourceId || item.assignment);
+    const alternate = (item.alternates || [])
+      .map((id) => candidateFromManifest(manifest, id))
+      .filter((candidate) => candidate && candidate.state === "available" && candidate.id !== latestJob?.resourceId)
+      .sort((a, b) => {
+        if (!["outage", "auth", "timeout", "worker-failure"].includes(item.failureCategory) || !failedResource) return 0;
+        return Number(b.platform !== failedResource.platform) - Number(a.platform !== failedResource.platform);
+      })[0];
+    if (!alternate) return item;
+    changed = true;
+    manifest = appendOrchestrationDecision(manifest, {
+      type: "failover",
+      workItemId: item.id,
+      from: latestJob?.resourceId || item.assignment,
+      to: alternate.id,
+      reason: `${item.failureCategory}; one bounded failover`,
+    });
+    return {
+      ...item,
+      state: "pending",
+      assignment: alternate.id,
+      assignedModel: alternate.model,
+      failoverCount: 1,
+      activeJobId: "",
+      decisionReason: `Failover from ${latestJob?.resourceId || item.assignment} after ${item.failureCategory}.`,
+    };
+  });
+  manifest = { ...manifest, workItems: recoveredItems };
+
+  let currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
+  manifest.workItems = manifest.workItems.map((item) => {
+    if (item.state !== "blocked" || !String(item.blocker || "").startsWith("Dependency ")) return item;
+    const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex"].includes(currentById.get(id)?.state));
+    if (!dependenciesRecoveringOrComplete) return item;
+    changed = true;
+    return { ...item, state: "pending", blocker: "" };
+  });
+  currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
+  manifest.workItems = manifest.workItems.map((item) => {
+    if (item.state !== "pending") return item;
+    const failedDependency = item.dependsOn.find((id) => ["failed", "blocked"].includes(currentById.get(id)?.state));
+    if (!failedDependency) return item;
+    changed = true;
+    return { ...item, state: "blocked", blocker: `Dependency ${failedDependency} did not complete.` };
+  });
+
+  const ready = manifest.workItems
+    .filter((item) => item.state === "pending" && item.dependsOn.every((id) => currentById.get(id)?.state === "completed"))
+    .sort((a, b) => b.priority - a.priority);
+  const groups = new Map();
+  for (const item of ready) {
+    if (!groups.has(item.assignment)) groups.set(item.assignment, []);
+    groups.get(item.assignment).push(item);
+  }
+
+  for (const [resourceId, items] of groups.entries()) {
+    const resource = candidateFromManifest(manifest, resourceId);
+    if (!resource || !resource.dispatchable || resource.state !== "available") {
+      manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
+        ? { ...item, state: "blocked", blocker: `Assigned resource ${resourceId} is not dispatchable.` }
+        : item);
+      changed = true;
+      continue;
+    }
+    const activeWriter = (manifest.jobs || []).some((job) => ["queued", "running", "unknown"].includes(job.state)
+      && (job.workItemIds || []).some((id) => manifest.workItems.find((item) => item.id === id && !item.readOnly)));
+    if (activeWriter && items.some((item) => !item.readOnly)) continue;
+    const failedItemJob = [...(manifest.jobs || [])].reverse().find((job) => items.some((item) => (job.workItemIds || []).includes(item.id)) && job.state === "failed");
+    const launch = launchOrchestrationGroup(manifest, resource, items, failedItemJob?.jobId || "");
+    if (!launch.launched) {
+      manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
+        ? { ...item, state: "failed", blocker: launch.blocker || "Worker launch failed.", failureCategory: "worker-failure" }
+        : item);
+      changed = true;
+      continue;
+    }
+    manifest.jobs = [...(manifest.jobs || []), launch.job];
+    manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
+      ? { ...item, state: launch.job.state === "failed" ? "failed" : "running", activeJobId: launch.job.jobId }
+      : item);
+    changed = true;
+  }
+
+  manifest.state = deriveOrchestrationState(manifest);
+  manifest.counts = {
+    total: (manifest.jobs || []).length,
+    completed: (manifest.jobs || []).filter((job) => job.state === "completed").length,
+    running: (manifest.jobs || []).filter((job) => ["queued", "running", "unknown"].includes(job.state)).length,
+    failed: (manifest.jobs || []).filter((job) => ["failed", "cancelled"].includes(job.state)).length,
+  };
+  if (changed) writeTeamRunManifest(workspace, manifest);
+  return manifest;
 }
 
 function lastTeamRunJsonPath(workspace) {
@@ -1266,14 +2063,14 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null) {
       state: repair.status.state || "unknown",
       currentStep: repair.status.currentStep || "",
       blocker: repair.status.blocker || "",
+      warning: repair.status.warning || "",
+      failureCategory: repair.status.failureCategory || failureCategoryFromText(`${repair.status.currentStep || ""} ${repair.status.blocker || ""}`),
       workerPid: repair.status.workerPid || job.workerPid || null,
       jobUpdatedAt: repair.status.updatedAt || "",
     };
   });
-  const state = teamStateFromJobs(jobs);
-  const refreshed = {
+  let refreshed = {
     ...manifest,
-    state,
     jobs,
     counts: {
       total: jobs.length,
@@ -1282,6 +2079,12 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null) {
       failed: jobs.filter((job) => ["failed", "cancelled"].includes(job.state)).length,
     },
   };
+  if (Number(manifest.version || 1) >= 2) {
+    refreshed = syncWorkItemsFromJobs(refreshed);
+    refreshed.state = deriveOrchestrationState(refreshed);
+  } else {
+    refreshed.state = teamStateFromJobs(jobs);
+  }
   writeTeamRunManifest(workspace, refreshed);
   return refreshed;
 }
@@ -1289,38 +2092,45 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null) {
 async function waitForTeamRun(workspace, waitSeconds = 0, suppliedManifest = null) {
   const boundedWait = Math.max(0, Math.min(300, Number(waitSeconds || 0)));
   const deadline = Date.now() + (boundedWait * 1000);
-  let snapshot = refreshTeamRunManifest(workspace, suppliedManifest);
+  let snapshot = advanceOrchestrationRun(workspace, refreshTeamRunManifest(workspace, suppliedManifest));
   while (snapshot.state === "running" && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(100, deadline - Date.now()))));
-    snapshot = refreshTeamRunManifest(workspace);
+    snapshot = advanceOrchestrationRun(workspace, refreshTeamRunManifest(workspace));
   }
   return snapshot;
 }
 
 function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
+  const orchestrated = Number(snapshot.version || 1) >= 2;
   const lines = [
-    "AiMobileTeamRun:",
+    orchestrated ? "AiMobileResourceOrchestrationRun:" : "AiMobileTeamRun:",
     `State: ${snapshot.state}`,
     `Workspace: ${workspace}`,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
+    orchestrated ? "WorkGraph:" : null,
+    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
     "WorkerResults:",
-  ];
+  ].filter(Boolean);
 
   for (const [index, job] of snapshot.jobs.entries()) {
     const jobDir = jobDirFor(workspace, job.jobId);
     const result = summarizeFile(path.join(jobDir, "result.md"), 2500).trim();
     const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 1000).trim();
     const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 1200).trim();
+    const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
     lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
     if (job.blocker) lines.push(`   Blocker: ${truncateText(job.blocker, 500)}`);
+    if (job.warning) lines.push(`   Warning: ${truncateText(job.warning, 500)}`);
+    if (telemetry) lines.push(`   Telemetry: provider=${telemetry.provider || "unknown"}; observedModel=${telemetry.observedModel || "unknown"}; durationMs=${telemetry.durationMs ?? "unknown"}; inputTokens=${telemetry.inputTokens ?? "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
     if (result) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
     if (changed) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
     if (tests) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (snapshot.state === "completed") lines.push("Next: Codex should perform targeted integration verification; all worker jobs completed successfully.");
+  if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact worker artifacts, run targeted final verification, and only then claim the goal complete.");
+  else if (snapshot.state === "completed") lines.push("Next: Codex should perform targeted integration verification; all worker jobs completed successfully.");
   else if (snapshot.state === "running") lines.push(`Next: call read-team-run for ${workspace}; completion is not yet claimed.`);
   else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
   return lines.join("\n");
@@ -1335,103 +2145,80 @@ async function readTeamRun(args = {}) {
   return output;
 }
 
-async function runTeamTask(args = {}) {
-  const context = await getTeamCapacityContext(args);
-  const plan = formatTeamOrchestrationPlan(args, context);
-  const start = args.start !== false;
-  const workspace = String(args.workspace || "").trim();
+async function orchestrateProject(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
   const goal = String(args.goal || "").trim();
-  const { lanes, split } = buildTeamLanes(args, context);
+  if (!goal) throw new Error("orchestrate-project requires a non-empty goal.");
+  const context = await getTeamCapacityContext({ ...args, workspace });
+  const decision = buildResourceOrchestrationDecision(args, context);
+  const plan = formatTeamOrchestrationPlan(args, context);
 
-  if (!start) {
+  if (args.start === false) {
     return [
       plan,
       "",
-      "RunTeamTaskResult:",
+      "OrchestrateProjectResult:",
       "Started: false",
-      "Reason: start=false; returned only the team plan.",
+      "Reason: start=false; inventory, work graph, and resource decisions were returned without dispatch.",
     ].join("\n");
   }
 
-  const actions = [];
-  const agyLane = lanes.find((lane) => lane.id === "antigravity-cli-discovery" && lane.startable);
-  if (agyLane) {
-    const action = submitAgyJob({
-      goal: `${goal}\n\nTeamLane: ${agyLane.id}\nWorkerRole: ${agyLane.owns}`,
-      workspace,
-      mode: "review",
-      nextStep: agyLane.nextStep,
-      model: args.agyModel || agyLane.model,
-      start: true,
-    });
-    actions.push(actionSummary(action, "submit-agy-job", workspace, agyLane));
-  }
-
-  const claudeLane = lanes.find((lane) => lane.id === "claude-code-implementation" && lane.startable);
-  if (claudeLane) {
-    const action = submitClaudeJob({
-      goal: `${goal}\n\nTeamLane: ${claudeLane.id}\nWorkerRole: ${claudeLane.owns}`,
-      workspace,
-      mode: claudeLane.mode,
-      nextStep: claudeLane.nextStep,
-      model: args.claudeModel || claudeLane.model,
-      start: true,
-    });
-    actions.push(actionSummary(action, "submit-claude-job", workspace, claudeLane));
-  }
-
-  const cursorLane = lanes.find((lane) => lane.id === "cursor-agent-ui" && lane.startable);
-  if (cursorLane) {
-    const action = submitCursorJob({
-      goal: `${goal}\n\nTeamLane: ${cursorLane.id}\nWorkerRole: ${cursorLane.owns}`,
-      workspace,
-      mode: cursorLane.mode,
-      nextStep: cursorLane.nextStep,
-      model: args.cursorModel || "",
-      start: true,
-    });
-    actions.push(actionSummary(action, "submit-cursor-job", workspace, cursorLane));
-  }
-
+  const runId = `orc-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
+  const workItems = decision.workItems.map((item) => ({
+    ...item,
+    state: item.assignment === "codex:current" ? "codex" : "pending",
+  }));
   const manifest = {
-    version: 1,
+    version: 2,
+    runId,
     createdAt: utcStamp(),
     goal,
     workspace,
-    taskSplit: split,
-    complexityScore: scoreTaskComplexity(args, split),
+    mode: String(args.mode || "patch").trim().toLowerCase(),
+    horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
     capacityProbe: context.capacityProbe,
-    state: actions.length ? "running" : "blocked",
-    jobs: actions.map((item) => ({
-      toolName: item.toolName,
-      laneId: item.laneId,
-      worker: item.worker,
-      assignedTasks: item.assignedTasks,
-      model: item.model,
-      jobId: item.jobId,
-      state: item.failed ? "failed" : item.started ? "running" : "queued",
-    })),
+    codexRole: "goal owner, resource orchestrator, critic, integration owner, and final verifier",
+    primaryWriterId: decision.primaryWriterId,
+    resources: decision.candidates,
+    decisions: decision.decisions.map((item) => ({ at: utcStamp(), type: "assignment", ...item })),
+    workItems,
+    state: "running",
+    jobs: [],
   };
-  writeTeamRunManifest(workspace, manifest);
+  withFileLock(lastTeamRunJsonPath(workspace), () => {
+    const existingManifestPath = lastTeamRunJsonPath(workspace);
+    if (fs.existsSync(existingManifestPath)) {
+      const existing = refreshTeamRunManifest(workspace, readJsonFile(existingManifestPath, null));
+      if (existing.state === "running") {
+        throw new Error(`Workspace already has active orchestration run ${existing.runId || "<legacy>"}. Use read-team-run or cancel its running jobs before starting another run.`);
+      }
+    }
+    writeTeamRunManifest(workspace, manifest);
+  });
+  persistOrchestrationDecision(workspace, goal, decision);
 
   const waitSeconds = Math.max(0, Math.min(300, Number(args.waitSeconds ?? 30)));
   const snapshot = await waitForTeamRun(workspace, waitSeconds, manifest);
   const compactResult = formatTeamRunSnapshot(workspace, snapshot, waitSeconds);
-  const launch = [
-    "RunTeamTaskResult:",
+  const output = [
+    "OrchestrateProjectResult:",
+    `RunId: ${runId}`,
     `Goal: ${goal}`,
-    `TaskSplit: ${split.join(", ")}`,
     `CapacityProbe: ${context.capacityProbe}`,
-    `StartedWorkers: ${actions.filter((item) => item.started).length}`,
-    `FailedLaunches: ${actions.filter((item) => item.failed).length}`,
+    `WorkItems: ${workItems.length}`,
+    `ExternalResourcesSelected: ${[...new Set(workItems.filter((item) => item.assignment !== "codex:current").map((item) => item.assignment))].length}`,
     `WaitSeconds: ${waitSeconds}`,
-    "CodexLane: coordinator, integration owner, and final verifier",
+    "CodexRole: understand, direct, critique, integrate, and verify; do not duplicate delegated broad work.",
     "",
     compactResult,
   ].join("\n");
-  const output = args.includePlan === true ? `${plan}\n\n${launch}` : launch;
-  writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${output}\n`);
-  return output;
+  const finalOutput = args.includePlan === true ? `${plan}\n\n${output}` : output;
+  writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${finalOutput}\n`);
+  return finalOutput;
+}
+
+async function runTeamTask(args = {}) {
+  return orchestrateProject(args);
 }
 
 function getDevToolsPort() {
@@ -1570,7 +2357,53 @@ function readJsonFile(filePath, fallback = null) {
 }
 
 function writeJsonFile(filePath, value) {
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(3).toString("hex")}.tmp`);
+  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  try {
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Preserve the original rename error.
+    }
+    throw error;
+  }
+}
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function withFileLock(targetFile, callback, timeoutMs = 10000) {
+  const lockFile = `${targetFile}.lock`;
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  const deadline = Date.now() + timeoutMs;
+  let handle = null;
+  while (Date.now() <= deadline) {
+    try {
+      handle = fs.openSync(lockFile, "wx");
+      fs.writeFileSync(handle, `${process.pid}\n${utcStamp()}\n`, "utf8");
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        const ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+        if (ageMs > 60000) fs.rmSync(lockFile, { force: true });
+      } catch {
+        // Another process may have released the lock between checks.
+      }
+      sleepSync(25);
+    }
+  }
+  if (handle === null) throw new Error(`Timed out waiting for state lock: ${lockFile}`);
+  try {
+    return callback();
+  } finally {
+    try { fs.closeSync(handle); } catch { /* already closed */ }
+    try { fs.rmSync(lockFile, { force: true }); } catch { /* another process will clear a stale lock */ }
+  }
 }
 
 function writeTextFileEnsuringDir(filePath, value) {
@@ -1612,6 +2445,7 @@ function buildJobRequest(args, jobId, jobDir) {
   const workspace = safeWorkspacePath(args.workspace);
   const mode = String(args.mode || "fast").trim().toLowerCase();
   const nextStep = String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim();
+  const expectedFiles = Array.isArray(args.expectedFiles) ? args.expectedFiles.map((value) => String(value || "").trim()).filter(Boolean) : [];
   return [
     `# Antigravity Bridge Job ${jobId}`,
     "",
@@ -1622,6 +2456,7 @@ function buildJobRequest(args, jobId, jobDir) {
     modeGuidance(mode),
     "",
     `Next step: ${nextStep}`,
+    expectedFiles.length ? `Allowed file boundary: ${expectedFiles.join(", ")}` : "Allowed file boundary: not specified; keep changes narrowly scoped to the assigned objective.",
     "",
     artifactContract(jobId, jobDir),
     "",
@@ -1733,6 +2568,20 @@ function isProcessAlive(pid) {
   }
 }
 
+function isRecordedWorkerAlive(status = {}) {
+  const pid = Number(status.workerPid);
+  if (!isProcessAlive(pid)) return false;
+  const marker = String(status.workerCommandMarker || "").trim();
+  if (!marker) return true;
+  const cached = processIdentityCache.get(pid);
+  let commandLine = cached && (Date.now() - cached.checkedAt) < 30000 ? cached.commandLine : "";
+  if (!commandLine) {
+    commandLine = processCommandLine(pid);
+    processIdentityCache.set(pid, { commandLine, checkedAt: Date.now() });
+  }
+  return Boolean(commandLine && commandLine.toLowerCase().includes(marker.toLowerCase()));
+}
+
 function minutesSinceUtc(value) {
   const time = Date.parse(String(value || ""));
   if (!Number.isFinite(time)) return null;
@@ -1743,7 +2592,7 @@ function readRunningJobHint(status) {
   const state = String(status.state || "").toLowerCase();
   if (state !== "running") return [];
   const ageMinutes = minutesSinceUtc(status.startedAt || status.updatedAt || status.createdAt);
-  const alive = isProcessAlive(status.workerPid);
+  const alive = isRecordedWorkerAlive(status);
   const lines = [
     "RunningJobHint:",
     `WorkerPidAlive: ${alive}`,
@@ -1762,7 +2611,7 @@ function readRunningJobHint(status) {
 function repairStaleRunningJob(workspace, jobId, jobDir, status) {
   const state = String(status.state || "").toLowerCase();
   const pid = Number(status.workerPid);
-  if (state !== "running" || !Number.isInteger(pid) || pid <= 0 || isProcessAlive(pid)) {
+  if (state !== "running" || !Number.isInteger(pid) || pid <= 0 || isRecordedWorkerAlive(status)) {
     return { status, repaired: false };
   }
 
@@ -1803,6 +2652,7 @@ function readJob(args = {}) {
   const result = summarizeFile(path.join(jobDir, "result.md"), 8000);
   const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 4000);
   const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 6000);
+  const telemetry = summarizeFile(path.join(jobDir, "worker-telemetry.json"), 4000);
   const diff = summarizeFile(path.join(jobDir, "diff.patch"), 12000);
   return [
     `JobId: ${jobId}`,
@@ -1823,6 +2673,9 @@ function readJob(args = {}) {
     "",
     "test-output-summary.md:",
     tests || "<empty>",
+    "",
+    "worker-telemetry.json:",
+    telemetry || "<empty>",
     "",
     "diff.patch:",
     diff || "<empty>",
@@ -1913,6 +2766,36 @@ function terminateProcessTree(pid, expectedMarker = "") {
   }
 }
 
+function terminateDescendantProcesses(parentPid = process.pid) {
+  const numericPid = Number(parentPid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) return { stopped: false, note: "Invalid parent PID." };
+  if (process.platform === "win32") {
+    const script = [
+      "$root = [int]$env:AI_MOBILE_PARENT_PID",
+      "$self = $PID",
+      "$all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)",
+      "$ids = New-Object System.Collections.Generic.List[int]",
+      "$queue = New-Object System.Collections.Generic.Queue[int]",
+      "$queue.Enqueue($root)",
+      "while ($queue.Count -gt 0) { $parent = $queue.Dequeue(); foreach ($child in @($all | Where-Object { $_.ParentProcessId -eq $parent })) { if (-not $ids.Contains([int]$child.ProcessId)) { $ids.Add([int]$child.ProcessId); $queue.Enqueue([int]$child.ProcessId) } } }",
+      "foreach ($id in @($ids | Sort-Object -Descending)) { if ($id -ne $self) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } }",
+      "$ids.Count",
+    ].join("; ");
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
+      encoding: "utf8",
+      timeout: 15000,
+      windowsHide: true,
+      env: { ...process.env, AI_MOBILE_PARENT_PID: String(numericPid) },
+    });
+    return {
+      stopped: result.status === 0,
+      note: truncateText(String(result.stdout || result.stderr || "descendant cleanup completed").trim(), 500),
+    };
+  }
+  const result = spawnSync("pkill", ["-TERM", "-P", String(numericPid)], { encoding: "utf8", timeout: 5000, windowsHide: true });
+  return { stopped: result.status === 0 || result.status === 1, note: String(result.stderr || "descendant cleanup completed").trim() };
+}
+
 function writeJobFailureArtifacts(workspace, jobId, worker, error) {
   const jobDir = jobDirFor(workspace, jobId);
   const message = truncateText(error?.message || String(error || "Unknown worker failure."), 2000);
@@ -1942,22 +2825,159 @@ function writeAuthoritativeExecutionSummary(jobDir, worker, result, stderr) {
   fs.writeFileSync(testsPath, `${authoritative}\n`, "utf8");
 }
 
+function pathsFromGitStatus(statusText) {
+  return String(statusText || "")
+    .split(/\r?\n/)
+    .map((line) => line.length > 3 ? line.slice(3).trim() : "")
+    .map((file) => file.includes(" -> ") ? file.split(" -> ").pop().trim() : file)
+    .filter(Boolean)
+    .map((file) => file.replace(/\\/g, "/"));
+}
+
+function pathMatchesBoundary(file, boundary) {
+  const normalizedFile = String(file || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  const normalizedBoundary = String(boundary || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (!normalizedBoundary) return false;
+  if (normalizedBoundary.includes("*")) {
+    const escaped = normalizedBoundary.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${escaped}$`, "i").test(normalizedFile);
+  }
+  return normalizedFile.toLowerCase() === normalizedBoundary.toLowerCase()
+    || normalizedFile.toLowerCase().startsWith(`${normalizedBoundary.toLowerCase()}/`);
+}
+
+function validateWorkerFileBoundary(args, gitOutcome) {
+  const boundaries = Array.isArray(args.expectedFiles) ? args.expectedFiles.filter(Boolean) : [];
+  if (!boundaries.length) return { ok: true, violations: [] };
+  const violations = (gitOutcome.changedDuringRun || []).filter((file) => !boundaries.some((boundary) => pathMatchesBoundary(file, boundary)));
+  return { ok: violations.length === 0, violations };
+}
+
+function cooldownMinutesForFailure(category) {
+  return {
+    "rate-limit": 30,
+    quota: 60,
+    timeout: 10,
+    outage: 5,
+    "model-unavailable": 30,
+    auth: 60,
+    "worker-failure": 10,
+  }[category] || 0;
+}
+
+function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
+  const resourceId = String(args.resourceId || telemetry.resourceId || `${telemetry.provider || "worker"}:${telemetry.requestedModel || "default"}`);
+  const success = telemetry.success === true;
+  const failureCategory = success ? "" : (telemetry.failureCategory || "worker-failure");
+  const now = utcStamp();
+  const cooldownMinutes = cooldownMinutesForFailure(failureCategory);
+  const cooldownUntil = cooldownMinutes ? new Date(Date.now() + cooldownMinutes * 60000).toISOString() : "";
+  const safeTelemetry = {
+    version: 1,
+    provider: String(telemetry.provider || "unknown"),
+    resourceId,
+    requestedModel: String(telemetry.requestedModel || ""),
+    observedModel: String(telemetry.observedModel || ""),
+    success,
+    failureCategory,
+    durationMs: Number.isFinite(Number(telemetry.durationMs)) ? Number(telemetry.durationMs) : null,
+    inputTokens: Number.isFinite(Number(telemetry.inputTokens)) ? Number(telemetry.inputTokens) : null,
+    cacheCreationInputTokens: Number.isFinite(Number(telemetry.cacheCreationInputTokens)) ? Number(telemetry.cacheCreationInputTokens) : null,
+    cacheReadInputTokens: Number.isFinite(Number(telemetry.cacheReadInputTokens)) ? Number(telemetry.cacheReadInputTokens) : null,
+    outputTokens: Number.isFinite(Number(telemetry.outputTokens)) ? Number(telemetry.outputTokens) : null,
+    reportedCostUsdEquivalent: Number.isFinite(Number(telemetry.reportedCostUsdEquivalent)) ? Number(telemetry.reportedCostUsdEquivalent) : null,
+    workItemKinds: Array.isArray(args.workItemKinds) ? args.workItemKinds.map(normalizeTaskLane).filter(Boolean).slice(0, 12) : [],
+    completedAt: now,
+  };
+  writeJsonFile(path.join(jobDir, "worker-telemetry.json"), safeTelemetry);
+
+  mutateWorkspaceResourceState(workspace, (state) => {
+    const previous = state.outcomes?.[resourceId] || {};
+    const outcome = {
+      ...previous,
+      lastState: success ? "available" : "cooldown",
+      lastCategory: failureCategory,
+      lastSuccessAt: success ? now : String(previous.lastSuccessAt || ""),
+      lastFailureAt: success ? String(previous.lastFailureAt || "") : now,
+      cooldownUntil: success ? "" : cooldownUntil,
+      observedModel: safeTelemetry.observedModel || String(previous.observedModel || ""),
+      recentKinds: [...(previous.recentKinds || []), ...safeTelemetry.workItemKinds].slice(-5),
+    };
+    return {
+      ...state,
+      outcomes: { ...(state.outcomes || {}), [resourceId]: outcome },
+    };
+  });
+
+  if (safeTelemetry.provider === "claude" && safeTelemetry.observedModel) {
+    const claudePatch = {
+      observedModel: safeTelemetry.observedModel,
+      lastOutcomeAt: now,
+    };
+    if (success) claudePatch.lastSuccessAt = now;
+    updateSafeResourceCache({
+      claude: claudePatch,
+    });
+  }
+  return safeTelemetry;
+}
+
+function parseClaudeJsonOutput(stdout) {
+  const text = String(stdout || "").trim();
+  if (!text) return { parsed: null, resultText: "" };
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse();
+    for (const line of lines) {
+      try {
+        parsed = JSON.parse(line);
+        break;
+      } catch {
+        // Continue until a complete JSON result line is found.
+      }
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return { parsed: null, resultText: text };
+  const observedModels = Object.keys(parsed.modelUsage || {});
+  const usage = parsed.usage || {};
+  return {
+    parsed,
+    resultText: String(parsed.result || parsed.message || "").trim(),
+    observedModel: observedModels.find((model) => /sonnet/i.test(model)) || observedModels[0] || "",
+    durationMs: Number(parsed.duration_ms ?? parsed.durationMs),
+    inputTokens: Number(usage.input_tokens ?? usage.inputTokens),
+    cacheCreationInputTokens: Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens),
+    cacheReadInputTokens: Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens),
+    outputTokens: Number(usage.output_tokens ?? usage.outputTokens),
+    reportedCostUsdEquivalent: Number(parsed.total_cost_usd ?? parsed.totalCostUsd),
+    isError: parsed.is_error === true || parsed.subtype === "error",
+  };
+}
+
 function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
   const current = collectGitState(workspace);
   const baseline = readJsonFile(path.join(jobDir, "git-baseline.json"), null);
   const currentHash = crypto.createHash("sha256").update(current.diff).digest("hex");
+  const baselinePaths = new Set(pathsFromGitStatus(baseline?.status || ""));
+  const changedDuringRun = pathsFromGitStatus(current.status).filter((file) => !baselinePaths.has(file));
   const reviewMutationDetected = String(mode || "").toLowerCase() === "review"
     && current.available
     && baseline?.available
     && (baseline.status !== current.status || baseline.diffHash !== currentHash);
 
-  if (String(mode || "").toLowerCase() === "review" && !reviewMutationDetected) {
-    fs.writeFileSync(path.join(jobDir, "changed-files.txt"), "NONE\n", "utf8");
+  if (String(mode || "").toLowerCase() === "review") {
+    fs.writeFileSync(
+      path.join(jobDir, "changed-files.txt"),
+      reviewMutationDetected ? "UNATTRIBUTED_WORKSPACE_CHANGE_DURING_REVIEW\n" : "NONE\n",
+      "utf8",
+    );
     fs.writeFileSync(path.join(jobDir, "diff.patch"), "", "utf8");
-    return { reviewMutationDetected: false };
+    return { reviewMutationDetected, reviewWorkspaceChanged: reviewMutationDetected, changedDuringRun };
   }
   writeGitArtifacts(workspace, jobDir, current);
-  return { reviewMutationDetected };
+  return { reviewMutationDetected, changedDuringRun };
 }
 
 async function runWorkerFailClosed(worker, args, runner) {
@@ -2278,6 +3298,8 @@ function buildAgyJobPrompt(workspace, jobId, args = {}) {
   return [
     "You are Antigravity CLI running as a low-RAM local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
+    "Do not narrate planned tool calls. Use targeted rg/file reads, avoid .antigravity-bridge except this job folder, and stop exploring once the assigned evidence is sufficient.",
+    "Stay within roughly 20 targeted file/search operations. A concise blocker is better than a broad workspace crawl.",
     "",
     request,
     "",
@@ -2292,6 +3314,27 @@ function buildAgyJobPrompt(workspace, jobId, args = {}) {
   ].join("\n");
 }
 
+function compactWorkerStdout(value, maxChars = 6000) {
+  const lines = String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^I (will|am going to|need to|shall)\b/i.test(line))
+    .filter((line) => !/^(Ran|Running|Called|Tool call|Function:)\b/i.test(line));
+  const selected = lines.slice(-40).join("\n");
+  return truncateText(selected, maxChars);
+}
+
+function compactResultBullets(value, maxBullets = 10, maxChars = 6000) {
+  const text = String(value || "").trim();
+  const bullets = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[-*]\s+\S/.test(line))
+    .slice(0, maxBullets);
+  return truncateText(bullets.length >= 2 ? bullets.join("\n") : text, maxChars);
+}
+
 function runAgyJobWorker(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
   const jobId = resolveJobId(workspace, args.jobId);
@@ -2302,8 +3345,15 @@ function runAgyJobWorker(args = {}) {
       state: "failed",
       currentStep: "agy-cli-not-found",
       blocker: status.message,
+      failureCategory: "worker-failure",
     });
     writeJobFailureArtifacts(workspace, jobId, "antigravity-cli", status.message);
+    recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || `antigravity:${args.model || "default"}` }, {
+      provider: "antigravity",
+      requestedModel: args.model || "",
+      success: false,
+      failureCategory: "worker-failure",
+    });
     return `AgyJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${status.message}`;
   }
 
@@ -2322,11 +3372,12 @@ function runAgyJobWorker(args = {}) {
     worker: "antigravity-cli",
     currentStep: "agy-cli-running",
     startedAt: utcStamp(),
-    agyCommand: status.command,
+    agyCommand: path.basename(status.command),
     agyVersion: status.version,
     agyModel: args.model || "",
   });
 
+  const startedMs = Date.now();
   const result = spawnSync(status.command, cliArgs, {
     cwd: workspace,
     input: prompt,
@@ -2335,6 +3386,7 @@ function runAgyJobWorker(args = {}) {
     maxBuffer: 8 * 1024 * 1024,
     windowsHide: true,
   });
+  const descendantCleanup = result.error?.code === "ETIMEDOUT" ? terminateDescendantProcesses(process.pid) : null;
 
   const stdout = String(result.stdout || "");
   const stderr = String(result.stderr || "");
@@ -2343,20 +3395,40 @@ function runAgyJobWorker(args = {}) {
 
   const resultPath = path.join(jobDir, "result.md");
   if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
-    fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Antigravity CLI produced no output>", 24000), "utf8");
+    const processFailed = result.status !== 0 || Boolean(result.error);
+    const compact = processFailed
+      ? `- Antigravity CLI did not complete this work item.\n- Failure: ${truncateText(result.error?.message || stderr || compactWorkerStdout(stdout, 1200) || "No output", 1200)}\n- Next: allow the resource orchestrator to fail over this narrow item once.\n`
+      : compactResultBullets(compactWorkerStdout(stdout)) || "- Antigravity CLI completed without a textual summary. Inspect test-output-summary.md.\n";
+    fs.writeFileSync(resultPath, compact, "utf8");
   }
 
   writeAuthoritativeExecutionSummary(jobDir, "antigravity-cli", result, stderr);
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
+  const boundary = validateWorkerFileBoundary(args, gitOutcome);
 
-  const failed = result.status !== 0 || Boolean(result.error) || gitOutcome.reviewMutationDetected;
+  const failed = result.status !== 0 || Boolean(result.error) || !boundary.ok;
+  const failureCategory = !boundary.ok ? "scope-violation" : failed ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`) : "";
+  recordWorkerTelemetry(workspace, jobDir, {
+    ...args,
+    resourceId: args.resourceId || `antigravity:${args.model || "default"}`,
+  }, {
+    provider: "antigravity",
+    requestedModel: args.model || "",
+    observedModel: args.model || "",
+    success: !failed,
+    failureCategory,
+    durationMs: Date.now() - startedMs,
+  });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
-    currentStep: gitOutcome.reviewMutationDetected ? "review-worker-modified-files" : failed ? "agy-cli-failed" : "agy-cli-completed",
+    currentStep: failed ? "agy-cli-failed" : "agy-cli-completed",
     completedAt: utcStamp(),
     exitCode: result.status,
-    blocker: gitOutcome.reviewMutationDetected
-      ? "Review-only Antigravity worker changed workspace files; inspect diff.patch before accepting any result."
+    failureCategory,
+    descendantCleanup,
+    warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but the bridge cannot attribute concurrent edits to the review worker; no diff was accepted." : "",
+    blocker: !boundary.ok
+      ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : failed ? truncateText(result.error?.message || stderr || stdout || "Antigravity CLI exited non-zero.", 1000) : "",
   });
 
@@ -2425,7 +3497,7 @@ function submitAgyJob(args = {}) {
     currentStep: "agy-cli-background-started",
     workerPid: child.pid,
     workerCommandMarker: created.jobId,
-    agyCommand: status.command,
+    agyCommand: path.basename(status.command),
     agyVersion: status.version,
   });
 
@@ -2462,6 +3534,7 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
   return [
     "You are Claude Code running as a local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
+    "Do not narrate planned tool calls. Use targeted reads/searches and stop when enough evidence exists for the assigned work items.",
     "",
     request,
     "",
@@ -2519,17 +3592,43 @@ function writeGitArtifacts(workspace, jobDir, suppliedState = null) {
   fs.writeFileSync(path.join(jobDir, "diff.patch"), state.diff, "utf8");
 }
 
+function sensitiveArtifactPath(file) {
+  const normalized = String(file || "").replace(/\\/g, "/").toLowerCase();
+  const base = path.basename(normalized);
+  return base === ".env"
+    || base.startsWith(".env.")
+    || /(^|[._-])(secret|credential|password|private[-_]?key|auth[-_]?token)([._-]|$)/.test(base) // privacy-detector
+    || /\.(pem|key|pfx|p12|kdbx|sqlite|db)$/i.test(base);
+}
+
+function redactArtifactContent(value) {
+  let text = String(value || "");
+  text = text.replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[REDACTED PRIVATE KEY BLOCK]");
+  text = text.replace(/\b(sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|AIza[A-Za-z0-9_-]{20,})\b/g, "[REDACTED TOKEN]");
+  text = text.replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]{12,}/gi, "$1[REDACTED]");
+  text = text.replace(/^([^\r\n]*(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key)[^=:\r\n]*[=:])[ \t]*.*$/gim, "$1 [REDACTED]"); // privacy-detector
+  text = text.replace(/C:\\Users\\[^\\\r\n]+/gi, "%USERPROFILE%");
+  return text;
+}
+
 function buildUntrackedFilesDiff(workspace, files, maxCharsPerFile = 8000) {
   const parts = [];
   for (const file of files) {
     const relPath = file.split(path.sep).join("/");
+    if (sensitiveArtifactPath(relPath)) {
+      parts.push([
+        `diff --git a/${relPath} b/${relPath}`,
+        "# AI Mobile omitted the contents of this sensitive untracked file.",
+      ].join("\n"));
+      continue;
+    }
     let content;
     try {
       content = fs.readFileSync(path.join(workspace, file), "utf8");
     } catch {
       continue;
     }
-    const truncated = truncateText(content, maxCharsPerFile);
+    const truncated = redactArtifactContent(truncateText(content, maxCharsPerFile));
     const lines = truncated.split(/\r?\n/);
     const header = [
       `diff --git a/${relPath} b/${relPath}`,
@@ -2553,8 +3652,15 @@ function runClaudeJobWorker(args = {}) {
       state: "failed",
       currentStep: "claude-code-not-found",
       blocker: status.message,
+      failureCategory: "worker-failure",
     });
     writeJobFailureArtifacts(workspace, jobId, "claude-code", status.message);
+    recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "claude:sonnet" }, {
+      provider: "claude",
+      requestedModel: args.model || "sonnet",
+      success: false,
+      failureCategory: "worker-failure",
+    });
     return `ClaudeJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${status.message}`;
   }
 
@@ -2565,11 +3671,13 @@ function runClaudeJobWorker(args = {}) {
   const cliArgs = [
     "-p",
     "--output-format",
-    "text",
+    "json",
     "--permission-mode",
     permissionMode,
   ];
+  if (permissionMode === "plan") cliArgs.push("--tools", "Read,Grep,Glob");
   if (args.model) cliArgs.push("--model", safeClaudeFlag(args.model, "model"));
+  if (args.effort) cliArgs.push("--effort", safeClaudeFlag(args.effort, "effort"));
   if (args.fallbackModel) cliArgs.push("--fallback-model", safeClaudeFlag(args.fallbackModel, "fallbackModel"));
   if (args.maxBudgetUsd !== undefined && args.maxBudgetUsd !== null && String(args.maxBudgetUsd).trim() !== "") {
     const budget = Number(args.maxBudgetUsd);
@@ -2582,40 +3690,62 @@ function runClaudeJobWorker(args = {}) {
     worker: "claude-code",
     currentStep: "claude-code-running",
     startedAt: utcStamp(),
-    claudeCommand: status.command,
+    claudeCommand: path.basename(status.command),
     claudeVersion: status.version,
     claudeModel: args.model || "",
     claudePermissionMode: permissionMode,
   });
 
+  const startedMs = Date.now();
   const result = runClaudeCli(status.command, cliArgs, {
     cwd: workspace,
     input: prompt,
     timeout: maxMinutes * 60 * 1000,
     maxBuffer: 8 * 1024 * 1024,
   });
+  const descendantCleanup = result.error?.code === "ETIMEDOUT" ? terminateDescendantProcesses(process.pid) : null;
 
   const stdout = String(result.stdout || "");
   const stderr = String(result.stderr || "");
+  const parsedOutput = parseClaudeJsonOutput(stdout);
   fs.writeFileSync(path.join(jobDir, "claude-output.txt"), truncateText(stdout, 80000), "utf8");
   fs.writeFileSync(path.join(jobDir, "claude-error.txt"), truncateText(stderr, 30000), "utf8");
 
   const resultPath = path.join(jobDir, "result.md");
   if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
-    fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Claude Code produced no output>", 24000), "utf8");
+    fs.writeFileSync(resultPath, compactResultBullets(parsedOutput.resultText || stderr || "<Claude Code produced no output>"), "utf8");
   }
 
   writeAuthoritativeExecutionSummary(jobDir, "claude-code", result, stderr);
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, mode);
+  const boundary = validateWorkerFileBoundary(args, gitOutcome);
 
-  const failed = result.status !== 0 || Boolean(result.error) || gitOutcome.reviewMutationDetected;
+  const failed = result.status !== 0 || Boolean(result.error) || parsedOutput.isError || !boundary.ok;
+  const failureCategory = !boundary.ok ? "scope-violation" : failed ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`) : "";
+  recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "claude:sonnet" }, {
+    provider: "claude",
+    requestedModel: args.model || "sonnet",
+    observedModel: parsedOutput.observedModel,
+    success: !failed,
+    failureCategory,
+    durationMs: Number.isFinite(parsedOutput.durationMs) ? parsedOutput.durationMs : Date.now() - startedMs,
+    inputTokens: parsedOutput.inputTokens,
+    cacheCreationInputTokens: parsedOutput.cacheCreationInputTokens,
+    cacheReadInputTokens: parsedOutput.cacheReadInputTokens,
+    outputTokens: parsedOutput.outputTokens,
+    reportedCostUsdEquivalent: parsedOutput.reportedCostUsdEquivalent,
+  });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
-    currentStep: gitOutcome.reviewMutationDetected ? "review-worker-modified-files" : failed ? "claude-code-failed" : "claude-code-completed",
+    currentStep: failed ? "claude-code-failed" : "claude-code-completed",
     completedAt: utcStamp(),
     exitCode: result.status,
-    blocker: gitOutcome.reviewMutationDetected
-      ? "Review-only Claude Code worker changed workspace files; inspect diff.patch before accepting any result."
+    observedModel: parsedOutput.observedModel,
+    failureCategory,
+    descendantCleanup,
+    warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
+    blocker: !boundary.ok
+      ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : failed ? truncateText(result.error?.message || stderr || stdout || "Claude Code exited non-zero.", 1000) : "",
   });
 
@@ -2683,7 +3813,7 @@ function submitClaudeJob(args = {}) {
     currentStep: "claude-code-background-started",
     workerPid: child.pid,
     workerCommandMarker: created.jobId,
-    claudeCommand: status.command,
+    claudeCommand: path.basename(status.command),
     claudeVersion: status.version,
   });
 
@@ -2738,8 +3868,15 @@ function runCursorJobWorker(args = {}) {
       state: "failed",
       currentStep: "cursor-agent-not-found",
       blocker,
+      failureCategory: "worker-failure",
     });
     writeJobFailureArtifacts(workspace, jobId, "cursor-agent", blocker);
+    recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "cursor:agent" }, {
+      provider: "cursor",
+      requestedModel: args.model || "default",
+      success: false,
+      failureCategory: "worker-failure",
+    });
     return `CursorJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${blocker}`;
   }
 
@@ -2753,17 +3890,19 @@ function runCursorJobWorker(args = {}) {
     worker: "cursor-agent",
     currentStep: "cursor-agent-running",
     startedAt: utcStamp(),
-    cursorCommand: status.command,
+    cursorCommand: path.basename(status.command),
     cursorVersion: status.version,
     cursorModel: args.model || "",
   });
 
+  const startedMs = Date.now();
   const result = runWindowsFriendly(status.command, cliArgs, {
     cwd: workspace,
     input: prompt,
     timeout: maxMinutes * 60 * 1000,
     maxBuffer: 8 * 1024 * 1024,
   });
+  const descendantCleanup = result.error?.code === "ETIMEDOUT" ? terminateDescendantProcesses(process.pid) : null;
 
   const stdout = String(result.stdout || "");
   const stderr = String(result.stderr || "");
@@ -2777,15 +3916,28 @@ function runCursorJobWorker(args = {}) {
 
   writeAuthoritativeExecutionSummary(jobDir, "cursor-agent", result, stderr);
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
+  const boundary = validateWorkerFileBoundary(args, gitOutcome);
 
-  const failed = result.status !== 0 || Boolean(result.error) || gitOutcome.reviewMutationDetected;
+  const failed = result.status !== 0 || Boolean(result.error) || !boundary.ok;
+  const failureCategory = !boundary.ok ? "scope-violation" : failed ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`) : "";
+  recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "cursor:agent" }, {
+    provider: "cursor",
+    requestedModel: args.model || "default",
+    observedModel: args.model || "",
+    success: !failed,
+    failureCategory,
+    durationMs: Date.now() - startedMs,
+  });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
-    currentStep: gitOutcome.reviewMutationDetected ? "review-worker-modified-files" : failed ? "cursor-agent-failed" : "cursor-agent-completed",
+    currentStep: failed ? "cursor-agent-failed" : "cursor-agent-completed",
     completedAt: utcStamp(),
     exitCode: result.status,
-    blocker: gitOutcome.reviewMutationDetected
-      ? "Review-only Cursor worker changed workspace files; inspect diff.patch before accepting any result."
+    failureCategory,
+    descendantCleanup,
+    warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but the bridge cannot attribute concurrent edits to the review worker; no diff was accepted." : "",
+    blocker: !boundary.ok
+      ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : failed ? truncateText(result.error?.message || stderr || stdout || "Cursor agent exited non-zero.", 1000) : "",
   });
 
@@ -2853,7 +4005,7 @@ function submitCursorJob(args = {}) {
     currentStep: "cursor-agent-background-started",
     workerPid: child.pid,
     workerCommandMarker: created.jobId,
-    cursorCommand: status.command,
+    cursorCommand: path.basename(status.command),
     cursorVersion: status.version,
   });
 
@@ -2882,10 +4034,6 @@ function availableModelNames(limitsSummary) {
   return (limitsSummary?.RecommendedAvailable || [])
     .map((entry) => String(entry.DisplayName || entry.Id || "").trim())
     .filter(Boolean);
-}
-
-function choosePreferredModel(limitsSummary, preference = "auto") {
-  return choosePreferredModelCandidates(limitsSummary, preference)[0] || "";
 }
 
 function choosePreferredModelCandidates(limitsSummary, preference = "auto") {
@@ -3581,11 +4729,51 @@ function runSelfTest() {
 
   const split = inferTaskSplit("ignored when explicit lanes exist", "UI, backend, testing");
   assert(split.join(",") === "ui,backend,testing", "explicit task split is preserved");
-  const assigned = assignTeamTasks(split, { agyFound: true, claudeFound: true, cursorHeadlessFound: false }, false);
-  assert(assigned.agy.includes("ui"), "UI lane routes to Antigravity scout");
-  assert(assigned.claude.includes("backend") && assigned.claude.includes("testing"), "backend and testing lanes route to Claude Code");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
+  const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
+  assert(roster.length === 2 && roster[0].id === "gemini-3.5-flash-medium", "Antigravity model roster is parsed without starting its UI");
+  const fakeContext = {
+    codexModel: "caller model",
+    codexBudget: { state: "healthy", text: "healthy" },
+    codexRemainingPercent: null,
+    codexResetAt: "",
+    claudeFound: true,
+    claudeAuth: { checked: true, loggedIn: true },
+    claudeObservedModel: "claude-sonnet-5",
+    agyFound: true,
+    agyModels: [
+      { id: "gemini-3.5-flash-medium", displayName: "Gemini 3.5 Flash (Medium)" },
+      { id: "claude-opus-4.6-thinking", displayName: "Claude Opus 4.6 (Thinking)" },
+    ],
+    antigravityLiveReady: false,
+    recommendedAvailable: [],
+    cursorHeadlessFound: false,
+    workspaceState: { outcomes: {}, decisions: [] },
+  };
+  const orchestrationDecision = buildResourceOrchestrationDecision({
+    goal: "Implement and verify a cross-platform resource orchestrator plugin",
+    mode: "patch",
+    workItems: [
+      { id: "implement", objective: "Implement the orchestration control loop", kind: "implementation-architecture", complexity: "high", readOnly: false },
+      { id: "verify", objective: "Independently verify failure handling", kind: "testing-review", complexity: "medium", readOnly: true, dependsOn: ["implement"] },
+    ],
+  }, fakeContext);
+  assert(orchestrationDecision.workItems.find((item) => item.id === "implement")?.assignment === "claude:sonnet", "high-value implementation selects Claude Sonnet as the single writer");
+  assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.assignment.startsWith("antigravity:"), "independent verification selects a different available team");
+  assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
+  assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
+  assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
+  const parsedClaude = parseClaudeJsonOutput(JSON.stringify({ result: "ok", duration_ms: 12, usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { "claude-sonnet-5": {} } }));
+  assert(parsedClaude.resultText === "ok" && parsedClaude.observedModel === "claude-sonnet-5", "Claude JSON output yields compact result and per-run model telemetry");
+  const flattenedGraph = buildGoalWorkGraph({ goal: "review", workItems: [[{ id: "one", objective: "first" }, { id: "two", objective: "second" }]] });
+  assert(flattenedGraph.length === 2, "nested PowerShell work-item arrays are normalized defensively");
+  assert(sensitiveArtifactPath("config/.env.production"), "sensitive untracked artifact paths are withheld");
+  const credentialSample = ["API", "_KEY=example-sensitive-value"].join("");
+  assert(!redactArtifactContent(credentialSample).includes("example-sensitive-value"), "credential-like untracked content is redacted");
+  assert(validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["scripts/worker.js"] }).ok, "writer changes inside an assigned file boundary pass");
+  assert(!validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["README.md"] }).ok, "writer changes outside an assigned file boundary fail closed");
+  assert(compactResultBullets("- one\n- two\n- three", 2).split(/\r?\n/).length === 2, "worker result readback enforces a compact bullet limit");
 
   const tempRoot = path.resolve(os.tmpdir());
   const workspace = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-self-test-"));
@@ -3711,6 +4899,18 @@ async function handleRequest(message) {
 
       if (name === "run-efficient-task") {
         const text = await runEfficientTask(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "resource-inventory") {
+        const text = await getResourceInventory(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "orchestrate-project") {
+        const text = await orchestrateProject(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
         return;
       }
@@ -3859,7 +5059,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -3877,6 +5077,8 @@ if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-effi
     "orchestration-plan-cli": buildOrchestrationPlan,
     "efficiency-flow-cli": buildEfficiencyFlow,
     "run-efficient-task-cli": runEfficientTask,
+    "resource-inventory-cli": getResourceInventory,
+    "orchestrate-project-cli": orchestrateProject,
     "team-orchestration-plan-cli": buildTeamOrchestrationPlan,
     "run-team-task-cli": runTeamTask,
     "read-team-run-cli": readTeamRun,
