@@ -72,6 +72,8 @@ Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from th
 - Claude remaining subscription usage is not exposed by the CLI. Infer availability from auth plus real success/rate-limit outcomes; JSON telemetry records per-run usage and the exact model used.
 - For a five-hour horizon, use real reset/cooldown metadata when present. Do not invent budgets or reset times.
 - Selection weighs capability fit, required quality, capacity/freshness, speed/cost, project continuity, independence, and user preference.
+- Learn task-kind affinity only from successful outcomes. A timeout or failed result must increase reliability penalties and must never create positive affinity for that resource.
+- Use Flash Low only for tightly file-bounded low-complexity micro tasks. Prefer Flash Medium for broad read-only project review, health inspection, or work without an explicit file boundary.
 - Keep one writer per workspace. Run independent read-only scouts/reviewers in parallel. Respect explicit dependencies.
 - Keep failover pools provider-diverse. On quota, rate limit, outage, timeout, auth, model-unavailable, worker failure, or an insufficient/off-task result, cool down that resource and fail over the narrow item once. Do not retry loops.
 - Exit code 0 is not sufficient evidence. Reject empty, placeholder, generic acknowledgement, model-identity-only, or otherwise non-objective results before reporting worker completion.
@@ -105,6 +107,7 @@ Codex should read only:
 
 Do not paste full logs, chats, screenshots, source files, credentials, cookies, or private transcripts into Codex.
 `status.json` is bridge-owned. Never ask a worker to edit it, and do not accept a worker-written terminal state while the bridge process is still finalizing artifacts.
+If a worker exits after writing finalized telemetry and compact artifacts but before its terminal status update, recover the terminal state and exact failure category from that telemetry.
 `read-job` may mark dead `running` jobs as failed and will omit binary/UTF-16-like artifacts to keep readback compact.
 `State: ready-for-codex` means workers are finished, not that the user goal is complete. Codex must critique, integrate, and verify before claiming completion. `running`, `partial`, `failed`, and `blocked` are not completion.
 

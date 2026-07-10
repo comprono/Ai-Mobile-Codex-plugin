@@ -1142,14 +1142,32 @@ function resourceCooldownState(outcome = {}) {
 }
 
 function compactOutcome(outcome = {}) {
+  const lastSuccessAt = String(outcome.lastSuccessAt || "");
+  const lastFailureAt = String(outcome.lastFailureAt || "");
+  const successTime = Date.parse(lastSuccessAt);
+  const failureTime = Date.parse(lastFailureAt);
+  const successfulKinds = Array.isArray(outcome.successfulKinds)
+    ? outcome.successfulKinds.slice(-5)
+    : Number.isFinite(successTime) && (!Number.isFinite(failureTime) || successTime >= failureTime) && Array.isArray(outcome.recentKinds)
+      ? outcome.recentKinds.slice(-5)
+      : [];
+  const storedConsecutiveFailures = Number(outcome.consecutiveFailures);
+  const consecutiveFailures = Number.isFinite(storedConsecutiveFailures)
+    ? Math.max(0, storedConsecutiveFailures)
+    : Number.isFinite(failureTime) && (!Number.isFinite(successTime) || failureTime > successTime) ? 1 : 0;
   return {
     lastState: String(outcome.lastState || "unknown"),
     lastCategory: String(outcome.lastCategory || ""),
-    lastSuccessAt: String(outcome.lastSuccessAt || ""),
-    lastFailureAt: String(outcome.lastFailureAt || ""),
+    lastSuccessAt,
+    lastFailureAt,
     cooldownUntil: String(outcome.cooldownUntil || ""),
     observedModel: String(outcome.observedModel || ""),
     recentKinds: Array.isArray(outcome.recentKinds) ? outcome.recentKinds.slice(-5) : [],
+    successfulKinds,
+    successCount: Math.max(0, Number(outcome.successCount || 0)),
+    failureCount: Math.max(0, Number(outcome.failureCount || 0)),
+    consecutiveFailures,
+    lastDurationMs: Number.isFinite(Number(outcome.lastDurationMs)) ? Number(outcome.lastDurationMs) : null,
   };
 }
 
@@ -1588,7 +1606,8 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
   score += candidate.cost * (item.complexity === "low" || item.kind.includes("discovery") ? 0.14 : 0.05);
   if (candidate.remainingPercent !== null) score += Math.max(-20, Math.min(15, (candidate.remainingPercent - 30) / 4));
   if (candidate.evidence === "observed-run" || candidate.evidence === "measured-live") score += 7;
-  if ((candidate.outcome?.recentKinds || []).includes(item.kind)) score += 8;
+  if ((candidate.outcome?.successfulKinds || []).includes(item.kind)) score += 8;
+  score -= Math.min(24, Math.max(0, Number(candidate.outcome?.consecutiveFailures || 0)) * 8);
   if (item.preferredPlatform && item.preferredPlatform === candidate.platform) score += 25;
   if (String(args.agyModel || "auto").toLowerCase() !== "auto" && candidate.platform === "antigravity") {
     const preference = normalizedModelText(args.agyModel);
@@ -1597,6 +1616,13 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
   }
   if (candidate.platform === "claude" && !item.readOnly) score += ["high", "critical"].includes(item.complexity) ? 22 : 14;
   if (candidate.platform === "antigravity" && /flash/i.test(candidate.displayName) && item.readOnly && !["critical"].includes(item.complexity)) score += 18;
+  const microTask = item.complexity === "low"
+    && Array.isArray(item.expectedFiles)
+    && item.expectedFiles.length > 0
+    && item.expectedFiles.length <= 2
+    && String(item.objective || "").length <= 280;
+  if (candidate.platform === "antigravity" && /flash.*low|low.*flash/i.test(candidate.displayName) && !microTask) score -= 10;
+  if (candidate.platform === "antigravity" && /flash.*medium|medium.*flash/i.test(candidate.displayName) && item.readOnly && !microTask) score += 3;
   if (candidate.platform === "cursor" && item.requiredCapabilities.includes("ui")) score += 15;
   if (item.readOnly && primaryWriterId && candidate.id !== primaryWriterId) score += 10;
   if (item.readOnly && primaryWriterId === candidate.id) score -= 12;
@@ -1886,8 +1912,8 @@ function syncWorkItemsFromJobs(manifest) {
     const matching = jobs.filter((job) => (job.workItemIds || job.assignedTasks || []).includes(item.id));
     const latest = matching[matching.length - 1];
     if (!latest) return item;
-    if (["queued", "running", "unknown"].includes(latest.state)) return { ...item, state: "running", activeJobId: latest.jobId };
-    if (latest.state === "completed") return { ...item, state: "completed", activeJobId: latest.jobId };
+    if (["queued", "running", "unknown"].includes(latest.state)) return { ...item, state: "running", activeJobId: latest.jobId, failureCategory: "", blocker: "" };
+    if (latest.state === "completed") return { ...item, state: "completed", activeJobId: latest.jobId, failureCategory: "", blocker: "" };
     if (["failed", "cancelled"].includes(latest.state)) {
       return {
         ...item,
@@ -1975,6 +2001,8 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
       assignedModel: alternate.model,
       failoverCount: 1,
       activeJobId: "",
+      failureCategory: "",
+      blocker: "",
       decisionReason: `Failover from ${latestJob?.resourceId || item.assignment} after ${item.failureCategory}.`,
     };
   });
@@ -2078,13 +2106,16 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null) {
     const statusPath = path.join(jobDir, "status.json");
     if (!fs.existsSync(statusPath)) return { ...job, state: "failed", currentStep: "missing-status", blocker: "status.json is missing." };
     const repair = repairStaleRunningJob(workspace, job.jobId, jobDir, readJsonFile(statusPath, {}));
+    const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
+    const telemetryFailureCategory = telemetry?.success === false ? String(telemetry.failureCategory || "worker-failure") : "";
     return {
       ...job,
       state: repair.status.state || "unknown",
       currentStep: repair.status.currentStep || "",
       blocker: repair.status.blocker || "",
       warning: repair.status.warning || "",
-      failureCategory: repair.status.failureCategory || failureCategoryFromText(`${repair.status.currentStep || ""} ${repair.status.blocker || ""}`),
+      failureCategory: telemetryFailureCategory || repair.status.failureCategory || failureCategoryFromText(`${repair.status.currentStep || ""} ${repair.status.blocker || ""}`),
+      observedModel: String(telemetry?.observedModel || repair.status.observedModel || job.observedModel || ""),
       workerPid: repair.status.workerPid || job.workerPid || null,
       jobUpdatedAt: repair.status.updatedAt || "",
     };
@@ -2642,11 +2673,43 @@ function effectiveBridgeJobStatus(status = {}) {
   };
 }
 
+function terminalStatusFromTelemetry(jobDir, status = {}) {
+  const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
+  const resultReady = fs.existsSync(path.join(jobDir, "result.md"))
+    && fs.readFileSync(path.join(jobDir, "result.md"), "utf8").trim() !== "";
+  const testsReady = fs.existsSync(path.join(jobDir, "test-output-summary.md"))
+    && fs.readFileSync(path.join(jobDir, "test-output-summary.md"), "utf8").trim() !== "";
+  if (!telemetry?.completedAt || !resultReady || !testsReady) return null;
+
+  const success = telemetry.success === true;
+  const failureCategory = success ? "" : String(telemetry.failureCategory || "worker-failure");
+  const existingBlocker = String(status.blocker || "");
+  const keepExistingBlocker = existingBlocker && !/process is no longer running|worker process.*gone/i.test(existingBlocker);
+  return {
+    ...status,
+    state: success ? "completed" : "failed",
+    currentStep: success ? "worker-telemetry-completed" : "worker-telemetry-failed",
+    completedAt: String(telemetry.completedAt),
+    bridgeFinalized: true,
+    observedModel: String(telemetry.observedModel || status.observedModel || ""),
+    failureCategory,
+    blocker: success ? "" : keepExistingBlocker ? existingBlocker : `Worker ended with ${failureCategory}; terminal state recovered from finalized telemetry.`,
+  };
+}
+
 function repairStaleRunningJob(workspace, jobId, jobDir, status) {
   status = effectiveBridgeJobStatus(status);
   const state = String(status.state || "").toLowerCase();
   const pid = Number(status.workerPid);
-  if (state !== "running" || !Number.isInteger(pid) || pid <= 0 || isRecordedWorkerAlive(status)) {
+  const workerAlive = Number.isInteger(pid) && pid > 0 && isRecordedWorkerAlive(status);
+  const telemetryStatus = (!workerAlive && state === "running") || status.currentStep === "worker-process-gone"
+    ? terminalStatusFromTelemetry(jobDir, status)
+    : null;
+  if (telemetryStatus) {
+    writeJsonFile(path.join(jobDir, "status.json"), { ...telemetryStatus, updatedAt: utcStamp() });
+    return { status: telemetryStatus, repaired: true, source: "telemetry" };
+  }
+  if (state !== "running" || !Number.isInteger(pid) || pid <= 0 || workerAlive) {
     return { status, repaired: false };
   }
 
@@ -2673,7 +2736,7 @@ function repairStaleRunningJob(workspace, jobId, jobDir, status) {
       "utf8",
     );
   }
-  return { status: repairedStatus, repaired: true };
+  return { status: repairedStatus, repaired: true, source: "process-gone" };
 }
 
 function readJob(args = {}) {
@@ -2697,7 +2760,9 @@ function readJob(args = {}) {
     "status.json:",
     status || "{}",
     repair.repaired ? "" : null,
-    repair.repaired ? "StaleJobRepair: marked failed because worker process was gone while status was running." : null,
+    repair.repaired ? (repair.source === "telemetry"
+      ? "StaleJobRepair: recovered terminal state from finalized worker telemetry and compact artifacts."
+      : "StaleJobRepair: marked failed because worker process was gone while status was running.") : null,
     runningHint.length ? "" : null,
     ...runningHint,
     "",
@@ -2931,6 +2996,16 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
 
   mutateWorkspaceResourceState(workspace, (state) => {
     const previous = state.outcomes?.[resourceId] || {};
+    const previousSuccessTime = Date.parse(String(previous.lastSuccessAt || ""));
+    const previousFailureTime = Date.parse(String(previous.lastFailureAt || ""));
+    const previousSuccessfulKinds = Array.isArray(previous.successfulKinds)
+      ? previous.successfulKinds
+      : Number.isFinite(previousSuccessTime) && (!Number.isFinite(previousFailureTime) || previousSuccessTime >= previousFailureTime) && Array.isArray(previous.recentKinds)
+        ? previous.recentKinds
+        : [];
+    const successfulKinds = success
+      ? [...previousSuccessfulKinds, ...safeTelemetry.workItemKinds].slice(-5)
+      : previousSuccessfulKinds.slice(-5);
     const outcome = {
       ...previous,
       lastState: success ? "available" : "cooldown",
@@ -2939,7 +3014,12 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
       lastFailureAt: success ? String(previous.lastFailureAt || "") : now,
       cooldownUntil: success ? "" : cooldownUntil,
       observedModel: safeTelemetry.observedModel || String(previous.observedModel || ""),
-      recentKinds: [...(previous.recentKinds || []), ...safeTelemetry.workItemKinds].slice(-5),
+      recentKinds: successfulKinds,
+      successfulKinds,
+      successCount: Math.max(0, Number(previous.successCount || 0)) + (success ? 1 : 0),
+      failureCount: Math.max(0, Number(previous.failureCount || 0)) + (success ? 0 : 1),
+      consecutiveFailures: success ? 0 : Math.max(0, Number(previous.consecutiveFailures || 0)) + 1,
+      lastDurationMs: safeTelemetry.durationMs,
     };
     return {
       ...state,
@@ -4867,6 +4947,7 @@ function runSelfTest() {
     claudeObservedModel: "claude-sonnet-5",
     agyFound: true,
     agyModels: [
+      { id: "gemini-3.5-flash-low", displayName: "Gemini 3.5 Flash (Low)" },
       { id: "gemini-3.5-flash-medium", displayName: "Gemini 3.5 Flash (Medium)" },
       { id: "claude-opus-4.6-thinking", displayName: "Claude Opus 4.6 (Thinking)" },
     ],
@@ -4886,6 +4967,20 @@ function runSelfTest() {
   assert(orchestrationDecision.workItems.find((item) => item.id === "implement")?.assignment === "claude:sonnet", "high-value implementation selects Claude Sonnet as the single writer");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.assignment.startsWith("antigravity:"), "independent verification selects a different available team");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.alternates.includes("claude:sonnet"), "failover pool keeps a cross-platform alternate even when one provider has many models");
+  const broadReviewDecision = buildResourceOrchestrationDecision({
+    goal: "Review current project health and report the main blocker",
+    mode: "review",
+    workItems: [{ id: "broad-review", objective: "Review current project health and report the main blocker", kind: "verification-review", complexity: "low", readOnly: true, preferredPlatform: "antigravity" }],
+  }, fakeContext);
+  assert(broadReviewDecision.workItems[0]?.assignment === "antigravity:gemini-3.5-flash-medium", "broad low-risk review prefers Flash Medium over Flash Low");
+  const microReviewDecision = buildResourceOrchestrationDecision({
+    goal: "Read one manifest value",
+    mode: "review",
+    workItems: [{ id: "micro-review", objective: "Read one manifest value", kind: "verification", complexity: "low", readOnly: true, preferredPlatform: "antigravity", expectedFiles: [".codex-plugin/plugin.json"] }],
+  }, fakeContext);
+  assert(microReviewDecision.workItems[0]?.assignment === "antigravity:gemini-3.5-flash-low", "file-bounded micro review may use Flash Low");
+  const failedOutcome = compactOutcome({ lastFailureAt: utcStamp(), recentKinds: ["verification-review"] });
+  assert(failedOutcome.successfulKinds.length === 0 && failedOutcome.consecutiveFailures === 1, "failed work does not become future capability affinity");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
   assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
   assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
@@ -4936,6 +5031,26 @@ function runSelfTest() {
     writeTeamRunManifest(workspace, { ...manifest, jobs: [] });
     assert(refreshTeamRunManifest(workspace).state === "blocked", "team with no startable jobs reports blocked");
 
+    const staleTelemetryJob = createJob({ goal: "telemetry repair self-test", workspace, mode: "review", worker: "self-test" });
+    fs.writeFileSync(path.join(staleTelemetryJob.jobDir, "result.md"), "- Worker timed out before final status write.\n", "utf8");
+    fs.writeFileSync(path.join(staleTelemetryJob.jobDir, "test-output-summary.md"), "Result: failed\n", "utf8");
+    recordWorkerTelemetry(workspace, staleTelemetryJob.jobDir, {
+      resourceId: "antigravity:self-test",
+      workItemKinds: ["verification-review"],
+    }, {
+      provider: "antigravity",
+      requestedModel: "self-test",
+      observedModel: "self-test",
+      success: false,
+      failureCategory: "timeout",
+      durationMs: 100,
+    });
+    updateJobStatus(workspace, staleTelemetryJob.jobId, { state: "running", currentStep: "worker-running", workerPid: 2147483647, workerCommandMarker: staleTelemetryJob.jobId });
+    const telemetryRepair = repairStaleRunningJob(workspace, staleTelemetryJob.jobId, staleTelemetryJob.jobDir, readJsonFile(path.join(staleTelemetryJob.jobDir, "status.json"), {}));
+    assert(telemetryRepair.status.state === "failed" && telemetryRepair.status.failureCategory === "timeout" && telemetryRepair.source === "telemetry", "stale running status recovers the authoritative failure category from finalized telemetry");
+    const failedResourceOutcome = compactOutcome(readWorkspaceResourceState(workspace).outcomes["antigravity:self-test"] || {});
+    assert(failedResourceOutcome.successfulKinds.length === 0 && failedResourceOutcome.consecutiveFailures === 1, "failed telemetry records reliability without creating successful task affinity");
+
     let fakeLaunchCount = 0;
     const fakeLaunch = (runManifest, resource, items, failoverOf = "") => {
       fakeLaunchCount += 1;
@@ -4981,6 +5096,7 @@ function runSelfTest() {
     lifecycle.jobs[0] = { ...lifecycle.jobs[0], state: "failed", failureCategory: "timeout", blocker: "worker timed out" };
     lifecycle = advanceOrchestrationRun(workspace, lifecycle, true, fakeLaunch);
     assert(fakeLaunchCount === 2 && lifecycle.workItems.find((item) => item.id === "implement")?.assignment === "antigravity:flash", "retryable failure performs one bounded cross-team failover");
+    assert(!lifecycle.workItems.find((item) => item.id === "implement")?.failureCategory, "active failover clears stale failure labels from the work item");
     assert(lifecycle.resources.find((resource) => resource.id === "claude:sonnet")?.state === "cooldown", "failed resource enters cooldown before future assignment");
     lifecycle.jobs[1] = { ...lifecycle.jobs[1], state: "completed" };
     lifecycle = advanceOrchestrationRun(workspace, lifecycle, true, fakeLaunch);
@@ -4988,6 +5104,7 @@ function runSelfTest() {
     lifecycle.jobs[2] = { ...lifecycle.jobs[2], state: "completed" };
     lifecycle = advanceOrchestrationRun(workspace, lifecycle, true, fakeLaunch);
     assert(lifecycle.state === "ready-for-codex" && lifecycle.decisions.filter((decision) => decision.type === "failover").length === 1, "completed workers return control to Codex with exactly one failover decision");
+    assert(!lifecycle.workItems.some((item) => item.failureCategory), "successful failover completion leaves current work graph free of stale failure labels");
     lifecycle.resources = lifecycle.resources.map((resource) => resource.id === "claude:sonnet"
       ? { ...resource, state: "cooldown", cooldownUntil: new Date(Date.now() - 1000).toISOString() }
       : resource);

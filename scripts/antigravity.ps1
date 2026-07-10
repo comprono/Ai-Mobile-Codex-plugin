@@ -1307,6 +1307,15 @@ function Invoke-BridgeJobCommand {
     }
     if ($hasOutput) {
       $output | Write-Output
+    } elseif ($CliCommand -eq "read-team-run-cli" -and -not [string]::IsNullOrWhiteSpace($Workspace)) {
+      $teamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
+      if (Test-Path -LiteralPath $teamRunPath) {
+        Get-Content -LiteralPath $teamRunPath
+      } else {
+        Write-Output "AiMobileResourceOrchestrationRun:"
+        Write-Output "State: unavailable"
+        Write-Output "Blocker: read-team-run emitted no output and last-team-run.md was not found."
+      }
     } elseif ($CliCommand -match "submit|create|retry|read|list|cancel") {
       Write-LatestJobFallback -FallbackLabel "BridgeJobResult:"
     }
