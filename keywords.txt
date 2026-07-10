@@ -1,5 +1,10 @@
 ai mobile codex plugin
+codex project manager plugin
 codex resource orchestrator
+native codex worker orchestration
+codex usage window telemetry
+context capsule agents
+cli first ai orchestration
 multi model codex orchestration
 claude antigravity codex team
 capacity aware model routing

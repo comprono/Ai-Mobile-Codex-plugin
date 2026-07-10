@@ -5,6 +5,15 @@ const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 const crypto = require("node:crypto");
+const { readCodexUsageTelemetry, parseTokenCountEvent } = require("./lib/codex-telemetry");
+const { buildContextCapsule, buildTaskCapsule, writeContextCapsule } = require("./lib/context-capsule");
+const {
+  buildHostCodexCandidates,
+  chooseHostCodexAction,
+  selectReasoningEffort,
+  shouldFanOut,
+} = require("./lib/project-manager");
+const { modelPattern, readProfile, writeProfile } = require("./lib/orchestrator-profile");
 
 const pluginRoot = path.resolve(__dirname, "..");
 const helperScript = path.join(pluginRoot, "scripts", "antigravity.ps1");
@@ -173,8 +182,84 @@ const tools = [
     },
   },
   {
+    name: "codex-usage",
+    description: "Read current Codex five-hour/weekly capacity metadata and session token totals from recent local token_count events without returning prompts, responses, paths, or thread ids.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "context-capsule",
+    description: "Build a bounded, transcript-free project context capsule with goal, constraints, work graph, evidence fingerprints, acceptance gates, and continuity refs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Complete project outcome." },
+        workspace: { type: "string", description: "Local project workspace." },
+        lifecycleStage: { type: "string", description: "define, plan, execute, verify, review, or ship.", default: "plan" },
+        workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Task-scoped work items; expectedFiles are fingerprinted without embedding file contents." },
+        constraints: { type: "array", items: { type: "string" }, maxItems: 20 },
+        decisions: { type: "array", items: { type: "string" }, maxItems: 20 },
+        blockers: { type: "array", items: { type: "string" }, maxItems: 12 },
+        acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        verification: { type: "array", items: { type: "string" }, maxItems: 12 },
+        continuitySummary: { type: "string", description: "Compact prior-state summary, never a transcript." },
+        artifactRefs: { type: "array", items: { type: "string" }, maxItems: 20 },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "project-manager-plan",
+    description: "Preferred planning call. Build a future-proof, capacity-aware execution plan across native Codex Sol/Terra/Luna workers, Claude Code, Antigravity CLI, and optional Cursor, backed by one compact context capsule.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Complete project outcome." },
+        workspace: { type: "string", description: "Local project workspace shared by workers." },
+        workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Optional dependency-aware work items." },
+        constraints: { type: "array", items: { type: "string" }, maxItems: 20 },
+        acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        verification: { type: "array", items: { type: "string" }, maxItems: 12 },
+        continuitySummary: { type: "string", description: "Compact prior-state summary." },
+        artifactRefs: { type: "array", items: { type: "string" }, maxItems: 20 },
+        horizonHours: { type: "number", description: "Capacity/reset planning horizon.", default: 5 },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
+        hostCodexAvailable: { type: "boolean", description: "True only when the current host exposes a native spawn-agent tool.", default: false },
+        currentCodexModel: { type: "string", description: "Current caller model label when visible." },
+        currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
+        includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
+        refreshInventory: { type: "boolean", description: "Force fresh provider probes.", default: false },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "orchestrator-profile",
+    description: "Read or update the private local communication/model policy profile. Personal preferences remain outside the public plugin repository.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["get", "set"], default: "get" },
+        communicationStyle: { type: "string", enum: ["professional", "royal"] },
+        address: { type: "string", description: "Optional local form of address." },
+        updateStyle: { type: "string", enum: ["concise-executive", "technical", "minimal"] },
+        role: { type: "string", description: "Local project-manager role label." },
+        codexModelAllowPattern: { type: "string", description: "Local regex policy for native Codex models." },
+        modelPolicyReviewAfter: { type: "string", description: "Optional ISO date after which model policy should be reviewed." },
+        cliFirst: { type: "boolean" },
+        uiFallbackOnly: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "resource-inventory",
-    description: "Inspect the local AI team without starting apps or work: Codex caller state, Claude Code, Antigravity CLI/models/live quota when already running, Cursor, cooldowns, and evidence freshness.",
+    description: "Inspect the local AI team without starting apps or work: Codex local capacity metadata/catalog, Claude Code, Antigravity CLI/models/live quota when already running, Cursor, cooldowns, and evidence freshness.",
     inputSchema: {
       type: "object",
       properties: {
@@ -381,6 +466,7 @@ const tools = [
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
         nextStep: { type: "string", description: "Specific next action.", default: "Inspect the relevant files and write compact artifacts." },
         model: { type: "string", description: "Claude Code model alias or id, such as sonnet or opus.", default: "sonnet" },
+        effort: { type: "string", description: "Current Claude CLI effort level, such as low, medium, high, xhigh, or max." },
         fallbackModel: { type: "string", description: "Optional Claude Code fallback model alias or id." },
         permissionMode: { type: "string", description: "Claude Code permission mode. Defaults to plan for review and acceptEdits otherwise." },
         maxBudgetUsd: { type: "number", description: "Optional Claude Code maximum spend for this job." },
@@ -729,6 +815,7 @@ function parseFoundFromStatus(text) {
 function normalizeBudgetState(value) {
   const text = String(value || "unknown").trim();
   const lower = text.toLowerCase();
+  if (/\b(exhausted|blocked|zero|0%|limit reached)\b/.test(lower)) return { state: "exhausted", text };
   if (/\b(critical|very low|almost gone|near limit|running out)\b/.test(lower)) return { state: "critical", text };
   if (/\b(low|limited|mini|small budget)\b/.test(lower)) return { state: "low", text };
   if (/\b(medium|moderate|ok)\b/.test(lower)) return { state: "medium", text };
@@ -1155,6 +1242,16 @@ function parseClaudeModelRoster(output) {
   });
 }
 
+function parseClaudeEffortLevels(output) {
+  const text = String(output || "").replace(/\r?\n\s+/g, " ");
+  const match = text.match(/--effort\s+<level>[\s\S]{0,180}?\(([^)]+)\)/i);
+  if (!match) return [];
+  return [...new Set(match[1]
+    .split(/[,|]/)
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^[a-z][a-z0-9_-]{0,20}$/.test(value)))];
+}
+
 function enrichClaudeModelRoster(models = [], claudeCache = {}) {
   const resolutions = claudeCache.aliasResolutions || {};
   const observed = String(claudeCache.observedModel || "");
@@ -1344,6 +1441,7 @@ async function getTeamCapacityContext(args = {}) {
   const agy = resolveCommandFast("agy", [process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe") : ""]);
   const claude = resolveCommandFast("claude");
   const codexCatalog = readCodexModelCatalog();
+  const codexTelemetry = readCodexUsageTelemetry({ freshMs: refresh ? 5 * 60 * 1000 : 15 * 60 * 1000 });
   const cursorUi = findCursorApp();
   const cursorAgent = args.includeCursor ? resolveCommandFast("cursor-agent") : { found: false, command: "" };
   const liveProbe = await probeAntigravityDevTools();
@@ -1386,16 +1484,19 @@ async function getTeamCapacityContext(args = {}) {
   }
 
   let claudeModels = Array.isArray(cache.claude?.models) ? cache.claude.models : [];
+  let claudeEfforts = Array.isArray(cache.claude?.effortLevels) ? cache.claude.effortLevels : [];
   if (claude.found && (refresh || !isFreshTimestamp(cache.claude?.modelsCheckedAt) || claudeModels.length === 0)) {
     const modelProbe = runClaudeCli(claude.command, ["--help"], { timeout: 10000 });
     if (modelProbe.status === 0) {
-      claudeModels = parseClaudeModelRoster(`${modelProbe.stdout}\n${modelProbe.stderr}`);
+      const helpText = `${modelProbe.stdout}\n${modelProbe.stderr}`;
+      claudeModels = parseClaudeModelRoster(helpText);
+      claudeEfforts = parseClaudeEffortLevels(helpText);
       const aliasResolutions = { ...(cache.claude?.aliasResolutions || {}) };
       for (const model of claudeModels) {
         if (model.resolvedId) aliasResolutions[model.id] = model.resolvedId;
       }
       cache = updateSafeResourceCache({
-        claude: { found: true, models: claudeModels, aliasResolutions, modelsCheckedAt: utcStamp() },
+        claude: { found: true, models: claudeModels, effortLevels: claudeEfforts, aliasResolutions, modelsCheckedAt: utcStamp() },
       });
     }
   }
@@ -1433,11 +1534,25 @@ async function getTeamCapacityContext(args = {}) {
     cursor: { headlessFound: cursorAgent.found, lastSeenAt: utcStamp() },
   });
 
+  const callerBudget = normalizeBudgetState(args.codexBudgetState || "unknown");
+  const measuredCodexBudget = codexTelemetry.found && codexTelemetry.fresh
+    ? normalizeBudgetState(codexTelemetry.state)
+    : { state: "unknown", text: "unknown" };
+  const callerRemaining = Number.isFinite(Number(args.codexRemainingPercent)) ? Number(args.codexRemainingPercent) : null;
+  const measuredReset = (codexTelemetry.windows || [])
+    .filter((window) => Number.isFinite(window.remainingPercent))
+    .sort((a, b) => a.remainingPercent - b.remainingPercent)[0]?.resetAt || "";
+
   return {
     codexModel: String(args.codexModel || "current Codex session").trim() || "current Codex session",
-    codexBudget: normalizeBudgetState(args.codexBudgetState || "unknown"),
-    codexRemainingPercent: Number.isFinite(Number(args.codexRemainingPercent)) ? Number(args.codexRemainingPercent) : null,
-    codexResetAt: String(args.codexResetAt || ""),
+    codexBudget: callerBudget.state !== "unknown" ? callerBudget : measuredCodexBudget,
+    codexRemainingPercent: callerRemaining !== null
+      ? callerRemaining
+      : codexTelemetry.found && codexTelemetry.fresh
+        ? codexTelemetry.effectiveRemainingPercent
+        : null,
+    codexResetAt: String(args.codexResetAt || measuredReset || ""),
+    codexTelemetry,
     codexCatalog,
     quickError,
     capacityProbe: liveProbe.live
@@ -1449,6 +1564,7 @@ async function getTeamCapacityContext(args = {}) {
     claudeVersion,
     claudeAuth,
     claudeModels,
+    claudeEfforts,
     claudeUsage,
     claudeObservedModel: String(cache.claude?.observedModel || ""),
     cursorHeadlessFound: cursorAgent.found,
@@ -1582,7 +1698,11 @@ function buildResourceCandidates(args = {}, context = {}) {
     antigravity: platformReliabilitySummary(outcomes, "antigravity", horizonHours),
     cursor: platformReliabilitySummary(outcomes, "cursor", horizonHours),
   };
-  const codexState = ["critical", "low"].includes(context.codexBudget.state) ? "constrained" : "available";
+  const codexState = context.codexBudget.state === "exhausted"
+    ? "exhausted"
+    : ["critical", "low"].includes(context.codexBudget.state)
+      ? "constrained"
+      : "available";
   const candidates = [{
     id: "codex:current",
     platform: "codex",
@@ -1591,7 +1711,11 @@ function buildResourceCandidates(args = {}, context = {}) {
     displayName: context.codexModel,
     dispatchable: false,
     state: codexState,
-    evidence: context.codexRemainingPercent === null ? "caller-or-unknown" : "caller-measured",
+    evidence: context.codexTelemetry?.found && context.codexTelemetry?.fresh
+      ? "measured-local-undocumented-schema"
+      : context.codexRemainingPercent === null
+        ? "caller-or-unknown"
+        : "caller-measured",
     remainingPercent: context.codexRemainingPercent,
     resetAt: context.codexResetAt,
     capabilities: ["orchestration", "architecture", "risk-gating", "integration", "final-verification", "general-reasoning"],
@@ -1629,6 +1753,8 @@ function buildResourceCandidates(args = {}, context = {}) {
       dedicatedResetAt: measured.dedicatedResetAt,
       sharedRemainingPercent: measured.sharedRemainingPercent,
       capabilities: profile.capabilities,
+      reasoningLevels: context.claudeEfforts?.length ? context.claudeEfforts : ["low", "medium", "high"],
+      defaultReasoning: "medium",
       quality: profile.quality,
       speed: profile.speed,
       cost: profile.cost,
@@ -1712,8 +1838,8 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     `HorizonHours: ${horizonHours}`,
     `Evidence: ${context.capacityProbe}`,
     "Software:",
-    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; current-model/limits=caller-visible-only`,
-    `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}`,
+    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; local-capacity=${context.codexTelemetry?.found === true}; fresh=${context.codexTelemetry?.fresh === true}; plan=${context.codexTelemetry?.planType || "unknown"}`,
+    `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}; efforts=${context.claudeEfforts?.join(",") || "unknown"}`,
     `- Antigravity: cli=${context.agyFound}; cli-version=${context.agyVersion || "unknown"}; desktop-live=${context.antigravityLiveReady}; live-models=${(context.rawLimits?.Models || []).filter((model) => model.DisplayName).length}`,
     `- Cursor: ui=${context.cursorUiFound}; headless-agent=${context.cursorHeadlessFound}; version=${String(context.cursorUiVersion || "unknown").split(/\r?\n/)[0]}`,
     "TeamsAndModels:",
@@ -1733,6 +1859,14 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     lines.push(`- ${window.id}: used=${window.usedPercent}%; remaining=${window.remainingPercent}%; reset=${window.resetAt || window.resetText || "unknown"}; applies=${window.scope}`);
   }
   if (!(context.claudeUsage?.windows || []).length) lines.push("- unknown");
+  lines.push("CodexCapacityWindows:");
+  for (const window of context.codexTelemetry?.windows || []) {
+    lines.push(`- ${window.id}: used=${window.usedPercent ?? "unknown"}%; remaining=${window.remainingPercent ?? "unknown"}%; reset=${window.resetAt || "unknown"}; periodMinutes=${window.windowMinutes ?? "unknown"}`);
+  }
+  if (!(context.codexTelemetry?.windows || []).length) lines.push("- unknown");
+  if (context.codexTelemetry?.found) {
+    lines.push(`CodexSessionTokens: total=${context.codexTelemetry.currentSession?.totalTokens ?? "unknown"}; cachedInput=${context.codexTelemetry.currentSession?.cachedInputTokens ?? "unknown"}; contextWindow=${context.codexTelemetry.currentSession?.contextWindow ?? "unknown"}; ageSeconds=${context.codexTelemetry.ageSeconds ?? "unknown"}`);
+  }
   lines.push("CodexCatalog:");
   for (const model of context.codexCatalog?.models || []) {
     lines.push(`- ${model.id} | ${model.displayName}; defaultReasoning=${model.defaultReasoning || "unknown"}; reasoning=${model.reasoningLevels.join(",") || "unknown"}; limits=unknown`);
@@ -1746,7 +1880,8 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
   if (!(context.rawLimits?.Models || []).some((row) => row.DisplayName && row.Disabled !== true)) lines.push("- unavailable while Antigravity is stopped");
   lines.push(
     "TruthBoundary:",
-    "- Codex capacity is caller-visible only; this plugin cannot read Codex's private token ledger.",
+    "- Codex capacity comes from bounded local token_count events when fresh, or caller-visible values when supplied. This is agentic Codex usage metadata, not every ChatGPT product/model limit.",
+    "- The Codex local event shape is undocumented and may change. The reader fails closed and discards prompts, responses, paths, and thread identifiers.",
     "- Claude /usage exposes shared and model-specific percentage/reset windows, not raw token allowances. Each model is gated by the most restrictive applicable window.",
     "- Claude aliases are discovered passively. Exact version ids are recorded from real modelUsage telemetry; aliases may advance when Anthropic updates them.",
     "- Antigravity percentage/reset values are measured only while its local service is already running; inventory never opens the UI just to inspect quota.",
@@ -1759,6 +1894,320 @@ async function getResourceInventory(args = {}) {
   const context = await getTeamCapacityContext(args);
   const candidates = buildResourceCandidates(args, context);
   return formatResourceInventory(args, context, candidates);
+}
+
+function formatCodexUsage(telemetry = readCodexUsageTelemetry()) {
+  const lines = [
+    "AiMobileCodexUsage:",
+    `Found: ${telemetry.found === true}`,
+    `Fresh: ${telemetry.fresh === true}`,
+    `Evidence: ${telemetry.evidence || "unknown"}`,
+    `ObservedAtUtc: ${telemetry.observedAt || "unknown"}`,
+    `AgeSeconds: ${telemetry.ageSeconds ?? "unknown"}`,
+    `PlanType: ${telemetry.planType || "unknown"}`,
+    `State: ${telemetry.state || "unknown"}`,
+    `EffectiveRemainingPercent: ${telemetry.effectiveRemainingPercent ?? "unknown"}`,
+    "Windows:",
+  ];
+  for (const window of telemetry.windows || []) {
+    lines.push(`- ${window.id}: used=${window.usedPercent ?? "unknown"}%; remaining=${window.remainingPercent ?? "unknown"}%; reset=${window.resetAt || "unknown"}; minutes=${window.windowMinutes ?? "unknown"}`);
+  }
+  if (!(telemetry.windows || []).length) lines.push("- unknown");
+  lines.push(
+    `SessionTokens: total=${telemetry.currentSession?.totalTokens ?? "unknown"}; input=${telemetry.currentSession?.inputTokens ?? "unknown"}; cachedInput=${telemetry.currentSession?.cachedInputTokens ?? "unknown"}; output=${telemetry.currentSession?.outputTokens ?? "unknown"}; reasoning=${telemetry.currentSession?.reasoningOutputTokens ?? "unknown"}; contextWindow=${telemetry.currentSession?.contextWindow ?? "unknown"}`,
+    `Privacy: ${telemetry.privacy || "No transcript content is returned."}`,
+    "Boundary: this is local Codex agentic-usage telemetry from an undocumented event shape, not a complete ChatGPT product-limit API. Unknown/stale values remain unknown.",
+  );
+  if (telemetry.reason) lines.push(`Reason: ${telemetry.reason}`);
+  return lines.join("\n");
+}
+
+function profileSummary(profile = readProfile()) {
+  const reviewAt = Date.parse(String(profile.modelPolicyReviewAfter || ""));
+  return {
+    communicationStyle: profile.communicationStyle,
+    address: profile.address,
+    updateStyle: profile.updateStyle,
+    role: profile.role,
+    codexModelAllowPattern: profile.codexModelAllowPattern,
+    modelPolicyReviewAfter: profile.modelPolicyReviewAfter,
+    modelPolicyReviewDue: Number.isFinite(reviewAt) && reviewAt <= Date.now(),
+    cliFirst: profile.cliFirst,
+    uiFallbackOnly: profile.uiFallbackOnly,
+    source: profile.source,
+    path: profile.path,
+  };
+}
+
+function formatOrchestratorProfile(profile = readProfile()) {
+  const safe = profileSummary(profile);
+  return [
+    "AiMobileOrchestratorProfile:",
+    `Source: ${safe.source}`,
+    `CommunicationStyle: ${safe.communicationStyle}`,
+    `Address: ${safe.address || "none"}`,
+    `UpdateStyle: ${safe.updateStyle}`,
+    `Role: ${safe.role}`,
+    `CodexModelAllowPattern: ${safe.codexModelAllowPattern}`,
+    `ModelPolicyReviewAfter: ${safe.modelPolicyReviewAfter || "not-set"}`,
+    `ModelPolicyReviewDue: ${safe.modelPolicyReviewDue}`,
+    `CliFirst: ${safe.cliFirst}`,
+    `UiFallbackOnly: ${safe.uiFallbackOnly}`,
+    `LocalPath: ${safe.path}`,
+    "Privacy: this profile is local runtime configuration and is not stored in the public plugin repository.",
+  ].join("\n");
+}
+
+function boundedWorkerPrompt(item, goal, capsulePath) {
+  const criteria = (item.acceptanceCriteria || []).slice(0, 4).join("; ") || "Return objective-specific evidence, not an acknowledgement.";
+  const verification = (item.verification || []).slice(0, 4).join("; ") || "Run only focused checks relevant to this work item.";
+  const files = (item.expectedFiles || []).slice(0, 12).join(", ") || "discover only the minimum relevant paths";
+  const complexityRank = ({ low: 1, medium: 2, high: 3, critical: 4 })[String(item.complexity || "medium").toLowerCase()] || 2;
+  return [
+    `Project goal: ${truncateText(goal, 1200)}`,
+    `Work item ${item.id}: ${truncateText(item.objective, 900)}`,
+    `Read the transcript-free context capsule at ${capsulePath}; use only the ${item.id} work item and directly relevant local files.`,
+    `Ownership: ${item.readOnly ? "read-only; do not modify files" : `single writer within: ${files}`}.`,
+    "You are not alone in the workspace. Do not revert unrelated or concurrent changes; adapt to them and stay within your ownership boundary.",
+    `Acceptance: ${criteria}`,
+    `Verification: ${verification}`,
+    `Return at most ${resultBulletLimitForComplexity(complexityRank)} concise evidence bullets plus changed files and focused test results. Do not delegate to another agent.`,
+  ].join(" ");
+}
+
+function projectManagerResourceScore(candidate, item, args = {}, primaryWriterId = "") {
+  let score = scoreResourceForWorkItem(candidate, item, args, primaryWriterId);
+  if (!Number.isFinite(score)) return score;
+  const intent = `${item.kind || ""} ${item.objective || ""}`.toLowerCase();
+  if (candidate.dispatchMode === "host-subagent") {
+    if (/architecture|integration|security|incident|migration|risk|final-verification/.test(intent)) score += 24;
+    if (item.complexity === "critical") score += 16;
+    if (item.complexity === "low" && item.readOnly) score -= 12;
+  }
+  if (candidate.platform === "antigravity" && item.readOnly && /discovery|research|review|docs/.test(intent)) score += 10;
+  if (candidate.platform === "claude" && item.readOnly === false && /implementation|debug|refactor|test/.test(intent)) score += 8;
+  return Math.round(score * 10) / 10;
+}
+
+function selectProviderReasoningEffort(resource, item) {
+  if (resource?.platform !== "claude") return selectReasoningEffort(resource || {}, item || {});
+  const text = `${item?.kind || ""} ${item?.objective || ""} ${(item?.requiredCapabilities || []).join(" ")}`.toLowerCase();
+  const explicitMaximum = /\b(max(?:imum)? effort|deepest reasoning|use max)\b/.test(text);
+  const conservativeComplexity = explicitMaximum
+    ? "critical"
+    : String(item?.complexity || "medium").toLowerCase() === "critical"
+      ? "high"
+      : item?.complexity;
+  return selectReasoningEffort(resource, {
+    ...item,
+    complexity: conservativeComplexity,
+    objective: explicitMaximum ? `${item?.objective || ""} maximum effort frontier reasoning` : item?.objective,
+  });
+}
+
+function topologicalStage(workItem, byId, memo = new Map(), stack = new Set()) {
+  if (memo.has(workItem.id)) return memo.get(workItem.id);
+  if (stack.has(workItem.id)) return 0;
+  stack.add(workItem.id);
+  const stage = (workItem.dependsOn || []).reduce((maximum, id) => {
+    const dependency = byId.get(id);
+    return dependency ? Math.max(maximum, topologicalStage(dependency, byId, memo, stack) + 1) : maximum;
+  }, 0);
+  stack.delete(workItem.id);
+  memo.set(workItem.id, stage);
+  return stage;
+}
+
+async function buildProjectManagerPlan(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const goal = String(args.goal || "").trim();
+  if (!goal) throw new Error("project-manager-plan requires a non-empty goal.");
+  const profile = readProfile();
+  const context = await getTeamCapacityContext({ ...args, workspace, codexModel: args.currentCodexModel || args.codexModel });
+  const workItems = buildGoalWorkGraph(args);
+  const capsuleResult = writeContextCapsule({
+    goal,
+    workspace,
+    lifecycleStage: "plan",
+    workItems,
+    constraints: args.constraints,
+    acceptanceCriteria: args.acceptanceCriteria,
+    verification: args.verification,
+    continuitySummary: args.continuitySummary,
+    artifactRefs: args.artifactRefs,
+  });
+  const external = buildResourceCandidates(args, context)
+    .filter((candidate) => candidate.platform !== "codex" && candidate.dispatchable);
+  const host = buildHostCodexCandidates(context.codexCatalog, context.codexTelemetry, {
+    includePattern: modelPattern(profile),
+    hostCapabilityVerified: args.hostCodexAvailable === true,
+  }).map((candidate) => ({
+    ...candidate,
+    outcome: compactOutcome(context.workspaceState?.outcomes?.[candidate.id] || {}),
+    platformReliability: platformReliabilitySummary(context.workspaceState?.outcomes || {}, "codex", args.horizonHours || 5),
+  }));
+  const candidates = [...external, ...host];
+  const writable = workItems.filter((item) => !item.readOnly).sort((a, b) => b.priority - a.priority);
+  const primaryWriterId = writable.length
+    ? candidates
+      .map((candidate) => ({ candidate, score: projectManagerResourceScore(candidate, writable[0], args) }))
+      .filter((row) => Number.isFinite(row.score))
+      .sort((a, b) => b.score - a.score)[0]?.candidate.id || ""
+    : "";
+  const byId = new Map(workItems.map((item) => [item.id, item]));
+  const memo = new Map();
+  const stageResourceCounts = new Map();
+  const stagePlatformCounts = new Map();
+  const actions = workItems.map((item) => {
+    const stage = topologicalStage(item, byId, memo);
+    const ranked = candidates
+      .map((candidate) => {
+        let score = projectManagerResourceScore(candidate, item, args, primaryWriterId);
+        if (item.readOnly && Number.isFinite(score)) {
+          score -= (stageResourceCounts.get(`${stage}:${candidate.id}`) || 0) * 24;
+          score -= (stagePlatformCounts.get(`${stage}:${candidate.platform}`) || 0) * 8;
+        }
+        return { candidate, score: Math.round(score * 10) / 10 };
+      })
+      .filter((row) => Number.isFinite(row.score))
+      .sort((a, b) => b.score - a.score || b.candidate.quality - a.candidate.quality);
+    let selected = ranked[0] || null;
+    if (!item.readOnly && primaryWriterId) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
+    const resource = selected?.candidate || null;
+    if (resource) {
+      stageResourceCounts.set(`${stage}:${resource.id}`, (stageResourceCounts.get(`${stage}:${resource.id}`) || 0) + 1);
+      stagePlatformCounts.set(`${stage}:${resource.platform}`, (stagePlatformCounts.get(`${stage}:${resource.platform}`) || 0) + 1);
+    }
+    const taskCapsulePath = capsuleResult.taskCapsules?.[item.id]?.path || capsuleResult.outputPath;
+    const prompt = boundedWorkerPrompt(item, goal, taskCapsulePath);
+    const hostAction = resource?.dispatchMode === "host-subagent" ? chooseHostCodexAction([resource], item) : null;
+    const providerEffort = hostAction?.reasoningEffort
+      || (resource?.platform === "claude" ? selectProviderReasoningEffort(resource, item) : "provider-managed");
+    const toolName = resource?.platform === "claude"
+      ? "ai-mobile-local.submit-claude-job"
+      : resource?.platform === "antigravity"
+        ? "ai-mobile-local.submit-agy-job"
+        : resource?.platform === "cursor"
+          ? "ai-mobile-local.submit-cursor-job"
+          : hostAction?.hostTool || "codex-current";
+    const mode = item.readOnly ? "review" : String(args.mode || "patch");
+    const toolArgs = resource?.dispatchMode === "host-subagent"
+      ? {
+          agent_type: item.readOnly ? "explorer" : "worker",
+          model: resource.model,
+          reasoning_effort: providerEffort,
+          message: prompt,
+        }
+      : resource?.platform === "claude"
+        ? {
+            goal: prompt,
+            workspace,
+            mode,
+            nextStep: `Complete only ${item.id} using the project capsule.`,
+            model: resource.model,
+            effort: providerEffort,
+            permissionMode: item.readOnly ? "plan" : "acceptEdits",
+            start: true,
+          }
+        : resource?.platform === "antigravity"
+          ? {
+              goal: prompt,
+              workspace,
+              mode,
+              nextStep: `Complete only ${item.id} using the project capsule.`,
+              model: resource.model,
+              start: true,
+            }
+          : resource?.platform === "cursor"
+            ? { goal: prompt, workspace, mode, model: resource.model, start: true }
+            : { action: "current-codex", prompt };
+    return {
+      workItemId: item.id,
+      stage,
+      objective: item.objective,
+      readOnly: item.readOnly,
+      dependsOn: item.dependsOn,
+      resourceId: resource?.id || "codex-current",
+      platform: resource?.platform || "codex",
+      model: resource?.model || context.codexModel,
+      reasoningEffort: providerEffort,
+      dispatchMode: resource?.dispatchMode || (resource ? "external-cli" : "current-codex"),
+      toolName,
+      toolArgs,
+      score: selected?.score ?? null,
+      promptHash: crypto.createHash("sha256").update(prompt).digest("hex").slice(0, 16),
+      taskCapsulePath,
+      acceptanceCriteria: item.acceptanceCriteria,
+      verification: item.verification,
+      alternates: ranked.slice(1, 4).map((row) => row.candidate.id),
+    };
+  });
+  const plan = {
+    schemaVersion: 1,
+    generatedAt: utcStamp(),
+    goal,
+    workspace,
+    horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
+    lifecycle: { current: "plan", stages: ["define", "plan", "execute", "verify", "review", "ship"] },
+    communication: profileSummary(profile),
+    capacity: {
+      codex: context.codexTelemetry,
+      claude: context.claudeUsage,
+      antigravityEvidence: context.antigravityQuotaEvidence,
+      cursorHeadless: context.cursorHeadlessFound,
+    },
+    contextCapsule: {
+      path: capsuleResult.outputPath,
+      hash: capsuleResult.capsule.capsuleHash,
+      transcriptIncluded: false,
+      taskCapsules: capsuleResult.taskCapsules,
+    },
+    fanOutReadyStageZero: shouldFanOut(workItems),
+    oneWriterPerWorkspace: true,
+    orchestrationDepth: 1,
+    mainCodexRole: [
+      "Own the goal, lifecycle gates, and architecture/risk decisions.",
+      "Launch only dependency-ready actions and keep one workspace writer.",
+      "Work directly on the narrow integration path while independent workers run.",
+      "Critique artifacts once, request one bounded correction or provider-diverse failover, then integrate.",
+      "Run final focused verification and report only evidence-backed completion.",
+    ],
+    actions,
+    gates: {
+      execute: "Goal, constraints, ownership, and acceptance criteria are explicit.",
+      verify: "Every worker result is objective-specific and has focused evidence.",
+      ship: "The main Codex session integrated outputs and final checks passed; worker completion alone is insufficient.",
+    },
+  };
+  const planPath = path.join(bridgeRootFor(workspace), "orchestrator", "project-manager-plan.json");
+  writeJsonFile(planPath, plan);
+
+  const lines = [
+    "AiMobileProjectManagerPlan:",
+    `Goal: ${goal}`,
+    `Workspace: ${workspace}`,
+    `PlanPath: ${planPath}`,
+    `ContextCapsule: ${capsuleResult.outputPath}`,
+    `CapsuleHash: ${capsuleResult.capsule.capsuleHash}`,
+    `Communication: ${profile.communicationStyle}; address=${profile.address || "none"}; role=${profile.role}`,
+    `CodexCapacity: state=${context.codexTelemetry?.state || "unknown"}; remaining=${context.codexTelemetry?.effectiveRemainingPercent ?? "unknown"}%; fresh=${context.codexTelemetry?.fresh === true}`,
+    `HostCodex: available=${args.hostCodexAvailable === true}; eligibleModels=${host.filter((candidate) => candidate.state === "available").map((candidate) => candidate.model).join(",") || "none"}`,
+    `FanOutStageZero: ${plan.fanOutReadyStageZero}`,
+    "Actions:",
+  ];
+  for (const action of actions) {
+    lines.push(`- stage=${action.stage}; item=${action.workItemId}; resource=${action.resourceId}; model=${action.model}; effort=${action.reasoningEffort}; mode=${action.dispatchMode}; tool=${action.toolName}; dependsOn=${action.dependsOn.join(",") || "none"}`);
+  }
+  lines.push(
+    "ExecutionContract:",
+    "- The current Codex session is the PM, integration owner, and an active narrow contributor; it does not wait idly while independent work runs.",
+    "- Execute only stage-0 independent actions in parallel. After each dependency gate, launch the next stage.",
+    "- For host-subagent actions, call the host spawn-agent tool with the exact model and reasoning effort in project-manager-plan.json. Never launch codex.exe.",
+    "- For external-cli actions, call the named AI Mobile submit tool with the stored bounded prompt. Use UI only when the CLI cannot represent required visible state.",
+    "- Read each result once, merge once, and verify once. Workers may not create nested workers.",
+    `Next: read ${planPath} for exact bounded prompts, then execute dependency-ready actions.`,
+  );
+  return lines.join("\n");
 }
 
 function normalizeTaskLane(value) {
@@ -2213,7 +2662,11 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       nextStep,
       model: items[0]?.assignedModel || resource.model || "sonnet",
       permissionMode: readOnly ? "plan" : "acceptEdits",
-      effort: complexityRank >= 4 ? "high" : complexityRank === 3 ? "medium" : "low",
+      effort: selectProviderReasoningEffort(resource, {
+        complexity: items.some((item) => item.complexity === "critical") ? "critical" : items.some((item) => item.complexity === "high") ? "high" : items.some((item) => item.complexity === "medium") ? "medium" : "low",
+        kind: items.map((item) => item.kind).join(" "),
+        objective: items.map((item) => item.objective).join(" "),
+      }),
       maxMinutes: complexityRank >= 4 ? 20 : complexityRank === 3 ? 10 : complexityRank === 2 ? 5 : 3,
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
@@ -5402,6 +5855,8 @@ function runSelfTest() {
   const claudeRoster = parseClaudeModelRoster("Provide an alias such as 'fable', 'opus', or 'sonnet'. Full name: claude-fable-5");
   assert(claudeRoster.some((model) => model.id === "fable" && model.resolvedId === "claude-fable-5"), "Claude Fable is discovered from CLI help without starting a job");
   assert(claudeRoster.some((model) => model.id === "haiku"), "Claude Haiku remains available even when CLI help omits its alias");
+  const claudeEfforts = parseClaudeEffortLevels("--effort <level> Effort level for the current session (low, medium, high, xhigh, max)");
+  assert(claudeEfforts.join(",") === "low,medium,high,xhigh,max", "Claude reasoning effort levels are discovered from the current CLI schema");
   const claudeUsage = parseClaudeUsage([
     "Current session: 2% used - resets Jul 11, 8:50am (Australia/Perth)",
     "Current week (all models): 13% used - resets Jul 12, 12pm (Australia/Perth)",
@@ -5414,6 +5869,54 @@ function runSelfTest() {
   assert(fableQuota.windows.length === 3 && fableQuota.remainingPercent === 86, "Fable uses its dedicated weekly window plus shared quota windows");
   const compactCatalog = compactCodexModelCatalog({ client_version: "test", models: [{ slug: "gpt-test", display_name: "GPT Test", visibility: "list", supported_reasoning_levels: [{ effort: "high" }] }, { slug: "hidden", visibility: "hidden" }] });
   assert(compactCatalog.models.length === 1 && compactCatalog.models[0].reasoningLevels[0] === "high", "Codex model catalog is compacted without private instructions");
+  const codexEvent = parseTokenCountEvent(JSON.stringify({
+    timestamp: "2026-07-11T00:00:00.000Z",
+    type: "event_msg",
+    privatePrompt: "SHOULD_NOT_SURVIVE",
+    payload: {
+      type: "token_count",
+      info: { model_context_window: 200000, total_token_usage: { input_tokens: 120, cached_input_tokens: 80, output_tokens: 20, total_tokens: 140 } },
+      rate_limits: {
+        limit_id: "codex",
+        plan_type: "test",
+        primary: { used_percent: 40, window_minutes: 300, resets_at: 1783731600 },
+        secondary: { used_percent: 10, window_minutes: 10080, resets_at: 1784336400 },
+      },
+    },
+  }));
+  assert(codexEvent?.windows?.[0]?.id === "five_hour" && codexEvent.windows[0].remainingPercent === 60, "Codex local rate-limit metadata normalizes five-hour capacity");
+  assert(!JSON.stringify(codexEvent).includes("SHOULD_NOT_SURVIVE"), "Codex telemetry parser discards transcript and unrelated event fields");
+  const hostCatalog = {
+    models: [
+      { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultReasoning: "low", reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"], contextWindow: 353400 },
+      { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "ultra"] },
+      { id: "gpt-future-nova", displayName: "GPT Future Nova", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] },
+    ],
+  };
+  const hostCandidates = buildHostCodexCandidates(hostCatalog, { found: true, fresh: true, state: "healthy", evidence: "test", effectiveRemainingPercent: 70, windows: [] }, { hostCapabilityVerified: true, includePattern: /^gpt-/i });
+  assert(hostCandidates.length === 3 && hostCandidates.some((candidate) => candidate.model === "gpt-future-nova"), "future catalog models remain discoverable without code changes");
+  const criticalHostAction = chooseHostCodexAction(hostCandidates.filter((candidate) => candidate.model === "gpt-5.6-sol"), { objective: "Review an irreversible architecture migration", kind: "architecture-risk", complexity: "critical", requiredCapabilities: ["frontier-reasoning"] });
+  assert(criticalHostAction?.reasoningEffort === "ultra", "critical frontier work selects the strongest supported Codex effort");
+  assert(selectReasoningEffort(hostCandidates.find((candidate) => candidate.model === "gpt-5.6-terra"), { complexity: "low" }) === "low", "low-complexity Codex work selects a supported low effort");
+  const claudeEffortCandidate = { platform: "claude", reasoningLevels: ["low", "medium", "high", "xhigh", "max"], defaultReasoning: "high" };
+  assert(selectProviderReasoningEffort(claudeEffortCandidate, { complexity: "critical", objective: "Review a risky migration" }) === "high", "Claude critical work stays at high effort unless maximum effort is explicitly justified");
+  assert(selectProviderReasoningEffort(claudeEffortCandidate, { complexity: "critical", objective: "Use max effort for the deepest reasoning" }) === "max", "explicit maximum-effort Claude work may use max when supported");
+  const staleHost = buildHostCodexCandidates(hostCatalog, { found: true, fresh: false, state: "healthy", effectiveRemainingPercent: 70, windows: [] }, { hostCapabilityVerified: true, includePattern: /^gpt-5\.6-/i });
+  assert(staleHost.every((candidate) => candidate.state === "capacity-stale"), "stale Codex capacity evidence fails closed for new host assignments");
+  assert(shouldFanOut([{ id: "a", kind: "research", readOnly: true, dependsOn: [] }, { id: "b", kind: "review", readOnly: true, dependsOn: [] }]), "independent distinct read-only work may fan out");
+  assert(!shouldFanOut([{ id: "a", kind: "implementation", readOnly: false, dependsOn: [] }, { id: "b", kind: "implementation", readOnly: false, dependsOn: [] }]), "parallel shared-workspace writers are refused");
+  const capsuleFixture = buildContextCapsule({
+    goal: "Build a bounded project plan",
+    workspace: pluginRoot,
+    workItems: [{ id: "plan", objective: "Inspect the plugin", expectedFiles: ["scripts/ai-mobile-local-mcp.js", "../outside.txt"], acceptanceCriteria: ["plan is evidence-backed"] }],
+    continuitySummary: "Compact prior state only.",
+  });
+  assert(capsuleFixture.policy.transcriptIncluded === false && capsuleFixture.fileEvidence.every((entry) => !entry.path.includes("outside")), "context capsules exclude transcripts and paths outside the workspace");
+  assert(capsuleFixture.projectMap.topLevel.length > 0 && capsuleFixture.projectMap.manifests.some((entry) => entry.path === ".codex-plugin/plugin.json"), "context capsules include a lightweight project map and manifest fingerprints");
+  assert(JSON.stringify(capsuleFixture).length < 12000, "context capsules remain bounded for token-efficient handoffs");
+  const taskCapsuleFixture = buildTaskCapsule(capsuleFixture, capsuleFixture.workItems[0]);
+  assert(JSON.stringify(taskCapsuleFixture).length < 8000 && taskCapsuleFixture.workItem.id === "plan", "workers receive a smaller selective task capsule instead of the whole work graph");
+  assert(boundedWorkerPrompt({ id: "critical", objective: "review", complexity: "critical", expectedFiles: [], acceptanceCriteria: [], verification: [], readOnly: true }, "goal", "capsule.json").includes("at most 10"), "critical worker prompts preserve the intended compact result budget");
   const agyEvidence = liveAgyEvidence({ antigravityLiveReady: true, rawLimits: { Models: [{ Id: "model-x", DisplayName: "Model X", Quota: { RemainingPercent: 73, ResetTimeUtc: "2026-07-11T02:00:00Z" } }] }, recommendedAvailable: [] }, { id: "model-x", displayName: "Model X" });
   assert(agyEvidence.remainingPercent === 73 && agyEvidence.resetAt === "2026-07-11T02:00:00Z", "Antigravity live per-model quota is read from the full model inventory");
   const fakeContext = {
@@ -5554,6 +6057,9 @@ function runSelfTest() {
   try {
     const init = spawnSync("git", ["init", "--quiet", workspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
     assert(init.status === 0, "temporary git workspace initializes");
+    const firstCapsule = writeContextCapsule({ goal: "cache capsule", workspace, workItems: [{ id: "one", objective: "inspect", expectedFiles: [] }] });
+    const reusedCapsule = writeContextCapsule({ goal: "cache capsule", workspace, workItems: [{ id: "one", objective: "inspect", expectedFiles: [] }] });
+    assert(firstCapsule.reused === false && reusedCapsule.reused === true && firstCapsule.capsule.capsuleHash === reusedCapsule.capsule.capsuleHash, "unchanged context capsules reuse the validated local artifact");
     const samplePath = path.join(workspace, "sample.txt");
     fs.writeFileSync(samplePath, "before\n", "utf8");
     const created = createJob({ goal: "self-test", workspace, mode: "review", worker: "self-test" });
@@ -5791,6 +6297,52 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "codex-usage") {
+        sendResult(id, { content: [{ type: "text", text: formatCodexUsage() }] });
+        return;
+      }
+
+      if (name === "context-capsule") {
+        const result = writeContextCapsule(params?.arguments || {});
+        const text = [
+          "AiMobileContextCapsule:",
+          `Path: ${result.outputPath}`,
+          `Hash: ${result.capsule.capsuleHash}`,
+          `Reused: ${result.reused === true}`,
+          `WorkItems: ${result.capsule.workItems.length}`,
+          `TaskCapsules: ${Object.keys(result.taskCapsules || {}).length}`,
+          `FileEvidenceEntries: ${result.capsule.fileEvidence.length}`,
+          "TranscriptIncluded: false",
+          "Next: pass this path to workers; do not paste the parent chat or broad logs.",
+        ].join("\n");
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "project-manager-plan") {
+        const text = await buildProjectManagerPlan(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "orchestrator-profile") {
+        const values = params?.arguments || {};
+        const profile = String(values.action || "get").toLowerCase() === "set"
+          ? writeProfile({
+              communicationStyle: values.communicationStyle,
+              address: values.address,
+              updateStyle: values.updateStyle,
+              role: values.role,
+              codexModelAllowPattern: values.codexModelAllowPattern,
+              modelPolicyReviewAfter: values.modelPolicyReviewAfter,
+              cliFirst: values.cliFirst,
+              uiFallbackOnly: values.uiFallbackOnly,
+            })
+          : readProfile();
+        sendResult(id, { content: [{ type: "text", text: formatOrchestratorProfile(profile) }] });
+        return;
+      }
+
       if (name === "resource-inventory") {
         const text = await getResourceInventory(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
@@ -5952,7 +6504,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -5970,6 +6522,13 @@ if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-effi
     "orchestration-plan-cli": buildOrchestrationPlan,
     "efficiency-flow-cli": buildEfficiencyFlow,
     "run-efficient-task-cli": runEfficientTask,
+    "codex-usage-cli": async () => formatCodexUsage(),
+    "context-capsule-cli": async (value) => {
+      const result = writeContextCapsule(value);
+      return `AiMobileContextCapsule:\nPath: ${result.outputPath}\nHash: ${result.capsule.capsuleHash}\nReused: ${result.reused === true}\nWorkItems: ${result.capsule.workItems.length}\nTaskCapsules: ${Object.keys(result.taskCapsules || {}).length}\nTranscriptIncluded: false`;
+    },
+    "project-manager-plan-cli": buildProjectManagerPlan,
+    "orchestrator-profile-cli": async (value) => formatOrchestratorProfile(String(value.action || "get").toLowerCase() === "set" ? writeProfile(value) : readProfile()),
     "resource-inventory-cli": getResourceInventory,
     "orchestrate-project-cli": orchestrateProject,
     "team-orchestration-plan-cli": buildTeamOrchestrationPlan,

@@ -2,28 +2,34 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for Windows. you can use all of AI tools(apps or software) like Antigravity, Claude, cursor with your mobile with open AI not only that. It turns Codex into a smart resource orchestrator across local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers, including workflows started from the ChatGPT mobile app and continued by Codex on the linked PC.
+AI Mobile is a community Codex MCP plugin for Windows. It turns one Codex chat into a project control room across native Codex workers, local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers. A workflow can start from the ChatGPT mobile app and continue through Codex on the linked PC.
 
-The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players: Codex understands the goal, inventories capability and capacity evidence, builds a work graph, assigns each item to the strongest efficient resource, monitors and redirects failures, critiques results, integrates accepted work, and performs final verification.
+The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players: the current Codex session acts as project manager and active integrator, discovers current models/effort levels/quota windows, packages bounded project context, assigns dependency-aware work, monitors failures, critiques results, and performs final verification.
 
 ## Core Flow
 
-For a nontrivial project goal, use the primary orchestrator:
+For a nontrivial goal, mention `@ai-mobile` in the project chat. The skill calls the primary project-manager tool, detects whether native Codex workers are callable, and executes the returned dependency stages:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<complete outcome>" -Workspace "<path>" -Mode patch -HorizonHours 5 -WaitSeconds 30
+```text
+@ai-mobile orchestrate this project goal using current capacity and CLI-first workers.
 ```
 
-The call passively discovers installed workers/models, uses measured or observed capacity evidence, creates a dependency-aware work graph, keeps one workspace writer, parallelizes independent read-only work, and dispatches through CLI. It does not open Antigravity desktop just to inspect resources.
+PowerShell fallback:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<complete outcome>" -Workspace "<path>" -Mode patch -HorizonHours 5
+```
+
+The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan.
 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 
 ```powershell
 $items = '[{"id":"architecture","objective":"Review the design and risks","kind":"architecture-review","complexity":"high","readOnly":true},{"id":"implementation","objective":"Implement the accepted design","kind":"implementation","complexity":"high","readOnly":false},{"id":"verification","objective":"Independently verify behavior","kind":"testing-review","complexity":"high","readOnly":true,"dependsOn":["implementation"]}]'
-& "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<complete outcome>" -Workspace "<path>" -WorkItemsJson $items -WaitSeconds 30
+& "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<complete outcome>" -Workspace "<path>" -WorkItemsJson $items
 ```
 
-If it returns `State: running`, resume without reading each worker separately:
+The active Codex skill then launches native Codex agents through the host tool and external workers through AI Mobile's CLI adapters. The MCP server never starts `codex.exe`. Existing external-only orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
@@ -44,6 +50,9 @@ Workers write compact artifacts under:
 .antigravity-bridge/last-team-run.json
 .antigravity-bridge/last-team-run.md
 .antigravity-bridge/orchestrator/resource-state.json
+.antigravity-bridge/orchestrator/project-capsule.json
+.antigravity-bridge/orchestrator/project-manager-plan.json
+.antigravity-bridge/orchestrator/task-capsules/<workItemId>.json
 ```
 
 Codex reads those artifacts instead of watching full chats, logs, or source dumps. `status.json` is bridge-owned: worker-written terminal state is ignored until the bridge has finalized the result, telemetry, and execution summary. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
@@ -57,7 +66,7 @@ git clone https://github.com/comprono/Ai-Mobile-Codex-plugin.git "$env:USERPROFI
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
 ```
 
-Restart Codex after installation so the skill and MCP tools are loaded. After that, mention `@ai-mobile` with the project goal; Codex should call `orchestrate-project` itself rather than asking you to choose models or split the work manually.
+Restart Codex after installation so the skill and MCP tools are loaded. After that, mention `@ai-mobile` with the project goal; Codex should call `project-manager-plan`, execute dependency-ready host/external actions, and avoid asking you to choose models manually.
 
 Requirements:
 
@@ -74,12 +83,14 @@ Requirements:
 ```powershell
 # Health and capacity
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" quick
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" codex-usage
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" models
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
 
 # Goal-driven orchestration
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<goal>" -Workspace "<path>" -HorizonHours 5
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<goal>" -Workspace "<path>" -WaitSeconds 30
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 
@@ -102,15 +113,15 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 
 ## MCP Servers
 
-- `ai-mobile-local`: passive resource inventory, goal-driven orchestration, durable jobs, per-run telemetry, bounded failover, model switching, worker submission, job readback, and privacy scan.
+- `ai-mobile-local`: capacity metadata, context capsules, project-manager plans, passive resource inventory, durable jobs, bounded failover, model switching, worker submission, job readback, and privacy scan.
 - `ai-mobile-devtools`: Chromium DevTools bridge for live Antigravity UI inspection and interaction.
 
-Important local tools include `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `quick`, `models`, `limits-summary`, `run-efficient-task`, `submit-agy-job`, `submit-claude-job`, `submit-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
+Important local tools include `project-manager-plan`, `context-capsule`, `codex-usage`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
 
 ## Operating Rules
 
 - Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity.
-- Codex is the goal owner, critic, integrator, and final verifier. External workers receive bounded work items and compact artifact contracts.
+- The current Codex session is project manager, goal owner, critic, active narrow contributor, integrator, and final verifier. Native and external workers receive bounded work items and compact artifact contracts.
 - Selection uses capability fit, required quality, capacity/freshness, speed/cost, independence, and project continuity. It is not a fixed UI/backend/testing map.
 - Project affinity is learned only from successful worker outcomes. Timeouts and failed work lower reliability instead of making that resource more likely for the same task kind.
 - Repeated recent failures without a platform success move broad work to a proven alternative for the five-hour horizon; micro tasks remain eligible for cheap bounded workers.
@@ -135,9 +146,15 @@ Important local tools include `resource-inventory`, `claude-usage`, `orchestrate
 
 ## Capacity Limits
 
-The plugin reads Claude's built-in `/usage` percentages and reset times without running a model prompt. It combines shared five-hour and all-model weekly windows with any model-specific weekly windows, then routes using the most restrictive applicable value. It can also read Antigravity model availability and, while its local service is already running, full per-model percentage/reset evidence from the local language server. Safe capacity snapshots are cached for 10 minutes to reduce repeated local probes.
+The plugin reads current Codex agentic-use windows from recent local `token_count` events, Claude's built-in `/usage` percentages/reset times without running a model prompt, and Antigravity per-model availability while its local service is already running. Every applicable window is combined using the most restrictive remaining value. Safe provider snapshots are cached and revalidated to avoid repeated probes.
 
-Codex does not expose its private remaining-token ledger, so the plugin accepts only caller-visible budget/model details. Unknown capacity remains explicitly unknown. Exact Claude alias ids are learned from CLI help or completed-run telemetry instead of being hardcoded. See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the bucket model, five-hour planning policy, reset-aware premium routing, failover rules, and privacy boundary. The policy also follows [agent-skills orchestration patterns](https://github.com/addyosmani/agent-skills): use the cheapest sufficient direct lane, isolate research context, parallelize only independent work, and keep the merge/verification step in Codex.
+The Codex event shape is undocumented and may change, so the reader fails closed when evidence is stale or unsupported. It returns only numeric capacity/token metadata and discards prompts, responses, paths, and thread identifiers. It is not a complete API for every ChatGPT product/model limit. Unknown capacity remains explicitly unknown.
+
+Model ids and effort levels are discovered from current catalogs and host tool schemas. A private local policy can restrict currently approved families and set a review date; no model id, tier, or reset schedule is assumed permanent. See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the normalized evidence model and failover policy.
+
+## Future-Proof Context Packaging
+
+AI Mobile follows the progressive-disclosure and orchestration ideas in [Addy Osmani's agent-skills repository](https://github.com/addyosmani/agent-skills): keep the active skill small, package a hierarchical context capsule instead of replaying a transcript, isolate broad research, fan out only independent work, keep depth at one, and make the main Codex session own merge and verification. Provider-specific behavior lives behind adapter contracts, so future model names and effort levels are data, not workflow code.
 
 ## Safety
 

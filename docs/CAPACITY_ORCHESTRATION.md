@@ -8,13 +8,19 @@ The orchestrator preserves the source and freshness of every capacity fact:
 
 | Resource | Models | Capacity and reset evidence | Dispatch |
 | --- | --- | --- | --- |
-| Codex | Local Codex model catalog | Caller-visible budget only; the private session ledger is not exposed | Codex remains goal owner, critic, integrator, and verifier |
+| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Native host agent tool; current Codex remains PM, active integrator, and verifier |
 | Claude Code | Installed aliases plus exact ids learned from CLI help or completed-run telemetry | Built-in `/usage` output, cached for 10 minutes | Headless CLI |
 | Antigravity CLI | `agy models` | CLI roster plus recent outcomes | Headless CLI |
 | Antigravity desktop | Full named model roster | Per-model remaining percentage and reset time while the local service is already running | UI only when visible project/chat state is required |
 | Cursor | UI and `cursor-agent` detection | Unknown unless a real headless agent reports it | UI fallback or headless agent when installed |
 
 Evidence is classified as measured, observed, cached, caller-provided, or unknown. Unknown values stay unknown.
+
+## Codex Capacity And Effort
+
+The local reader scans only bounded tails of recent Codex JSONL session files and accepts only `event_msg` rows whose payload type is `token_count`. It normalizes current five-hour, seven-day, and future window shapes, plus numeric session token totals. Prompts, responses, file paths, and thread identifiers are discarded. Because this is an undocumented local event shape, stale or incompatible data fails closed.
+
+Host-native model ids and reasoning efforts come from the current spawn-agent schema when exposed, with the local model catalog as a passive fallback. The planner selects only an effort supported by that model. Maximum efforts are reserved for material criticality or risk; availability alone is not a reason to spend them.
 
 ## Claude Quota Windows
 
@@ -59,16 +65,17 @@ The default horizon is five hours because it captures the immediate work period 
 - whether a result is needed before or after a reset;
 - whether waiting, using an alternate, or spending premium capacity gives the best expected outcome.
 
-Capacity snapshots are cached for 10 minutes to avoid repeatedly calling local CLIs or the Antigravity language server. `refresh=true` or `-RefreshInventory true` forces a new snapshot when a quota change, outage, or reset makes the cache stale in practice.
+Provider snapshots are cached to avoid repeatedly calling local CLIs or the Antigravity language server. Codex local capacity is read from a recent event with a shorter freshness boundary. `refresh=true` or `-RefreshInventory true` forces a fresh provider probe when a quota change, outage, or reset makes the cache stale in practice.
 
 ## Privacy Boundary
 
-The machine cache stores model ids, safe software/version facts, quota percentages and reset times, and compact reliability telemetry. It does not store prompts, chat transcripts, cookies, credentials, organization ids, email addresses, or active Antigravity chat titles.
+The machine cache stores model ids, safe software/version facts, quota percentages and reset times, and compact reliability telemetry. The project capsule stores bounded planning metadata and file fingerprints, not source contents. Neither stores prompts, chat transcripts, cookies, credentials, organization ids, email addresses, or active Antigravity chat titles.
 
 ## Inspect The Current Team
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>" -HorizonHours 5
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" codex-usage
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
 ```
 

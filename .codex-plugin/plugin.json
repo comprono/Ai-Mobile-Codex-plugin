@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
   "version": "0.1.0",
-  "description": "Smart Codex resource orchestrator for local Antigravity models, Claude Code, and optional Cursor workers on Windows, with capability-aware delegation, telemetry, failover, and durable project continuity.",
+  "description": "Capacity-aware Codex project manager for native Codex workers, local Antigravity models, Claude Code, and optional Cursor on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "license": "MIT",
@@ -30,8 +30,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AI Mobile",
-    "shortDescription": "Use Codex as a smart resource orchestrator across local Antigravity and Claude workers.",
-    "longDescription": "AI Mobile turns Codex into a goal-driven local resource orchestrator for Windows. It passively inventories available platforms and models, preserves unknown capacity honestly, builds a dependency-aware work graph, selects resources by capability, quality, capacity, speed, cost, and continuity, dispatches CLI workers, records compact per-run telemetry, and performs one bounded failover when justified. Codex remains the goal owner, critic, integrator, and final verifier. Antigravity desktop is used only when visible project, chat, model, or composer state is required.",
+    "shortDescription": "Run one Codex chat as a capacity-aware project manager across local AI workers.",
+    "longDescription": "AI Mobile turns one Codex chat into a goal-driven project control room for Windows. It discovers native Codex models and supported efforts, local Codex capacity windows, Claude and Antigravity quotas, cooldowns, and recent outcomes; packages transcript-free project context; builds a dependency-aware work graph; and coordinates native host agents with external CLI workers. The current Codex session remains project manager, active narrow contributor, critic, integrator, and final verifier. Provider failures receive one bounded failover, while desktop UI is reserved for visible state that CLI adapters cannot represent.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -42,6 +42,12 @@
     "capabilities": [
       "Local app launch",
       "AI worker orchestration",
+      "Capacity-aware project management",
+      "Native Codex worker planning",
+      "Codex usage-window telemetry",
+      "Dynamic model effort selection",
+      "Transcript-free context capsules",
+      "Progressive disclosure",
       "Team orchestration",
       "Goal-driven resource orchestration",
       "Five-hour capacity horizon",
@@ -73,9 +79,9 @@
       "Public repo privacy scan"
     ],
     "defaultPrompt": [
-      "Orchestrate this project goal with AI Mobile",
+      "Plan and execute this project with AI Mobile using current capacity",
       "Show AI Mobile resource inventory",
-      "Show Claude usage windows"
+      "Show Codex and Claude usage windows"
     ],
     "brandColor": "#14B8A6"
   }

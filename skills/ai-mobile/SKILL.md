@@ -1,172 +1,88 @@
 ---
 name: ai-mobile
-description: Use Codex as a smart resource orchestrator across local Antigravity 2.0, Claude Code, and optional Cursor workers. Use when a project goal should be understood, decomposed, assigned by model capability and observed capacity, monitored, failed over, critiqued, integrated, and verified with durable continuity and UI fallback only when visible state is required.
+description: Use Codex as a capacity-aware project manager across native Codex workers, Claude Code, Antigravity, and optional Cursor. Use when a project should be understood, packaged into bounded context, assigned by current capability and quota, executed CLI-first in parallel where safe, critiqued, integrated, verified, and resumed without replaying the parent chat.
 ---
 
 # AI Mobile
 
-Use this skill when the user asks Codex to coordinate local AI workers, use Antigravity, use Claude Code, use Cursor, inspect model availability, or continue visible Antigravity project/chat work. When this skill is active, do not make the user manually choose a worker or repeatedly remind Codex to delegate.
+Use one Codex chat as the project control room. The current Codex session is the project manager, goal owner, integration owner, and an active narrow contributor. It coordinates workers; it does not become a passive router or duplicate delegated work.
 
-## Resource Orchestrator
+## Default Workflow
 
-This is not a static resource scheduler and not merely a token-saving task splitter. Treat platforms as teams and their models as players. Codex is the coach and goal owner:
+For a nontrivial project goal:
 
-- understand the complete outcome, constraints, project state, and risk;
-- inventory installed teams, models, measured/observed/cached/caller-provided capacity, reset windows, cooldowns, and uncertainty;
-- build a dependency-aware work graph based on capabilities, not fixed UI/backend/testing buckets;
-- choose the strongest efficient resource for each item and explain the decision;
-- brief workers with bounded ownership, start them through CLI, and monitor compact artifacts;
-- critique weak results, send one narrow correction, or fail over only the failed work item once;
-- integrate accepted work, run final targeted verification, and preserve compact continuity for the next run.
+1. Understand the outcome, constraints, risk, current state, acceptance criteria, and focused verification.
+2. Check whether a native host agent tool such as `multi_agent_v1__spawn_agent` is exposed. Never probe or launch `codex.exe`.
+3. Call `ai-mobile-local.project-manager-plan` with `goal`, `workspace`, a dependency-aware `workItems` graph when useful, `horizonHours=5`, and `hostCodexAvailable=true` only when the native host tool is callable.
+4. Read the generated `project-manager-plan.json` once. It contains exact bounded prompts and one transcript-free context-capsule path.
+5. Launch only dependency-ready actions. Parallelize distinct independent work; keep one writer per workspace.
+6. While workers run, the current Codex session handles the narrow critical path: decisions, integration preparation, risk gates, or another non-duplicated item.
+7. Read compact results once. Accept objective-specific evidence, request one bounded correction, or fail over the failed item once to a provider-diverse alternate.
+8. Launch dependent stages only after their gates pass. Merge once, run focused final verification, and report evidence-backed completion.
 
-Codex should spend its own capacity on goal interpretation, architecture/risk decisions, feedback, integration, and final verification. Do not duplicate broad reading or implementation already delegated to a suitable worker.
+Do not ask the user to choose models manually. Do not use every provider merely because it is installed.
 
-Workers:
+## Execution Contract
 
-- Antigravity CLI models: low-RAM discovery, research, product/context review, drafting, independent validation, and bounded implementation when selected by capability/capacity.
-- Antigravity desktop: visible project/chat/model/composer work only.
-- Claude Code CLI: inventory `haiku`, `sonnet`, `opus`, and `fable` aliases, read `/usage` without a model prompt, and record exact ids learned from CLI help or completed-run telemetry. Use Haiku for small bounded work and Sonnet for substantial implementation, architecture, debugging, tests, and review. Use Opus for complex premium reasoning. Use Fable only when explicitly requested or when a healthy dedicated Fable window is near reset and can serve high-value work.
-- Cursor: UI workflow only unless `cursor-status` reports a real headless `cursor-agent`.
+- Native Codex action: call the host agent tool using the exact `model` and `reasoningEffort` in the plan. Workers never spawn workers.
+- Claude action: call `submit-claude-job` with the stored prompt and model.
+- Antigravity action: prefer `submit-agy-job`; use desktop chat/model tools only when visible project or conversation state is part of the task.
+- Cursor action: use only when `cursor-status` reports a true headless agent. The `cursor` launcher is UI, not a headless worker.
+- Current Codex action: perform it directly in this chat with targeted reads and commands.
 
-Using every worker is not the objective. Use only the combination that improves expected quality, time, continuity, or resilience.
+The bridge may start external CLI jobs, but an MCP server cannot invoke host-native Codex agent tools. The active skill must execute those host actions itself.
 
-## Default Call
+## Capacity Rules
 
-For a nontrivial project goal, do a short goal analysis and call one execution tool. The call must inventory current software, model, quota-window, reset, cooldown, and recent-outcome evidence before assignment. Supply structured `workItems` for complex work; otherwise let the tool create a conservative work graph. Do not claim the team is ready from a remembered model list, broadly scan the repository first, or ask the user to split the task by software.
+- `project-manager-plan` and `resource-inventory` discover installed CLIs, model catalogs, quotas, resets, cooldowns, and recent outcomes before assignment.
+- `codex-usage` reads only bounded local `token_count` metadata. It discards prompts, responses, paths, and thread ids. This is Codex agentic-usage evidence, not a complete ChatGPT product-limit API.
+- Preserve unknown or stale capacity as unknown/stale. Never invent token allowances, reset times, or model availability.
+- Apply every quota window that governs a model and route using the most restrictive remaining window.
+- Discover models and supported effort levels from current catalogs/tool schemas. Honor the local model allow-pattern, and flag it when its review date is due.
+- Use the cheapest/fastest model that safely meets the quality floor. Reserve highest efforts and premium models for materially critical reasoning, not routine work.
+- A provider outage, exhausted window, invalid model, timeout, or insufficient result triggers cooldown and one narrow failover. Do not loop retries.
 
-```text
-Call ai-mobile-local.orchestrate-project with goal, workspace, workItems when useful, horizonHours=5, mode, agyModel=auto, claudeModel=auto, waitSeconds=30, and start=true. Auto lets the orchestrator select premium Claude models only when justified.
-Pass codexModel, codexBudgetState, codexRemainingPercent, and codexResetAt only when visible to the caller; never invent them.
-If State is running, later call ai-mobile-local.read-team-run with workspace and waitSeconds=30.
-```
+Detailed policy: [capacity-and-routing.md](references/capacity-and-routing.md).
 
-PowerShell fallback:
+## Context And Continuity
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<goal>" -Workspace "<path>" -Mode patch -HorizonHours 5 -WaitSeconds 30
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
-```
+Workers receive a project capsule, not the parent transcript. It includes only the goal, constraints, work graph, ownership, file fingerprints, decisions, blockers, acceptance gates, verification, and compact artifact references. File contents and broad logs remain local and are read only when relevant.
 
-`run-team-task` remains a compatibility alias. `taskSplit` remains a legacy hint; prefer a work graph with objective, kind, complexity, capabilities, dependencies, read-only state, and optional file boundaries.
-
-For one-lane work:
-
-```text
-Call ai-mobile-local.run-efficient-task with goal, workspace, mode, nextStep, codexBudgetState, estimatedCodexInputTokens, expectedProject, expectedChat, start=true, and submit=true.
-```
-
-PowerShell fallback:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<goal>" -Workspace "<path>" -Mode fast -NextStep "<next step>"
-```
-
-Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from the current Codex session, use the PowerShell helper at `$HOME\plugins\ai-mobile\scripts\antigravity.ps1`.
-
-## Capacity And Selection
-
-- `resource-inventory` is passive. It discovers the local Codex model catalog, Claude auth/CLI aliases and `/usage` windows, Antigravity CLI models, live Antigravity quota only when already running, Cursor UI/headless availability, cooldowns, and recent outcomes.
-- Evidence classes are measured, observed, cached, caller-provided, and unknown. Preserve unknown values as unknown.
-- When Antigravity desktop is stopped, use fast CLI detection and skip its quota probe; never open the desktop just to plan CLI work.
-- Codex remaining tokens are not readable by this plugin. Use visible UI/user-provided budget text only.
-- Claude `/usage` exposes percentage and reset windows without consuming a model prompt. Apply the shared five-hour and all-model weekly windows to every alias, then apply any model-specific weekly row only to that model. Use the most restrictive applicable remaining percentage and reset time; do not infer raw token allowances.
-- A model-specific row is dynamic account evidence. Fable has a dedicated bucket only when `/usage` returns a Fable row; do not assume Sonnet has a separate bucket when no Sonnet row is present.
-- For a five-hour horizon, use real reset/cooldown metadata when present. Do not invent budgets or reset times.
-- Selection weighs capability fit, required quality, capacity/freshness, speed/cost, project continuity, independence, and user preference.
-- Learn task-kind affinity only from successful outcomes. A timeout or failed result must increase reliability penalties and must never create positive affinity for that resource.
-- Aggregate recent outcomes by platform for the five-hour horizon. After repeated failures with no recent success, route broad work to a proven alternative instead of cycling through more models on the same platform; keep micro tasks eligible for bounded cheap workers.
-- Use Flash Low only for tightly file-bounded low-complexity micro tasks. Prefer Flash Medium for broad read-only project review, health inspection, or work without an explicit file boundary.
-- Use a healthy dedicated premium window before reset only for high-value work that already meets the quality threshold. Never spend Fable or Opus on routine work merely because capacity will reset soon.
-- Keep one writer per workspace. Run independent read-only scouts/reviewers in parallel. Respect explicit dependencies.
-- Keep failover pools provider-diverse. On quota, rate limit, outage, timeout, auth, model-unavailable, worker failure, or an insufficient/off-task result, cool down that resource and fail over the narrow item once. Do not retry loops.
-- Exit code 0 is not sufficient evidence. Reject empty, placeholder, generic acknowledgement, model-identity-only, or otherwise non-objective results before reporting worker completion.
-- Every nontrivial work item should carry concise acceptance criteria and focused verification checks. Read only task-relevant context, keep the context budget proportional to complexity, and return a compact artifact.
-- Prefer direct execution for one perspective. Fan out only genuinely independent lanes with distinct outputs, then merge once in Codex. Workers do not invoke other workers and orchestration depth stays one level.
-
-## Durable Artifacts
-
-Workers write under:
+Durable control artifacts live under:
 
 ```text
+.antigravity-bridge/orchestrator/project-capsule.json
+.antigravity-bridge/orchestrator/project-manager-plan.json
+.antigravity-bridge/orchestrator/task-capsules/<workItemId>.json
 .antigravity-bridge/jobs/<jobId>/
 ```
 
-Team launches also write:
+Read only compact worker artifacts: `result.md`, `changed-files.txt`, `diff.patch`, `test-output-summary.md`, `worker-telemetry.json`, and `status.json`.
 
-```text
-.antigravity-bridge/last-team-run.md
-.antigravity-bridge/last-team-run.json
-.antigravity-bridge/orchestrator/resource-state.json
-```
+Detailed contract: [context-capsules.md](references/context-capsules.md).
 
-Use `read-team-run` for the aggregate state. Use `read-job` only for a failed or partial lane that needs detail.
-Keep results complexity-sized: low 5 bullets, medium 6, high 8, and critical 10. Prefer the capped aggregate readback; do not re-read successful jobs individually. Use worker telemetry prompt/result character counts and available token fields to verify efficiency rather than assuming it.
+## Lifecycle Gates
 
-Codex should read only:
+Use `define -> plan -> execute -> verify -> review -> ship`. Worker completion is never project completion. Stop for user input on unresolved ambiguity, irreversible risk, missing authorization, or verification failure.
 
-- `result.md`
-- `changed-files.txt`
-- `diff.patch`
-- `test-output-summary.md`
-- `worker-telemetry.json`
-- `status.json`
+Detailed operating procedure and anti-rationalization checks: [project-manager.md](references/project-manager.md).
 
-Do not paste full logs, chats, screenshots, source files, credentials, cookies, or private transcripts into Codex.
-`status.json` is bridge-owned. Never ask a worker to edit it, and do not accept a worker-written terminal state while the bridge process is still finalizing artifacts.
-If a worker exits after writing finalized telemetry and compact artifacts but before its terminal status update, recover the terminal state and exact failure category from that telemetry.
-`read-job` may mark dead `running` jobs as failed and will omit binary/UTF-16-like artifacts to keep readback compact.
-`State: ready-for-codex` means workers are finished, not that the user goal is complete. Codex must critique, integrate, and verify before claiming completion. `running`, `partial`, `failed`, and `blocked` are not completion.
+## CLI And UI
 
-## Existing Antigravity Chat Rules
+Startup is passive. Do not open, close, or repair desktop apps when Codex starts. Use CLI first to reduce RAM and latency; use UI only for visible state, authentication, unsupported CLI actions, or a verified CLI failure.
 
-Use desktop UI only when visible project/chat state matters.
+Detailed provider behavior: [provider-adapters.md](references/provider-adapters.md).
 
-Before submitting:
+## Local Communication Profile
 
-- verify the intended project,
-- verify the active chat title/context,
-- verify the selected model,
-- verify the composer is idle,
-- use `select-chat` if the target chat is visible but not active.
+Call `orchestrator-profile` when a local communication or model policy is needed. The public default is professional. A private local profile may request a concise royal form of address and a technical-steward role; honor it respectfully without excessive flattery or unsupported certainty. Never commit the local profile.
 
-Never submit into a different or new chat just because the target appears in the sidebar. If `expectedChat` does not match the active document title/context, stop.
+## Fallback
 
-Submission success requires `Submitted: true`, a cleared composer, or a verified worker job with `Started: true`. Otherwise report `submit_failed` and fix selection/submission first.
-
-## Model Routing
-
-- If the user asks for Claude/Sonnet/Opus inside an Antigravity project/chat, select that model in Antigravity. Do not route to Claude Code CLI.
-- If the user asks for Claude Code or headless code review/patch work, let `orchestrate-project` select it or use `submit-claude-job`; keep `maxMinutes`/`ClaudeMaxMinutes` near 10 unless the user asks for a long run.
-- Prefer Haiku for bounded low-risk Claude work, Sonnet for substantial implementation, and Opus for complex premium reasoning. Use Fable only when explicitly requested or when high-value work can use its dedicated window before reset and shared capacity is also healthy.
-- If Sonnet/Opus/GPT-OSS is exhausted in Antigravity, switch to an available Flash/Gemini model with `switch-model`.
-- Prefer a Flash model for low-risk discovery/drafting. Escalate to Pro/Sonnet/Opus only when complexity and capacity justify it.
-
-## Common Commands
+If `ai-mobile-local` is not exposed in the current session, use:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" quick
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>"
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<goal>" -Workspace "<path>" -Mode patch -WaitSeconds 30
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" models
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" agy-status
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-status
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" cursor-status
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<goal>" -Workspace "<path>" -HorizonHours 5
 ```
 
-## Startup And Transport
-
-- Startup must be passive. Do not open, close, restart, or repair Antigravity just because Codex opened.
-- Call `open`, `repair-live`, `switch-model`, `submit-job`, or `submit-offload` only after the user asks to use Antigravity or the task requires it.
-- If `ai-mobile-devtools/list_pages` fails with `Transport closed`, call `devtools-health` once. If pages are live, restart Codex to recreate the DevTools MCP transport or use `handoff-template` for manual paste.
-
-## Boundaries
-
-- Local bridge only; not a cloud service.
-- Does not patch Antigravity internals.
-- Does not bypass quotas, billing, authentication, or safety controls.
-- Does not commit runtime tokens or private user data.
-- Run `privacy` before publishing.
+Tool discovery failure is a route change, not permission to guess.

@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "context-capsule", "project-manager-plan", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -15,6 +15,15 @@ param(
   [string] $CodexBudgetState = "unknown",
   [string] $CodexRemainingPercent = "",
   [string] $CodexResetAt = "",
+  [string] $CurrentCodexEffort = "",
+  [object] $HostCodexAvailable = $false,
+  [string] $ProfileAction = "get",
+  [string] $CommunicationStyle = "",
+  [string] $Address = "",
+  [string] $UpdateStyle = "",
+  [string] $Role = "",
+  [string] $CodexModelAllowPattern = "",
+  [string] $ModelPolicyReviewAfter = "",
   [string] $WorkItemsJson = "",
   [string] $WorkItemsFile = "",
   [string] $ModelPreference = "auto",
@@ -26,6 +35,7 @@ param(
   [object] $AgySandbox = $true,
   [string] $ClaudeModel = "auto",
   [string] $ClaudeFallbackModel = "",
+  [string] $ClaudeEffort = "",
   [string] $ClaudePermissionMode = "",
   [string] $ClaudeMaxBudgetUsd = "",
   [int] $ClaudeMaxMinutes = 10,
@@ -1121,6 +1131,7 @@ function Invoke-TeamCommand {
   $allowPremiumModelsValue = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
   $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
   $refreshInventoryValue = ConvertTo-BooleanValue -Value $RefreshInventory -Default $false
+  $hostCodexAvailableValue = ConvertTo-BooleanValue -Value $HostCodexAvailable -Default $false
   $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
   if (-not (Test-Path -LiteralPath $localMcpScript)) {
     throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
@@ -1134,6 +1145,9 @@ function Invoke-TeamCommand {
     codexModel = $CodexModel
     codexBudgetState = $CodexBudgetState
     codexResetAt = $CodexResetAt
+    currentCodexModel = $CodexModel
+    currentCodexEffort = $CurrentCodexEffort
+    hostCodexAvailable = $hostCodexAvailableValue
     estimatedCodexInputTokens = $EstimatedCodexInputTokens
     mode = $Mode
     agyModel = $AgyModel
@@ -1148,6 +1162,13 @@ function Invoke-TeamCommand {
     expectedChat = $ExpectedChat
     needsVisibleAntigravityChat = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
     start = $startValue
+    action = $ProfileAction
+    communicationStyle = $CommunicationStyle
+    address = $Address
+    updateStyle = $UpdateStyle
+    role = $Role
+    codexModelAllowPattern = $CodexModelAllowPattern
+    modelPolicyReviewAfter = $ModelPolicyReviewAfter
   }
   $remainingPercentValue = 0.0
   if ([double]::TryParse($CodexRemainingPercent, [ref]$remainingPercentValue)) {
@@ -1357,6 +1378,7 @@ function Invoke-ClaudeBridgeCommand {
     nextStep = $NextStep
     model = if ($ClaudeModel -eq "auto") { "sonnet" } else { $ClaudeModel }
     fallbackModel = $ClaudeFallbackModel
+    effort = $ClaudeEffort
     permissionMode = $ClaudePermissionMode
     maxBudgetUsd = $ClaudeMaxBudgetUsd
     start = $startValue
@@ -1594,6 +1616,22 @@ switch ($Command) {
 
   "run-efficient-task" {
     Invoke-RunEfficientTask
+  }
+
+  "codex-usage" {
+    Invoke-BridgeJobCommand -CliCommand "codex-usage-cli"
+  }
+
+  "context-capsule" {
+    Invoke-TeamCommand -CliCommand "context-capsule-cli"
+  }
+
+  "project-manager-plan" {
+    Invoke-TeamCommand -CliCommand "project-manager-plan-cli"
+  }
+
+  "orchestrator-profile" {
+    Invoke-TeamCommand -CliCommand "orchestrator-profile-cli"
   }
 
   "resource-inventory" {

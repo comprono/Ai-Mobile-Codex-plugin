@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added `project-manager-plan`, which coordinates native Codex workers and external CLI workers through a dependency-aware action manifest while the current Codex session remains PM, active contributor, integrator, and verifier.
+- Added privacy-bounded `codex-usage` telemetry for current five-hour/weekly agentic-use windows and numeric session totals; transcript fields, paths, and thread ids are discarded and undocumented schema changes fail closed.
+- Added transcript-free context capsules with bounded work-item budgets, workspace-only file fingerprints, stable hashes, lifecycle gates, and durable continuity under `.antigravity-bridge/orchestrator/`.
+- Added dynamic native Codex model/effort discovery with a private local allow-pattern and review date, including supported Sol/Terra/Luna effort selection without invoking `codex.exe`.
+- Added a private local orchestrator profile for communication/model policy; personal style and address preferences stay outside the public repository.
+- Added live Claude CLI effort discovery and conservative model-effort routing; critical work defaults to high, while xhigh/max require explicit justification and current CLI support.
+- Reworked the skill for progressive disclosure with one-hop project-manager, capacity, context-capsule, and provider-adapter references based on agent-skills orchestration patterns.
 - Added zero-prompt Claude `/usage` inspection with five-hour, all-model weekly, and dynamic model-specific weekly percentage/reset windows.
 - Added quota applicability routing: Sonnet uses shared windows unless a Sonnet row exists, while Fable also uses its dedicated weekly window when exposed.
 - Added Haiku discovery, exact Claude alias resolution from safe evidence, the local Codex model catalog, software versions, and the full live Antigravity named-model inventory.
