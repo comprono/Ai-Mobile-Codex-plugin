@@ -46,7 +46,7 @@ Workers write compact artifacts under:
 .antigravity-bridge/orchestrator/resource-state.json
 ```
 
-Codex reads those artifacts instead of watching full chats, logs, or source dumps. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
+Codex reads those artifacts instead of watching full chats, logs, or source dumps. `status.json` is bridge-owned: worker-written terminal state is ignored until the bridge has finalized the result, telemetry, and execution summary. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
 
 ## Install
 
@@ -115,6 +115,8 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 - Treat "Claude/Sonnet/Opus in an Antigravity chat" as an Antigravity model choice, not Claude Code CLI.
 - Do not submit into an existing chat unless `expectedChat` matches the active Antigravity document title/context.
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
+- Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
+- Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
 - Treat `State: ready-for-codex` as an integration gate, not completion. Codex must verify before reporting the user goal complete.
 - `cancel-job` stops the recorded local worker process tree before marking the job cancelled.
 - If DevTools says `Transport closed`, call `devtools-health` once; do not keep retrying `list_pages`.

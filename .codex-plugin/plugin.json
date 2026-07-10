@@ -38,7 +38,6 @@
     "termsOfServiceURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/README.md",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/icon.svg",
-    "screenshots": [],
     "category": "Productivity",
     "capabilities": [
       "Local app launch",
