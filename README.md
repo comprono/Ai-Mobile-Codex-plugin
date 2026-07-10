@@ -2,7 +2,7 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for Windows.you can use all of AI tools(apps or software) like Antigravity, Claude, cursor with your mobile with open AI not only that. It turns Codex into a smart resource orchestrator across local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers, including workflows started from the ChatGPT mobile app and continued by Codex on the linked PC.
+AI Mobile is a community Codex MCP plugin for Windows. you can use all of AI tools(apps or software) like Antigravity, Claude, cursor with your mobile with open AI not only that. It turns Codex into a smart resource orchestrator across local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers, including workflows started from the ChatGPT mobile app and continued by Codex on the linked PC.
 
 The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players: Codex understands the goal, inventories capability and capacity evidence, builds a work graph, assigns each item to the strongest efficient resource, monitors and redirects failures, critiques results, integrates accepted work, and performs final verification.
 
