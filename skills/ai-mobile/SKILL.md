@@ -25,7 +25,7 @@ Workers:
 
 - Antigravity CLI models: low-RAM discovery, research, product/context review, drafting, independent validation, and bounded implementation when selected by capability/capacity.
 - Antigravity desktop: visible project/chat/model/composer work only.
-- Claude Code CLI Sonnet: high-value implementation, architecture, debugging, tests, and review. Use the local `sonnet` alias; record the exact observed model from per-run JSON telemetry instead of guessing a numbered model.
+- Claude Code CLI: passively inventory the installed `sonnet`, `opus`, and `fable` aliases when the CLI exposes them. Use Sonnet for routine implementation, architecture, debugging, tests, and review. Keep Opus/Fable premium-gated for critical, production, security, migration, release, adversarial, or explicitly premium work; record the exact observed model from per-run JSON telemetry instead of guessing a numbered model.
 - Cursor: UI workflow only unless `cursor-status` reports a real headless `cursor-agent`.
 
 Using every worker is not the objective. Use only the combination that improves expected quality, time, continuity, or resilience.
@@ -35,7 +35,7 @@ Using every worker is not the objective. Use only the combination that improves 
 For a nontrivial project goal, do a short goal analysis and call one execution tool. Supply structured `workItems` for complex work; otherwise let the tool create a conservative work graph. Do not broadly scan the repository first and do not ask the user to split the task by software.
 
 ```text
-Call ai-mobile-local.orchestrate-project with goal, workspace, workItems when useful, horizonHours=5, mode, agyModel=auto, claudeModel=sonnet, waitSeconds=30, and start=true.
+Call ai-mobile-local.orchestrate-project with goal, workspace, workItems when useful, horizonHours=5, mode, agyModel=auto, claudeModel=auto, waitSeconds=30, and start=true. Auto lets the orchestrator select premium Claude models only when justified.
 Pass codexModel, codexBudgetState, codexRemainingPercent, and codexResetAt only when visible to the caller; never invent them.
 If State is running, later call ai-mobile-local.read-team-run with workspace and waitSeconds=30.
 ```
@@ -78,6 +78,8 @@ Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from th
 - Keep one writer per workspace. Run independent read-only scouts/reviewers in parallel. Respect explicit dependencies.
 - Keep failover pools provider-diverse. On quota, rate limit, outage, timeout, auth, model-unavailable, worker failure, or an insufficient/off-task result, cool down that resource and fail over the narrow item once. Do not retry loops.
 - Exit code 0 is not sufficient evidence. Reject empty, placeholder, generic acknowledgement, model-identity-only, or otherwise non-objective results before reporting worker completion.
+- Every nontrivial work item should carry concise acceptance criteria and focused verification checks. Read only task-relevant context, keep the context budget proportional to complexity, and return a compact artifact.
+- Prefer direct execution for one perspective. Fan out only genuinely independent lanes with distinct outputs, then merge once in Codex. Workers do not invoke other workers and orchestration depth stays one level.
 
 ## Durable Artifacts
 

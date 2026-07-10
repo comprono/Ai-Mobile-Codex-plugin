@@ -117,11 +117,14 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 - Use Antigravity CLI before desktop UI when visible project/chat state is not required.
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
 - Use Claude Code for local code, review, patch, and test lanes when UI context is not required.
+- Claude CLI aliases are inventoried passively: Sonnet is the routine default; Opus and Fable 5 are visible premium options. Fable is gated to critical, production, security, migration, release, adversarial, or explicitly premium work so it is not spent on ordinary tasks.
 - Treat "Claude/Sonnet/Opus in an Antigravity chat" as an Antigravity model choice, not Claude Code CLI.
 - Do not submit into an existing chat unless `expectedChat` matches the active Antigravity document title/context.
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
 - Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
 - Keep worker prompts bounded and results complexity-sized. Do not stream worker narration or repeatedly read successful job artifacts into Codex.
+- Give each nontrivial work item concise acceptance criteria and focused verification checks. Load only the relevant context, keep one writer per workspace, and merge independent reports once in Codex.
+- Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
 - Treat `State: ready-for-codex` as an integration gate, not completion. Codex must verify before reporting the user goal complete.
 - If a worker exits after finalizing telemetry but before its terminal status write, recover the real success/failure category from telemetry and compact artifacts instead of reporting a generic process-gone failure.
@@ -130,7 +133,7 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 
 ## Capacity Limits
 
-The plugin can read Antigravity model availability and, while its local service is already running, model percentage/reset evidence exposed by the Antigravity language server. Codex does not expose its private remaining-token ledger, so the plugin accepts caller-visible budget/model details. Claude Code does not expose remaining subscription allowance; AI Mobile records authenticated availability, exact models observed in real JSON results, per-run token telemetry, cooldowns, and failures. Unknown capacity remains explicitly unknown.
+The plugin can read Antigravity model availability and, while its local service is already running, model percentage/reset evidence exposed by the Antigravity language server. Codex does not expose its private remaining-token ledger, so the plugin accepts caller-visible budget/model details. Claude Code does not expose remaining subscription allowance; AI Mobile passively discovers installed model aliases, records authenticated availability, exact models observed in real JSON results, per-run token telemetry, cooldowns, and failures. Unknown capacity remains explicitly unknown. The model policy is informed by [agent-skills orchestration patterns](https://github.com/addyosmani/agent-skills): use the cheapest sufficient direct lane, isolate research context, parallelize only independent work, and keep the merge/verification step in Codex.
 
 ## Safety
 

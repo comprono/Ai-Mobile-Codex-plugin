@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added passive Claude CLI model discovery for Sonnet, Opus, and Fable aliases. Premium Opus/Fable routing is gated to critical or explicitly premium work so routine tasks stay efficient.
+- Added bounded acceptance criteria and focused verification metadata to work items, plus context-budget guidance and one-level fan-out/merge rules inspired by the referenced agent-skills patterns.
 - Added complexity-sized worker result budgets (5/6/8/10 bullets), bounded prompt/readback sizes, and prompt/result character telemetry for measurable token efficiency.
 - Added five-hour platform reliability routing so repeated recent failures move broad work to a proven alternative instead of cycling through more models on the same failing platform.
 - Reduced aggregate Codex readback while preserving detailed failed-lane evidence through `read-job`.

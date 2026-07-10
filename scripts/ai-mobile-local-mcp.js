@@ -140,7 +140,8 @@ const tools = [
         expectedChat: { type: "string", description: "Optional visible Antigravity chat/conversation title." },
         modelPreference: { type: "string", description: "Antigravity desktop model preference.", default: "auto" },
         agyModel: { type: "string", description: "Optional Antigravity CLI model id." },
-        claudeModel: { type: "string", description: "Claude Code model alias.", default: "sonnet" },
+        claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the route choose; routine work defaults to Sonnet.", default: "auto" },
+        allowPremiumModels: { type: "boolean", description: "Allow Fable/Opus for critical or explicitly premium work.", default: false },
         cursorModel: { type: "string", description: "Optional Cursor agent model." },
         start: { type: "boolean", description: "Start the selected worker when possible.", default: true },
         submit: { type: "boolean", description: "Submit into Antigravity desktop when that route is selected.", default: true },
@@ -212,6 +213,8 @@ const tools = [
               expectedFiles: { type: "array", items: { type: "string" }, description: "Optional file ownership boundary." },
               readOnly: { type: "boolean", description: "True for scouts/reviewers; false for implementation.", default: true },
               preferredPlatform: { type: "string", description: "Optional caller preference: codex, claude, antigravity, or cursor." },
+              acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 4, description: "Specific conditions that must be true before this item is accepted." },
+              verification: { type: "array", items: { type: "string" }, maxItems: 4, description: "Focused checks for this item; do not run unrelated suites." },
               priority: { type: "number", description: "Higher values dispatch first.", default: 50 },
             },
             required: ["id", "objective"],
@@ -227,7 +230,8 @@ const tools = [
         estimatedCodexInputTokens: { type: "number", description: "Rough direct-work cost used only as a routing signal.", default: 5000 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
         agyModel: { type: "string", description: "Optional Antigravity model override. Auto lets the orchestrator choose by capability and capacity.", default: "auto" },
-        claudeModel: { type: "string", description: "Claude Code alias; local sonnet currently resolves to the strongest available Sonnet subscription model.", default: "sonnet" },
+        claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the orchestrator choose while routine work defaults to Sonnet.", default: "auto" },
+        allowPremiumModels: { type: "boolean", description: "Allow Fable/Opus for critical or explicitly premium work. Routine work stays off premium models.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
         start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
         waitSeconds: { type: "number", description: "Bounded wait for compact worker artifacts.", default: 30 },
@@ -252,7 +256,7 @@ const tools = [
         estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled without team lanes.", default: 5000 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
         agyModel: { type: "string", description: "Optional Antigravity CLI model id. Use auto or omit it for capacity-aware Flash-first selection.", default: "auto" },
-        claudeModel: { type: "string", description: "Claude Code model alias.", default: "sonnet" },
+        claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the orchestrator choose.", default: "auto" },
         includeCursor: { type: "boolean", description: "Include Cursor as a possible lane only when a true headless cursor-agent is available.", default: false },
         start: { type: "boolean", description: "Start available worker lanes. Use false for plan-only dry runs.", default: true },
         waitSeconds: { type: "number", description: "Bounded time to wait for worker artifacts before returning a resumable running result.", default: 30 },
@@ -944,7 +948,7 @@ async function runEfficientTask(args = {}) {
     selectedTool = "submit-claude-job";
     action = submitClaudeJob({
       ...base,
-      model: args.claudeModel || "sonnet",
+      model: normalizeClaudeDispatchModel(args.claudeModel),
       start: true,
     });
   } else if (route === "cursor-headless") {
@@ -1105,6 +1109,17 @@ function safeClaudeAuthProbe(command) {
   }
 }
 
+function parseClaudeModelRoster(output) {
+  const text = String(output || "");
+  const aliases = [...new Set((text.match(/\b(?:sonnet|opus|fable)\b/gi) || []).map((value) => value.toLowerCase()))];
+  const fullNames = [...new Set((text.match(/\bclaude-[a-z0-9.-]+\b/gi) || []).map((value) => value.toLowerCase()))];
+  return aliases.map((alias) => ({
+    id: alias,
+    displayName: fullNames.find((name) => name.includes(`-${alias}-`) || name.endsWith(`-${alias}`)) || `Claude ${alias[0].toUpperCase()}${alias.slice(1)} (CLI alias)`,
+    evidence: "cli-help",
+  }));
+}
+
 function workspaceResourceStatePath(workspace) {
   return path.join(bridgeRootFor(workspace), "orchestrator", "resource-state.json");
 }
@@ -1199,6 +1214,17 @@ async function getTeamCapacityContext(args = {}) {
     });
   }
 
+  let claudeModels = Array.isArray(cache.claude?.models) ? cache.claude.models : [];
+  if (claude.found && (refresh || !isFreshTimestamp(cache.claude?.modelsCheckedAt) || claudeModels.length === 0)) {
+    const modelProbe = runClaudeCli(claude.command, ["--help"], { timeout: 10000 });
+    if (modelProbe.status === 0) {
+      claudeModels = parseClaudeModelRoster(`${modelProbe.stdout}\n${modelProbe.stderr}`);
+      cache = updateSafeResourceCache({
+        claude: { found: true, models: claudeModels, modelsCheckedAt: utcStamp() },
+      });
+    }
+  }
+
   let quick = null;
   let quickError = "";
   if (liveProbe.live) {
@@ -1232,6 +1258,7 @@ async function getTeamCapacityContext(args = {}) {
     agyFound: agy.found,
     claudeFound: claude.found,
     claudeAuth,
+    claudeModels,
     claudeObservedModel: String(cache.claude?.observedModel || ""),
     cursorHeadlessFound: cursorAgent.found,
     antigravityReady: setup.ReadyForModelLimits === true && recommendedAvailable.length > 0,
@@ -1296,6 +1323,14 @@ function agyModelProfile(model) {
   return { capabilities: [...capabilities], quality, speed, cost };
 }
 
+function claudeModelProfile(model) {
+  const text = String(model || "").toLowerCase();
+  const capabilities = ["general-reasoning", "architecture", "implementation", "debugging", "testing", "review", "docs"];
+  if (/fable/.test(text)) return { capabilities: [...capabilities, "critical-reasoning", "adversarial-review"], quality: 99, speed: 35, cost: 10, premium: true };
+  if (/opus/.test(text)) return { capabilities: [...capabilities, "critical-reasoning", "adversarial-review"], quality: 96, speed: 45, cost: 25, premium: true };
+  return { capabilities, quality: 93, speed: 68, cost: 55, premium: false };
+}
+
 function candidateAvailability(found, authState, outcome = {}, measured = {}) {
   if (!found) return { state: "unavailable", resetAt: "" };
   if (authState === false) return { state: "unavailable", resetAt: "" };
@@ -1351,27 +1386,36 @@ function buildResourceCandidates(args = {}, context = {}) {
     platformReliability: platformReliability.codex,
   }];
 
-  const claudeOutcome = outcomes["claude:sonnet"] || {};
-  const claudeAvailability = candidateAvailability(context.claudeFound, context.claudeAuth?.loggedIn, claudeOutcome);
-  candidates.push({
-    id: "claude:sonnet",
-    platform: "claude",
-    team: "Claude Code CLI",
-    model: "sonnet",
-    displayName: context.claudeObservedModel || "Claude Sonnet (local alias)",
-    dispatchable: true,
-    state: claudeAvailability.state,
-    evidence: claudeOutcome.lastSuccessAt ? "observed-run" : context.claudeAuth?.checked ? "observed-auth" : "detected-cli",
-    remainingPercent: null,
-    resetAt: claudeAvailability.resetAt,
-    capabilities: ["general-reasoning", "architecture", "implementation", "debugging", "testing", "review", "docs"],
-    quality: 93,
-    speed: 68,
-    cost: 55,
-    role: "high-value implementation, architecture, debugging, and independent review",
-    outcome: compactOutcome(claudeOutcome),
-    platformReliability: platformReliability.claude,
-  });
+  const claudeModels = context.claudeModels?.length
+    ? context.claudeModels
+    : [{ id: "sonnet", displayName: context.claudeObservedModel || "Claude Sonnet (local alias)", evidence: "detected-cli" }];
+  for (const model of claudeModels) {
+    const modelId = String(model.id || "sonnet").toLowerCase();
+    const id = `claude:${modelId}`;
+    const claudeOutcome = outcomes[id] || {};
+    const claudeAvailability = candidateAvailability(context.claudeFound, context.claudeAuth?.loggedIn, claudeOutcome);
+    const profile = claudeModelProfile(modelId);
+    candidates.push({
+      id,
+      platform: "claude",
+      team: "Claude Code CLI",
+      model: modelId,
+      displayName: model.displayName || `Claude ${modelId}`,
+      dispatchable: true,
+      state: claudeAvailability.state,
+      evidence: claudeOutcome.lastSuccessAt ? "observed-run" : model.evidence || (context.claudeAuth?.checked ? "observed-auth" : "detected-cli"),
+      remainingPercent: null,
+      resetAt: claudeAvailability.resetAt,
+      capabilities: profile.capabilities,
+      quality: profile.quality,
+      speed: profile.speed,
+      cost: profile.cost,
+      premium: profile.premium,
+      role: profile.premium ? "premium critical-reasoning and adversarial review; never routine work" : "high-value implementation, architecture, debugging, and independent review",
+      outcome: compactOutcome(claudeOutcome),
+      platformReliability: platformReliability.claude,
+    });
+  }
 
   const agyRoster = context.agyModels?.length
     ? context.agyModels
@@ -1444,12 +1488,14 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
   for (const candidate of candidates) {
     const capacity = candidate.remainingPercent === null ? "remaining=unknown" : `remaining=${candidate.remainingPercent}%`;
     const reset = candidate.resetAt ? `; reset=${candidate.resetAt}` : "";
-    lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}`);
+    const policy = candidate.premium ? "; policy=premium-only for critical/explicit work" : "";
+    lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}${policy}`);
   }
   lines.push(
     "TruthBoundary:",
     "- Codex capacity is caller-visible only; this plugin cannot read Codex's private token ledger.",
     "- Claude subscription remaining usage is not exposed by the local CLI; availability is inferred from auth and recent real runs.",
+    "- Claude aliases are discovered passively from the installed CLI help. Fable/Opus are visible for planning but premium-gated; routine work defaults to Sonnet or an efficient alternate.",
     "- Antigravity percentage/reset values are measured only while its local service is already running; inventory never opens the UI just to inspect quota.",
     "- Unknown is preserved as unknown. The orchestrator uses success/failure evidence and bounded failover instead of inventing capacity.",
   );
@@ -1541,6 +1587,8 @@ function normalizeWorkItem(item, index, fallbackComplexity) {
     expectedFiles: Array.isArray(item.expectedFiles) ? item.expectedFiles.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 20) : [],
     readOnly: typeof item.readOnly === "boolean" ? item.readOnly : inferredReadOnly,
     preferredPlatform: normalizeTaskLane(item.preferredPlatform || ""),
+    acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
+    verification: Array.isArray(item.verification) ? item.verification.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
     priority: Math.max(0, Math.min(100, Number(item.priority ?? 50))),
     state: "pending",
     failoverCount: 0,
@@ -1634,12 +1682,20 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
   if ((candidate.outcome?.successfulKinds || []).includes(item.kind)) score += 8;
   score -= Math.min(24, Math.max(0, Number(candidate.outcome?.consecutiveFailures || 0)) * 8);
   if (item.preferredPlatform && item.preferredPlatform === candidate.platform) score += 25;
+  const requestedClaudeModel = normalizedModelText(args.claudeModel || "");
+  if (candidate.platform === "claude" && requestedClaudeModel && requestedClaudeModel !== "auto") {
+    if (normalizedModelText(`${candidate.model} ${candidate.displayName}`).includes(requestedClaudeModel)) score += 40;
+    else score -= 20;
+  }
   if (String(args.agyModel || "auto").toLowerCase() !== "auto" && candidate.platform === "antigravity") {
     const preference = normalizedModelText(args.agyModel);
     if (normalizedModelText(`${candidate.model} ${candidate.displayName}`).includes(preference)) score += 40;
     else score -= 20;
   }
   if (candidate.platform === "claude" && !item.readOnly) score += ["high", "critical"].includes(item.complexity) ? 22 : 14;
+  const premiumWork = item.complexity === "critical"
+    || /security|incident|production|migration|release|irreversible|adversarial/.test(`${item.kind} ${item.objective}`.toLowerCase());
+  if (candidate.platform === "claude" && candidate.premium && args.allowPremiumModels !== true && !premiumWork) score -= 1000;
   if (candidate.platform === "antigravity" && /flash/i.test(candidate.displayName) && item.readOnly && !["critical"].includes(item.complexity)) score += 18;
   const microTask = item.complexity === "low"
     && Array.isArray(item.expectedFiles)
@@ -1711,7 +1767,7 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
     return {
       ...item,
       assignment: assignment?.id || "codex:current",
-      assignedModel: assignment?.platform === "claude" ? String(args.claudeModel || "sonnet") : (assignment?.model || context.codexModel),
+      assignedModel: assignment?.model || (assignment?.platform === "claude" ? String(args.claudeModel || "sonnet") : context.codexModel),
       alternates,
       decisionReason: reason,
     };
@@ -1808,7 +1864,9 @@ function candidateFromManifest(manifest, resourceId) {
 function workItemBrief(items) {
   return items.map((item) => {
     const files = item.expectedFiles?.length ? `; file boundary: ${item.expectedFiles.join(", ")}` : "";
-    return `- ${item.id} [${item.kind}, ${item.complexity}, readOnly=${item.readOnly}]: ${item.objective}${files}`;
+    const acceptance = item.acceptanceCriteria?.length ? `; accept when: ${item.acceptanceCriteria.join(" | ")}` : "";
+    const verification = item.verification?.length ? `; verify: ${item.verification.join(" | ")}` : "";
+    return `- ${item.id} [${item.kind}, ${item.complexity}, readOnly=${item.readOnly}]: ${item.objective}${files}${acceptance}${verification}`;
   }).join("\n");
 }
 
@@ -1825,12 +1883,17 @@ function resultCharacterLimit(args = {}, fallbackBullets = 8) {
   return Math.max(1200, Math.min(4500, boundedResultBulletLimit(args, fallbackBullets) * 450));
 }
 
+function contextCharacterLimitForComplexity(complexityRank) {
+  return ({ 1: 5000, 2: 8000, 3: 12000, 4: 16000 })[Math.max(1, Math.min(4, Number(complexityRank || 2)))] || 8000;
+}
+
 function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const workspace = manifest.workspace;
   const readOnly = items.every((item) => item.readOnly);
   const mode = readOnly ? "review" : (manifest.mode || "patch");
   const complexityRank = Math.max(...items.map((item) => ({ low: 1, medium: 2, high: 3, critical: 4 }[item.complexity] || 2)));
   const maxResultBullets = resultBulletLimitForComplexity(complexityRank);
+  const contextCharacterLimit = contextCharacterLimitForComplexity(complexityRank);
   const goal = [
     manifest.goal,
     "",
@@ -1844,7 +1907,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const nextStep = [
     `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
     readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
-    `State assumptions and blockers explicitly. Keep result.md to ${maxResultBullets} bullets or fewer.`,
+    `State assumptions and blockers explicitly. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria and verification checks.`,
   ].join(" ");
   const expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
   let action = "";
@@ -3121,7 +3184,7 @@ function parseClaudeJsonOutput(stdout) {
   return {
     parsed,
     resultText: String(parsed.result || parsed.message || "").trim(),
-    observedModel: observedModels.find((model) => /sonnet/i.test(model)) || observedModels[0] || "",
+    observedModel: observedModels[0] || "",
     durationMs: Number(parsed.duration_ms ?? parsed.durationMs),
     inputTokens: Number(usage.input_tokens ?? usage.inputTokens),
     cacheCreationInputTokens: Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens),
@@ -3191,6 +3254,11 @@ function safeClaudeFlag(value, name) {
     throw new Error(`Unsafe Claude Code ${name} value. Use a simple model or mode id.`);
   }
   return text;
+}
+
+function normalizeClaudeDispatchModel(value) {
+  const model = String(value || "").trim();
+  return !model || model.toLowerCase() === "auto" ? "sonnet" : model;
 }
 
 function runClaudeCli(command, args, options = {}) {
@@ -3937,7 +4005,8 @@ function runClaudeJobWorker(args = {}) {
     permissionMode,
   ];
   if (permissionMode === "plan") cliArgs.push("--tools", "Read,Grep,Glob");
-  if (args.model) cliArgs.push("--model", safeClaudeFlag(args.model, "model"));
+  const dispatchModel = normalizeClaudeDispatchModel(args.model);
+  if (dispatchModel) cliArgs.push("--model", safeClaudeFlag(dispatchModel, "model"));
   if (args.effort) cliArgs.push("--effort", safeClaudeFlag(args.effort, "effort"));
   if (args.fallbackModel) cliArgs.push("--fallback-model", safeClaudeFlag(args.fallbackModel, "fallbackModel"));
   if (args.maxBudgetUsd !== undefined && args.maxBudgetUsd !== null && String(args.maxBudgetUsd).trim() !== "") {
@@ -4072,7 +4141,7 @@ function submitClaudeJob(args = {}) {
     ...args,
     workspace: created.workspace,
     jobId: created.jobId,
-    model: args.model || args.claudeModel || "sonnet",
+    model: normalizeClaudeDispatchModel(args.model || args.claudeModel),
   });
   const child = spawn(process.execPath, [__filename, "claude-job-worker-cli", "--json-file", payloadPath], {
     cwd: pluginRoot,
@@ -5022,6 +5091,8 @@ function runSelfTest() {
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
   assert(roster.length === 2 && roster[0].id === "gemini-3.5-flash-medium", "Antigravity model roster is parsed without starting its UI");
+  const claudeRoster = parseClaudeModelRoster("Provide an alias such as 'fable', 'opus', or 'sonnet'. Full name: claude-fable-5");
+  assert(claudeRoster.some((model) => model.id === "fable"), "Claude Fable is discovered from CLI help without starting a job");
   const fakeContext = {
     codexModel: "caller model",
     codexBudget: { state: "healthy", text: "healthy" },
@@ -5029,6 +5100,11 @@ function runSelfTest() {
     codexResetAt: "",
     claudeFound: true,
     claudeAuth: { checked: true, loggedIn: true },
+    claudeModels: [
+      { id: "sonnet", displayName: "Claude Sonnet (CLI alias)", evidence: "cli-help" },
+      { id: "opus", displayName: "Claude Opus (CLI alias)", evidence: "cli-help" },
+      { id: "fable", displayName: "Claude Fable 5 (CLI alias)", evidence: "cli-help" },
+    ],
     claudeObservedModel: "claude-sonnet-5",
     agyFound: true,
     agyModels: [
@@ -5052,6 +5128,23 @@ function runSelfTest() {
   assert(orchestrationDecision.workItems.find((item) => item.id === "implement")?.assignment === "claude:sonnet", "high-value implementation selects Claude Sonnet as the single writer");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.assignment.startsWith("antigravity:"), "independent verification selects a different available team");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.alternates.includes("claude:sonnet"), "failover pool keeps a cross-platform alternate even when one provider has many models");
+  const routineDecision = buildResourceOrchestrationDecision({
+    goal: "Draft a routine project review",
+    mode: "review",
+    workItems: [{ id: "routine", objective: "Review the current implementation", kind: "review", complexity: "medium", readOnly: true }],
+  }, fakeContext);
+  assert(routineDecision.workItems[0]?.assignment !== "claude:fable", "routine work never selects premium Claude Fable");
+  const criticalDecision = buildResourceOrchestrationDecision({
+    goal: "Resolve a production incident safely",
+    mode: "patch",
+    workItems: [{ id: "incident", objective: "Resolve a production incident with adversarial verification", kind: "incident-debugging", complexity: "critical", readOnly: false }],
+  }, fakeContext);
+  assert(criticalDecision.workItems[0]?.assignment === "claude:fable", "critical work may select Claude Fable when its quality is justified");
+  const criteriaDecision = buildResourceOrchestrationDecision({
+    goal: "Implement a bounded change",
+    workItems: [{ id: "criteria", objective: "Implement a bounded change", kind: "implementation", acceptanceCriteria: ["test passes"], verification: ["run focused test"], readOnly: false }],
+  }, fakeContext);
+  assert(criteriaDecision.workItems[0]?.acceptanceCriteria?.[0] === "test passes" && criteriaDecision.workItems[0]?.verification?.[0] === "run focused test", "acceptance and focused verification criteria survive normalization");
   const broadReviewDecision = buildResourceOrchestrationDecision({
     goal: "Review current project health and report the main blocker",
     mode: "review",

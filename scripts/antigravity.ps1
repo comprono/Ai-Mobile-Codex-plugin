@@ -24,7 +24,7 @@ param(
   [string] $AgyPrintTimeout = "5m",
   [object] $AgyContinueLatest = $false,
   [object] $AgySandbox = $true,
-  [string] $ClaudeModel = "sonnet",
+  [string] $ClaudeModel = "auto",
   [string] $ClaudeFallbackModel = "",
   [string] $ClaudePermissionMode = "",
   [string] $ClaudeMaxBudgetUsd = "",
@@ -43,6 +43,7 @@ param(
   [object] $SkipModelSwitch = $false,
   [object] $HasWorkspaceWork = $true,
   [object] $IncludeCursor = $false,
+  [object] $AllowPremiumModels = $false,
   [object] $IncludePlan = $false,
   [object] $RefreshInventory = $false,
   [int] $WaitSeconds = 30,
@@ -1081,6 +1082,7 @@ function Invoke-RunEfficientTask {
     modelPreference = $ModelPreference
     agyModel = $runAgyModel
     claudeModel = $ClaudeModel
+    allowPremiumModels = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
     cursorModel = $CursorModel
     start = $startValue
     submit = $submitValue
@@ -1105,6 +1107,7 @@ function Invoke-TeamCommand {
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
+  $allowPremiumModelsValue = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
   $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
   $refreshInventoryValue = ConvertTo-BooleanValue -Value $RefreshInventory -Default $false
   $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
@@ -1124,6 +1127,7 @@ function Invoke-TeamCommand {
     mode = $Mode
     agyModel = $AgyModel
     claudeModel = $ClaudeModel
+    allowPremiumModels = $allowPremiumModelsValue
     includeCursor = $includeCursorValue
     includePlan = $includePlanValue
     refreshInventory = $refreshInventoryValue
@@ -1340,7 +1344,7 @@ function Invoke-ClaudeBridgeCommand {
     workspace = $Workspace
     mode = $Mode
     nextStep = $NextStep
-    model = $ClaudeModel
+    model = if ($ClaudeModel -eq "auto") { "sonnet" } else { $ClaudeModel }
     fallbackModel = $ClaudeFallbackModel
     permissionMode = $ClaudePermissionMode
     maxBudgetUsd = $ClaudeMaxBudgetUsd
