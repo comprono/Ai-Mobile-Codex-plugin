@@ -46,6 +46,7 @@
       "Goal-driven resource orchestration",
       "Five-hour capacity horizon",
       "Resource inventory",
+      "Claude quota-window inspection",
       "Capability-aware model selection",
       "Dependency-aware work graphs",
       "Parallel worker lanes",
@@ -74,16 +75,7 @@
     "defaultPrompt": [
       "Orchestrate this project goal with AI Mobile",
       "Show AI Mobile resource inventory",
-      "Plan AI Mobile resource orchestration",
-      "Read latest AI Mobile team run",
-      "Run efficient task",
-      "Quick check AI Mobile bridge",
-      "Show Antigravity model limits",
-      "Submit Antigravity CLI bridge job",
-      "Switch Antigravity to Flash Medium",
-      "Submit Antigravity bridge job",
-      "Submit Claude Code bridge job",
-      "Read latest AI Mobile job"
+      "Show Claude usage windows"
     ],
     "brandColor": "#14B8A6"
   }

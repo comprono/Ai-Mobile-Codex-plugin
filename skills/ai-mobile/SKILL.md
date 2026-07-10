@@ -25,14 +25,14 @@ Workers:
 
 - Antigravity CLI models: low-RAM discovery, research, product/context review, drafting, independent validation, and bounded implementation when selected by capability/capacity.
 - Antigravity desktop: visible project/chat/model/composer work only.
-- Claude Code CLI: passively inventory the installed `sonnet`, `opus`, and `fable` aliases when the CLI exposes them. Use Sonnet for routine implementation, architecture, debugging, tests, and review. Keep Opus/Fable premium-gated for critical, production, security, migration, release, adversarial, or explicitly premium work; record the exact observed model from per-run JSON telemetry instead of guessing a numbered model.
+- Claude Code CLI: inventory `haiku`, `sonnet`, `opus`, and `fable` aliases, read `/usage` without a model prompt, and record exact ids learned from CLI help or completed-run telemetry. Use Haiku for small bounded work and Sonnet for substantial implementation, architecture, debugging, tests, and review. Use Opus for complex premium reasoning. Use Fable only when explicitly requested or when a healthy dedicated Fable window is near reset and can serve high-value work.
 - Cursor: UI workflow only unless `cursor-status` reports a real headless `cursor-agent`.
 
 Using every worker is not the objective. Use only the combination that improves expected quality, time, continuity, or resilience.
 
 ## Default Call
 
-For a nontrivial project goal, do a short goal analysis and call one execution tool. Supply structured `workItems` for complex work; otherwise let the tool create a conservative work graph. Do not broadly scan the repository first and do not ask the user to split the task by software.
+For a nontrivial project goal, do a short goal analysis and call one execution tool. The call must inventory current software, model, quota-window, reset, cooldown, and recent-outcome evidence before assignment. Supply structured `workItems` for complex work; otherwise let the tool create a conservative work graph. Do not claim the team is ready from a remembered model list, broadly scan the repository first, or ask the user to split the task by software.
 
 ```text
 Call ai-mobile-local.orchestrate-project with goal, workspace, workItems when useful, horizonHours=5, mode, agyModel=auto, claudeModel=auto, waitSeconds=30, and start=true. Auto lets the orchestrator select premium Claude models only when justified.
@@ -65,16 +65,18 @@ Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from th
 
 ## Capacity And Selection
 
-- `resource-inventory` is passive. It discovers Codex caller state, Claude auth/CLI state, Antigravity CLI models, live Antigravity quota only when already running, Cursor headless availability, cooldowns, and recent outcomes.
+- `resource-inventory` is passive. It discovers the local Codex model catalog, Claude auth/CLI aliases and `/usage` windows, Antigravity CLI models, live Antigravity quota only when already running, Cursor UI/headless availability, cooldowns, and recent outcomes.
 - Evidence classes are measured, observed, cached, caller-provided, and unknown. Preserve unknown values as unknown.
 - When Antigravity desktop is stopped, use fast CLI detection and skip its quota probe; never open the desktop just to plan CLI work.
 - Codex remaining tokens are not readable by this plugin. Use visible UI/user-provided budget text only.
-- Claude remaining subscription usage is not exposed by the CLI. Infer availability from auth plus real success/rate-limit outcomes; JSON telemetry records per-run usage and the exact model used.
+- Claude `/usage` exposes percentage and reset windows without consuming a model prompt. Apply the shared five-hour and all-model weekly windows to every alias, then apply any model-specific weekly row only to that model. Use the most restrictive applicable remaining percentage and reset time; do not infer raw token allowances.
+- A model-specific row is dynamic account evidence. Fable has a dedicated bucket only when `/usage` returns a Fable row; do not assume Sonnet has a separate bucket when no Sonnet row is present.
 - For a five-hour horizon, use real reset/cooldown metadata when present. Do not invent budgets or reset times.
 - Selection weighs capability fit, required quality, capacity/freshness, speed/cost, project continuity, independence, and user preference.
 - Learn task-kind affinity only from successful outcomes. A timeout or failed result must increase reliability penalties and must never create positive affinity for that resource.
 - Aggregate recent outcomes by platform for the five-hour horizon. After repeated failures with no recent success, route broad work to a proven alternative instead of cycling through more models on the same platform; keep micro tasks eligible for bounded cheap workers.
 - Use Flash Low only for tightly file-bounded low-complexity micro tasks. Prefer Flash Medium for broad read-only project review, health inspection, or work without an explicit file boundary.
+- Use a healthy dedicated premium window before reset only for high-value work that already meets the quality threshold. Never spend Fable or Opus on routine work merely because capacity will reset soon.
 - Keep one writer per workspace. Run independent read-only scouts/reviewers in parallel. Respect explicit dependencies.
 - Keep failover pools provider-diverse. On quota, rate limit, outage, timeout, auth, model-unavailable, worker failure, or an insufficient/off-task result, cool down that resource and fail over the narrow item once. Do not retry loops.
 - Exit code 0 is not sufficient evidence. Reject empty, placeholder, generic acknowledgement, model-identity-only, or otherwise non-objective results before reporting worker completion.
@@ -135,6 +137,7 @@ Submission success requires `Submitted: true`, a cleared composer, or a verified
 
 - If the user asks for Claude/Sonnet/Opus inside an Antigravity project/chat, select that model in Antigravity. Do not route to Claude Code CLI.
 - If the user asks for Claude Code or headless code review/patch work, let `orchestrate-project` select it or use `submit-claude-job`; keep `maxMinutes`/`ClaudeMaxMinutes` near 10 unless the user asks for a long run.
+- Prefer Haiku for bounded low-risk Claude work, Sonnet for substantial implementation, and Opus for complex premium reasoning. Use Fable only when explicitly requested or when high-value work can use its dedicated window before reset and shared capacity is also healthy.
 - If Sonnet/Opus/GPT-OSS is exhausted in Antigravity, switch to an available Flash/Gemini model with `switch-model`.
 - Prefer a Flash model for low-risk discovery/drafting. Escalate to Pro/Sonnet/Opus only when complexity and capacity justify it.
 
@@ -148,6 +151,7 @@ powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigr
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" agy-status
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-status
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" cursor-status
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest

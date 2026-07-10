@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -691,13 +691,23 @@ function Get-LimitsSummaryObject {
       Unknown = $unknown.Count
     }
     CreditStatus = $report.CreditStatus
+    Models = $namedModels
     RecommendedAvailable = $recommended
     BlockedOrResetting = $blocked
   }
 }
 
 function Get-LimitsSummary {
-  Get-LimitsSummaryObject | ConvertTo-Json -Depth 8
+  $summary = Get-LimitsSummaryObject
+  [PSCustomObject]@{
+    Source = $summary.Source
+    GeneratedAtUtc = $summary.GeneratedAtUtc
+    Note = $summary.Note
+    Counts = $summary.Counts
+    CreditStatus = $summary.CreditStatus
+    RecommendedAvailable = $summary.RecommendedAvailable
+    BlockedOrResetting = $summary.BlockedOrResetting
+  } | ConvertTo-Json -Depth 8
 }
 
 function Get-QuickReport {
@@ -734,6 +744,7 @@ function Get-QuickReport {
       [PSCustomObject]@{
         GeneratedAtUtc = $limitsSummary.GeneratedAtUtc
         Counts = $limitsSummary.Counts
+        Models = $limitsSummary.Models
         RecommendedAvailable = $limitsSummary.RecommendedAvailable
         BlockedOrResetting = $limitsSummary.BlockedOrResetting
       }
@@ -1635,6 +1646,10 @@ switch ($Command) {
 
   "claude-status" {
     Invoke-ClaudeBridgeCommand -CliCommand "claude-status-cli"
+  }
+
+  "claude-usage" {
+    Invoke-ClaudeBridgeCommand -CliCommand "claude-usage-cli"
   }
 
   "submit-claude-job" {

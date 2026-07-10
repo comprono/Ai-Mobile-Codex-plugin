@@ -10,6 +10,7 @@ const pluginRoot = path.resolve(__dirname, "..");
 const helperScript = path.join(pluginRoot, "scripts", "antigravity.ps1");
 const devToolsPortFile = path.join(process.env.APPDATA || "", "Antigravity", "DevToolsActivePort");
 const resourceCacheFile = path.join(process.env.LOCALAPPDATA || os.tmpdir(), "AI Mobile", "resource-cache.json");
+const codexModelsCacheFile = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "models_cache.json");
 const resourceCacheTtlMs = 10 * 60 * 1000;
 const processIdentityCache = new Map();
 
@@ -141,7 +142,7 @@ const tools = [
         modelPreference: { type: "string", description: "Antigravity desktop model preference.", default: "auto" },
         agyModel: { type: "string", description: "Optional Antigravity CLI model id." },
         claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the route choose; routine work defaults to Sonnet.", default: "auto" },
-        allowPremiumModels: { type: "boolean", description: "Allow Fable/Opus for critical or explicitly premium work.", default: false },
+        allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside the automatic policy. Auto reserves Fable for a healthy dedicated reset opportunity.", default: false },
         cursorModel: { type: "string", description: "Optional Cursor agent model." },
         start: { type: "boolean", description: "Start the selected worker when possible.", default: true },
         submit: { type: "boolean", description: "Submit into Antigravity desktop when that route is selected.", default: true },
@@ -231,7 +232,7 @@ const tools = [
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
         agyModel: { type: "string", description: "Optional Antigravity model override. Auto lets the orchestrator choose by capability and capacity.", default: "auto" },
         claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the orchestrator choose while routine work defaults to Sonnet.", default: "auto" },
-        allowPremiumModels: { type: "boolean", description: "Allow Fable/Opus for critical or explicitly premium work. Routine work stays off premium models.", default: false },
+        allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside the automatic policy. Routine work stays off premium models.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
         start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
         waitSeconds: { type: "number", description: "Bounded wait for compact worker artifacts.", default: 30 },
@@ -362,6 +363,11 @@ const tools = [
   {
     name: "claude-status",
     description: "Report whether local Claude Code CLI is installed and usable for headless bridge jobs. Does not start a job.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "claude-usage",
+    description: "Read Claude subscription 5-hour, all-model weekly, and model-specific weekly usage/reset windows through the built-in /usage command. Does not run a model prompt.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -1109,15 +1115,150 @@ function safeClaudeAuthProbe(command) {
   }
 }
 
+function compactCodexModelCatalog(cache) {
+  if (!cache || !Array.isArray(cache.models)) return { found: false, models: [], fetchedAt: "", clientVersion: "" };
+  return {
+    found: true,
+    fetchedAt: String(cache.fetched_at || ""),
+    clientVersion: String(cache.client_version || ""),
+    models: cache.models
+      .filter((model) => model && model.visibility !== "hidden")
+      .map((model) => ({
+        id: String(model.slug || model.id || ""),
+        displayName: String(model.display_name || model.slug || "Codex model"),
+        description: String(model.description || ""),
+        defaultReasoning: String(model.default_reasoning_level || ""),
+        reasoningLevels: Array.isArray(model.supported_reasoning_levels) ? model.supported_reasoning_levels.map((row) => String(row.effort || "")).filter(Boolean) : [],
+        contextWindow: Number.isFinite(Number(model.context_window)) ? Number(model.context_window) : null,
+      }))
+      .filter((model) => model.id),
+  };
+}
+
+function readCodexModelCatalog() {
+  return compactCodexModelCatalog(readJsonFile(codexModelsCacheFile, null));
+}
+
 function parseClaudeModelRoster(output) {
   const text = String(output || "");
-  const aliases = [...new Set((text.match(/\b(?:sonnet|opus|fable)\b/gi) || []).map((value) => value.toLowerCase()))];
+  const aliases = [...new Set((text.match(/\b(?:haiku|sonnet|opus|fable)\b/gi) || []).map((value) => value.toLowerCase()))];
+  if (!aliases.includes("haiku")) aliases.push("haiku");
   const fullNames = [...new Set((text.match(/\bclaude-[a-z0-9.-]+\b/gi) || []).map((value) => value.toLowerCase()))];
-  return aliases.map((alias) => ({
-    id: alias,
-    displayName: fullNames.find((name) => name.includes(`-${alias}-`) || name.endsWith(`-${alias}`)) || `Claude ${alias[0].toUpperCase()}${alias.slice(1)} (CLI alias)`,
-    evidence: "cli-help",
-  }));
+  return aliases.map((alias) => {
+    const resolvedId = fullNames.find((name) => name.includes(`-${alias}-`) || name.endsWith(`-${alias}`)) || "";
+    return {
+      id: alias,
+      resolvedId,
+      displayName: resolvedId || `Claude ${alias[0].toUpperCase()}${alias.slice(1)} (CLI alias)`,
+      evidence: resolvedId ? "cli-help-exact" : "cli-help",
+    };
+  });
+}
+
+function enrichClaudeModelRoster(models = [], claudeCache = {}) {
+  const resolutions = claudeCache.aliasResolutions || {};
+  const observed = String(claudeCache.observedModel || "");
+  return models.map((model) => {
+    const alias = String(model.id || "").toLowerCase();
+    const observedMatch = observed.toLowerCase().includes(`-${alias}-`) || observed.toLowerCase().endsWith(`-${alias}`) ? observed : "";
+    const resolvedId = String(resolutions[alias] || model.resolvedId || observedMatch || "");
+    return {
+      ...model,
+      resolvedId,
+      displayName: resolvedId ? `${resolvedId} (${alias} alias)` : model.displayName,
+      evidence: resolvedId ? "observed-alias-resolution" : model.evidence,
+    };
+  });
+}
+
+function timeZoneOffsetMs(date, timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+    return Date.UTC(values.year, values.month - 1, values.day, values.hour, values.minute, values.second) - date.getTime();
+  } catch {
+    return null;
+  }
+}
+
+function zonedResetIso(parts, timeZone) {
+  const localUtc = Date.UTC(parts.year, parts.month, parts.day, parts.hour, parts.minute, 0);
+  let candidate = localUtc;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const offset = timeZoneOffsetMs(new Date(candidate), timeZone);
+    if (!Number.isFinite(offset)) return "";
+    candidate = localUtc - offset;
+  }
+  return new Date(candidate).toISOString();
+}
+
+function parseClaudeResetTime(value, now = new Date()) {
+  const source = String(value || "").trim();
+  const timeZone = source.match(/\(([^)]+\/[A-Za-z_+-]+)\)\s*$/)?.[1] || "";
+  const raw = source.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const match = raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (!match) return "";
+  const month = new Date(`${match[1]} 1, 2000`).getMonth();
+  if (!Number.isFinite(month)) return "";
+  let hour = Number(match[3]) % 12;
+  if (match[5].toLowerCase() === "pm") hour += 12;
+  const minute = Number(match[4] || 0);
+  const build = (year) => timeZone
+    ? zonedResetIso({ year, month, day: Number(match[2]), hour, minute }, timeZone)
+    : new Date(year, month, Number(match[2]), hour, minute, 0).toISOString();
+  let parsed = build(now.getFullYear());
+  if (!parsed) return "";
+  if (Date.parse(parsed) < now.getTime() - 24 * 60 * 60 * 1000) parsed = build(now.getFullYear() + 1);
+  return parsed;
+}
+
+function parseClaudeUsage(output, now = new Date()) {
+  const windows = [];
+  const cleaned = String(output || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+  for (const line of cleaned.split(/\r?\n/)) {
+    const match = line.trim().match(/^Current\s+(session|week(?:\s+\(([^)]+)\))?):\s*([\d.]+)%\s+used\s*[·-]\s*resets\s+(.+)$/i);
+    if (!match) continue;
+    const period = match[1].toLowerCase();
+    const scopeLabel = String(match[2] || (period === "session" ? "all models" : "all models")).trim();
+    const usedPercent = Math.max(0, Math.min(100, Number(match[3])));
+    const scope = normalizeTaskLane(scopeLabel);
+    windows.push({
+      id: period === "session" ? "five_hour" : `seven_day_${scope === "all-models" ? "all" : scope}`,
+      label: period === "session" ? "Current session" : `Current week${match[2] ? ` (${match[2]})` : ""}`,
+      period: period === "session" ? "five_hour" : "seven_day",
+      scope: scope === "all-models" ? "all" : scope,
+      usedPercent,
+      remainingPercent: Math.round((100 - usedPercent) * 10) / 10,
+      resetText: match[4].trim(),
+      resetAt: parseClaudeResetTime(match[4], now),
+    });
+  }
+  return { checked: true, windows };
+}
+
+function safeClaudeUsageProbe(command) {
+  const result = runClaudeCli(command, ["-p", "--safe-mode", "--tools", "", "--no-session-persistence", "--output-format", "text", "/usage"], { timeout: 20000 });
+  if (result.status !== 0) return { checked: true, windows: [], error: truncateText(result.stderr || result.error?.message || "Claude /usage unavailable", 400) };
+  return parseClaudeUsage(result.stdout);
+}
+
+function formatClaudeUsage(usage = {}) {
+  const lines = ["ClaudeUsage:", `Checked: ${usage.checked === true}`];
+  for (const window of usage.windows || []) {
+    lines.push(`- ${window.id}: used=${window.usedPercent}%; remaining=${window.remainingPercent}%; reset=${window.resetAt || window.resetText || "unknown"}; scope=${window.scope}`);
+  }
+  if (!(usage.windows || []).length) lines.push(`- unavailable: ${usage.error || "no usage windows returned"}`);
+  lines.push("Rule: each model is constrained by the most restrictive shared and model-specific window that applies to it.");
+  return lines.join("\n");
 }
 
 function workspaceResourceStatePath(workspace) {
@@ -1186,14 +1327,44 @@ function compactOutcome(outcome = {}) {
   };
 }
 
+function compactAntigravityQuickSnapshot(report = {}) {
+  return {
+    GeneratedAtUtc: String(report.GeneratedAtUtc || ""),
+    Setup: report.Setup || {},
+    Live: { PageCount: Number(report.Live?.PageCount || 0) },
+    Limits: report.Limits || {},
+    LimitsError: String(report.LimitsError || ""),
+  };
+}
+
 async function getTeamCapacityContext(args = {}) {
   const refresh = args.refreshInventory === true || args.refresh === true;
   const workspace = args.workspace ? safeWorkspacePath(args.workspace) : "";
   let cache = readSafeResourceCache();
   const agy = resolveCommandFast("agy", [process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe") : ""]);
   const claude = resolveCommandFast("claude");
+  const codexCatalog = readCodexModelCatalog();
+  const cursorUi = findCursorApp();
   const cursorAgent = args.includeCursor ? resolveCommandFast("cursor-agent") : { found: false, command: "" };
   const liveProbe = await probeAntigravityDevTools();
+
+  let agyVersion = String(cache.antigravity?.cliVersion || "");
+  if (agy.found && (refresh || !agyVersion || !isFreshTimestamp(cache.antigravity?.versionCheckedAt, 24 * 60 * 60 * 1000))) {
+    const versionProbe = commandCheck(agy.command, ["--version"], { timeout: 5000 });
+    if (versionProbe.ok) {
+      agyVersion = versionProbe.stdout || versionProbe.stderr;
+      cache = updateSafeResourceCache({ antigravity: { cliVersion: agyVersion, versionCheckedAt: utcStamp() } });
+    }
+  }
+
+  let claudeVersion = String(cache.claude?.cliVersion || "");
+  if (claude.found && (refresh || !claudeVersion || !isFreshTimestamp(cache.claude?.versionCheckedAt, 24 * 60 * 60 * 1000))) {
+    const versionProbe = runClaudeCli(claude.command, ["--version"], { timeout: 5000 });
+    if (versionProbe.status === 0) {
+      claudeVersion = String(versionProbe.stdout || versionProbe.stderr || "").trim();
+      cache = updateSafeResourceCache({ claude: { cliVersion: claudeVersion, versionCheckedAt: utcStamp() } });
+    }
+  }
 
   let agyModels = Array.isArray(cache.antigravity?.models) ? cache.antigravity.models : [];
   if (agy.found && (refresh || !isFreshTimestamp(cache.antigravity?.modelsCheckedAt) || agyModels.length === 0)) {
@@ -1219,17 +1390,33 @@ async function getTeamCapacityContext(args = {}) {
     const modelProbe = runClaudeCli(claude.command, ["--help"], { timeout: 10000 });
     if (modelProbe.status === 0) {
       claudeModels = parseClaudeModelRoster(`${modelProbe.stdout}\n${modelProbe.stderr}`);
+      const aliasResolutions = { ...(cache.claude?.aliasResolutions || {}) };
+      for (const model of claudeModels) {
+        if (model.resolvedId) aliasResolutions[model.id] = model.resolvedId;
+      }
       cache = updateSafeResourceCache({
-        claude: { found: true, models: claudeModels, modelsCheckedAt: utcStamp() },
+        claude: { found: true, models: claudeModels, aliasResolutions, modelsCheckedAt: utcStamp() },
       });
     }
   }
 
-  let quick = null;
+  let claudeUsage = cache.claude?.usage || { checked: false, windows: [] };
+  if (claude.found && claudeAuth.loggedIn !== false && (refresh || !isFreshTimestamp(cache.claude?.usageCheckedAt) || !Array.isArray(claudeUsage.windows))) {
+    claudeUsage = safeClaudeUsageProbe(claude.command);
+    cache = updateSafeResourceCache({
+      claude: { found: true, usage: claudeUsage, usageCheckedAt: utcStamp() },
+    });
+  }
+  claudeModels = enrichClaudeModelRoster(claudeModels, cache.claude || {});
+
+  let quick = liveProbe.live ? (cache.antigravity?.quick || null) : null;
+  let antigravityQuotaEvidence = quick ? "cached-live" : "unavailable";
   let quickError = "";
-  if (liveProbe.live) {
+  if (liveProbe.live && (refresh || !quick || !isFreshTimestamp(cache.antigravity?.quickCheckedAt))) {
     try {
-      quick = await runHelper("quick");
+      quick = compactAntigravityQuickSnapshot(await runHelper("quick"));
+      antigravityQuotaEvidence = "measured-live";
+      cache = updateSafeResourceCache({ antigravity: { quick, quickCheckedAt: utcStamp() } });
     } catch (error) {
       quickError = error?.message || String(error);
     }
@@ -1251,18 +1438,25 @@ async function getTeamCapacityContext(args = {}) {
     codexBudget: normalizeBudgetState(args.codexBudgetState || "unknown"),
     codexRemainingPercent: Number.isFinite(Number(args.codexRemainingPercent)) ? Number(args.codexRemainingPercent) : null,
     codexResetAt: String(args.codexResetAt || ""),
+    codexCatalog,
     quickError,
     capacityProbe: liveProbe.live
-      ? "live Antigravity quota plus local CLI/auth evidence"
-      : "passive CLI/auth evidence; Antigravity desktop was not opened for quota inspection",
+      ? `${antigravityQuotaEvidence} Antigravity quota, Claude usage windows, and local CLI/auth evidence`
+      : "Claude usage windows plus passive CLI/auth evidence; Antigravity desktop was not opened for quota inspection",
     agyFound: agy.found,
+    agyVersion,
     claudeFound: claude.found,
+    claudeVersion,
     claudeAuth,
     claudeModels,
+    claudeUsage,
     claudeObservedModel: String(cache.claude?.observedModel || ""),
     cursorHeadlessFound: cursorAgent.found,
+    cursorUiFound: cursorUi.found,
+    cursorUiVersion: cursorUi.version || "",
     antigravityReady: setup.ReadyForModelLimits === true && recommendedAvailable.length > 0,
     antigravityLiveReady: liveProbe.live,
+    antigravityQuotaEvidence,
     recommendedAvailable,
     agyModels,
     rawLimits: limits,
@@ -1277,16 +1471,22 @@ function normalizedModelText(value) {
 
 function liveAgyEvidence(context, model) {
   const needle = normalizedModelText(`${model.id} ${model.displayName}`);
-  const live = (context.recommendedAvailable || []).find((candidate) => {
+  const liveModels = [
+    ...(Array.isArray(context.rawLimits?.Models) ? context.rawLimits.Models : []),
+    ...(context.recommendedAvailable || []),
+  ];
+  const live = liveModels.find((candidate) => String(candidate.Id || candidate.id || "").toLowerCase() === String(model.id || "").toLowerCase())
+    || liveModels.find((candidate) => {
     const candidateText = normalizedModelText(`${candidate.Id || ""} ${candidate.Name || ""} ${candidate.DisplayName || ""}`);
     return candidateText && (needle.includes(candidateText) || candidateText.includes(normalizedModelText(model.displayName)));
   });
   if (!live) return { remainingPercent: null, resetAt: "", evidence: context.antigravityLiveReady ? "live-unknown" : "observed-roster" };
-  const remaining = Number(live.RemainingPercent ?? live.remainingPercent ?? live.remaining);
+  const quota = live.Quota || live.quota || {};
+  const remaining = Number(quota.RemainingPercent ?? quota.remainingPercent ?? live.RemainingPercent ?? live.remainingPercent ?? live.remaining);
   return {
     remainingPercent: Number.isFinite(remaining) ? remaining : null,
-    resetAt: String(live.ResetAt || live.ResetTime || live.ResetUtc || live.resetAt || live.resetTime || ""),
-    evidence: "measured-live",
+    resetAt: String(quota.ResetTimeUtc || quota.resetTimeUtc || live.ResetTimeUtc || live.ResetAt || live.ResetTime || live.ResetUtc || live.resetAt || live.resetTime || ""),
+    evidence: context.antigravityQuotaEvidence || "measured-live",
   };
 }
 
@@ -1326,9 +1526,26 @@ function agyModelProfile(model) {
 function claudeModelProfile(model) {
   const text = String(model || "").toLowerCase();
   const capabilities = ["general-reasoning", "architecture", "implementation", "debugging", "testing", "review", "docs"];
-  if (/fable/.test(text)) return { capabilities: [...capabilities, "critical-reasoning", "adversarial-review"], quality: 99, speed: 35, cost: 10, premium: true };
-  if (/opus/.test(text)) return { capabilities: [...capabilities, "critical-reasoning", "adversarial-review"], quality: 96, speed: 45, cost: 25, premium: true };
-  return { capabilities, quality: 93, speed: 68, cost: 55, premium: false };
+  if (/fable/.test(text)) return { capabilities: [...capabilities, "critical-reasoning", "adversarial-review"], quality: 96, speed: 35, cost: 10, premium: true };
+  if (/opus/.test(text)) return { capabilities: [...capabilities, "critical-reasoning", "adversarial-review"], quality: 97, speed: 45, cost: 25, premium: true };
+  if (/haiku/.test(text)) return { capabilities: ["general-reasoning", "discovery", "testing", "review", "docs", "fast-analysis"], quality: 74, speed: 95, cost: 98, premium: false };
+  return { capabilities, quality: 98, speed: 68, cost: 55, premium: false };
+}
+
+function claudeQuotaForModel(usage = {}, modelId = "") {
+  const normalized = normalizeTaskLane(modelId);
+  const windows = (usage.windows || []).filter((window) => window.scope === "all" || normalized.includes(window.scope) || window.scope.includes(normalized));
+  const limiting = [...windows].sort((a, b) => Number(a.remainingPercent) - Number(b.remainingPercent))[0] || null;
+  const dedicated = windows.filter((window) => window.scope !== "all").sort((a, b) => Number(a.remainingPercent) - Number(b.remainingPercent))[0] || null;
+  const shared = windows.filter((window) => window.scope === "all").sort((a, b) => Number(a.remainingPercent) - Number(b.remainingPercent))[0] || null;
+  return {
+    windows,
+    remainingPercent: limiting ? Number(limiting.remainingPercent) : null,
+    resetAt: limiting?.resetAt || "",
+    dedicatedRemainingPercent: dedicated ? Number(dedicated.remainingPercent) : null,
+    dedicatedResetAt: dedicated?.resetAt || "",
+    sharedRemainingPercent: shared ? Number(shared.remainingPercent) : null,
+  };
 }
 
 function candidateAvailability(found, authState, outcome = {}, measured = {}) {
@@ -1393,7 +1610,8 @@ function buildResourceCandidates(args = {}, context = {}) {
     const modelId = String(model.id || "sonnet").toLowerCase();
     const id = `claude:${modelId}`;
     const claudeOutcome = outcomes[id] || {};
-    const claudeAvailability = candidateAvailability(context.claudeFound, context.claudeAuth?.loggedIn, claudeOutcome);
+    const measured = claudeQuotaForModel(context.claudeUsage, modelId);
+    const claudeAvailability = candidateAvailability(context.claudeFound, context.claudeAuth?.loggedIn, claudeOutcome, measured);
     const profile = claudeModelProfile(modelId);
     candidates.push({
       id,
@@ -1404,14 +1622,24 @@ function buildResourceCandidates(args = {}, context = {}) {
       dispatchable: true,
       state: claudeAvailability.state,
       evidence: claudeOutcome.lastSuccessAt ? "observed-run" : model.evidence || (context.claudeAuth?.checked ? "observed-auth" : "detected-cli"),
-      remainingPercent: null,
+      remainingPercent: measured.remainingPercent,
       resetAt: claudeAvailability.resetAt,
+      quotaWindows: measured.windows,
+      dedicatedRemainingPercent: measured.dedicatedRemainingPercent,
+      dedicatedResetAt: measured.dedicatedResetAt,
+      sharedRemainingPercent: measured.sharedRemainingPercent,
       capabilities: profile.capabilities,
       quality: profile.quality,
       speed: profile.speed,
       cost: profile.cost,
       premium: profile.premium,
-      role: profile.premium ? "premium critical-reasoning and adversarial review; never routine work" : "high-value implementation, architecture, debugging, and independent review",
+      role: profile.premium
+        ? (/fable/i.test(modelId)
+          ? "dedicated-capacity premium review when explicitly requested or near reset; never routine work"
+          : "premium complex reasoning and adversarial review; never routine work")
+        : /haiku/i.test(modelId)
+          ? "fast bounded discovery, summaries, tests, and low-risk review"
+          : "high-value implementation, architecture, debugging, and independent review",
       outcome: compactOutcome(claudeOutcome),
       platformReliability: platformReliability.claude,
     });
@@ -1483,19 +1711,44 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     `GeneratedAtUtc: ${utcStamp()}`,
     `HorizonHours: ${horizonHours}`,
     `Evidence: ${context.capacityProbe}`,
+    "Software:",
+    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; current-model/limits=caller-visible-only`,
+    `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}`,
+    `- Antigravity: cli=${context.agyFound}; cli-version=${context.agyVersion || "unknown"}; desktop-live=${context.antigravityLiveReady}; live-models=${(context.rawLimits?.Models || []).filter((model) => model.DisplayName).length}`,
+    `- Cursor: ui=${context.cursorUiFound}; headless-agent=${context.cursorHeadlessFound}; version=${String(context.cursorUiVersion || "unknown").split(/\r?\n/)[0]}`,
     "TeamsAndModels:",
   ];
   for (const candidate of candidates) {
     const capacity = candidate.remainingPercent === null ? "remaining=unknown" : `remaining=${candidate.remainingPercent}%`;
     const reset = candidate.resetAt ? `; reset=${candidate.resetAt}` : "";
-    const policy = candidate.premium ? "; policy=premium-only for critical/explicit work" : "";
+    const policy = candidate.premium
+      ? (/fable/i.test(`${candidate.model} ${candidate.displayName}`)
+        ? "; policy=explicit or high-value dedicated-reset opportunity"
+        : "; policy=complex premium reasoning or explicit request")
+      : "";
     lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}${policy}`);
   }
+  lines.push("ClaudeQuotaWindows:");
+  for (const window of context.claudeUsage?.windows || []) {
+    lines.push(`- ${window.id}: used=${window.usedPercent}%; remaining=${window.remainingPercent}%; reset=${window.resetAt || window.resetText || "unknown"}; applies=${window.scope}`);
+  }
+  if (!(context.claudeUsage?.windows || []).length) lines.push("- unknown");
+  lines.push("CodexCatalog:");
+  for (const model of context.codexCatalog?.models || []) {
+    lines.push(`- ${model.id} | ${model.displayName}; defaultReasoning=${model.defaultReasoning || "unknown"}; reasoning=${model.reasoningLevels.join(",") || "unknown"}; limits=unknown`);
+  }
+  if (!(context.codexCatalog?.models || []).length) lines.push("- unknown");
+  lines.push("AntigravityLiveModels:");
+  for (const model of (context.rawLimits?.Models || []).filter((row) => row.DisplayName && row.Disabled !== true)) {
+    const quota = model.Quota || {};
+    lines.push(`- ${model.Id} | ${model.DisplayName}; provider=${model.ApiProvider || "unknown"}; remaining=${Number.isFinite(Number(quota.RemainingPercent)) ? `${quota.RemainingPercent}%` : "unknown"}; reset=${quota.ResetTimeUtc || "unknown"}`);
+  }
+  if (!(context.rawLimits?.Models || []).some((row) => row.DisplayName && row.Disabled !== true)) lines.push("- unavailable while Antigravity is stopped");
   lines.push(
     "TruthBoundary:",
     "- Codex capacity is caller-visible only; this plugin cannot read Codex's private token ledger.",
-    "- Claude subscription remaining usage is not exposed by the local CLI; availability is inferred from auth and recent real runs.",
-    "- Claude aliases are discovered passively from the installed CLI help. Fable/Opus are visible for planning but premium-gated; routine work defaults to Sonnet or an efficient alternate.",
+    "- Claude /usage exposes shared and model-specific percentage/reset windows, not raw token allowances. Each model is gated by the most restrictive applicable window.",
+    "- Claude aliases are discovered passively. Exact version ids are recorded from real modelUsage telemetry; aliases may advance when Anthropic updates them.",
     "- Antigravity percentage/reset values are measured only while its local service is already running; inventory never opens the UI just to inspect quota.",
     "- Unknown is preserved as unknown. The orchestrator uses success/failure evidence and bounded failover instead of inventing capacity.",
   );
@@ -1666,6 +1919,23 @@ function requiredQuality(complexity) {
   return { low: 55, medium: 68, high: 82, critical: 90 }[normalizeComplexity(complexity)] || 68;
 }
 
+function hoursUntil(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) ? Math.max(0, (timestamp - Date.now()) / (60 * 60 * 1000)) : null;
+}
+
+function premiumCapacityOpportunity(candidate, item, args = {}) {
+  if (!candidate.premium || !["high", "critical"].includes(item.complexity)) return false;
+  const resetHours = hoursUntil(candidate.dedicatedResetAt);
+  const horizon = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  return Number.isFinite(candidate.dedicatedRemainingPercent)
+    && candidate.dedicatedRemainingPercent >= 40
+    && Number.isFinite(candidate.sharedRemainingPercent)
+    && candidate.sharedRemainingPercent >= 30
+    && Number.isFinite(resetHours)
+    && resetHours <= horizon;
+}
+
 function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = "") {
   if (!candidate.dispatchable || candidate.state !== "available") return Number.NEGATIVE_INFINITY;
   const availableCapabilities = new Set(candidate.capabilities || []);
@@ -1684,8 +1954,11 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
   if (item.preferredPlatform && item.preferredPlatform === candidate.platform) score += 25;
   const requestedClaudeModel = normalizedModelText(args.claudeModel || "");
   if (candidate.platform === "claude" && requestedClaudeModel && requestedClaudeModel !== "auto") {
-    if (normalizedModelText(`${candidate.model} ${candidate.displayName}`).includes(requestedClaudeModel)) score += 40;
-    else score -= 20;
+    const candidateModelText = normalizedModelText(`${candidate.model} ${candidate.displayName}`);
+    const requestedFamily = ["haiku", "sonnet", "opus", "fable"].find((family) => requestedClaudeModel.includes(family)) || "";
+    const matches = candidateModelText.includes(requestedClaudeModel) || (requestedFamily && candidateModelText.includes(requestedFamily));
+    if (matches) score += 60;
+    else score -= 1000;
   }
   if (String(args.agyModel || "auto").toLowerCase() !== "auto" && candidate.platform === "antigravity") {
     const preference = normalizedModelText(args.agyModel);
@@ -1693,9 +1966,19 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
     else score -= 20;
   }
   if (candidate.platform === "claude" && !item.readOnly) score += ["high", "critical"].includes(item.complexity) ? 22 : 14;
+  const capacityOpportunity = premiumCapacityOpportunity(candidate, item, args);
   const premiumWork = item.complexity === "critical"
+    || capacityOpportunity
     || /security|incident|production|migration|release|irreversible|adversarial/.test(`${item.kind} ${item.objective}`.toLowerCase());
-  if (candidate.platform === "claude" && candidate.premium && args.allowPremiumModels !== true && !premiumWork) score -= 1000;
+  const isFable = candidate.platform === "claude" && /fable/i.test(`${candidate.model} ${candidate.displayName}`);
+  const fableRequested = normalizedModelText(args.claudeModel || "").includes("fable");
+  if (isFable) {
+    if (args.allowPremiumModels !== true && !fableRequested && !capacityOpportunity) score -= 1000;
+  } else if (candidate.platform === "claude" && candidate.premium && args.allowPremiumModels !== true && !premiumWork) {
+    score -= 1000;
+  }
+  if (capacityOpportunity) score += 18;
+  if (candidate.remainingPercent !== null && candidate.remainingPercent < 15) score -= 25;
   if (candidate.platform === "antigravity" && /flash/i.test(candidate.displayName) && item.readOnly && !["critical"].includes(item.complexity)) score += 18;
   const microTask = item.complexity === "low"
     && Array.isArray(item.expectedFiles)
@@ -1737,6 +2020,14 @@ function selectAlternateResourceIds(ranked, selectedCandidate, limit = 3) {
   return selected.map((row) => row.candidate.id);
 }
 
+function resourceCapacityReason(candidate, item, args = {}) {
+  const remaining = candidate.remainingPercent === null ? "remaining unknown" : `${candidate.remainingPercent}% remaining`;
+  const reset = candidate.resetAt ? `reset ${candidate.resetAt}` : "reset unknown";
+  if (premiumCapacityOpportunity(candidate, item, args)) return `${remaining}; ${reset}; dedicated premium window should be used for this high-value item before reset`;
+  if (Array.isArray(candidate.quotaWindows) && candidate.quotaWindows.length > 1) return `${remaining}; ${reset}; most restrictive of ${candidate.quotaWindows.length} applicable quota windows`;
+  return `${remaining}; ${reset}`;
+}
+
 function buildResourceOrchestrationDecision(args = {}, context = {}) {
   const candidates = buildResourceCandidates(args, context);
   const workItems = buildGoalWorkGraph(args);
@@ -1754,7 +2045,7 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
     const assignment = selected?.candidate || null;
     const alternates = selectAlternateResourceIds(ranked, assignment, 3);
     const reason = assignment
-      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${item.readOnly ? "independent read-only work" : "single workspace writer"}`
+      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${resourceCapacityReason(assignment, item, args)}; ${item.readOnly ? "independent read-only work" : "single workspace writer"}`
       : "no dispatchable resource currently satisfies the work item";
     decisions.push({
       workItemId: item.id,
@@ -3149,10 +3440,19 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
   });
 
   if (safeTelemetry.provider === "claude" && safeTelemetry.observedModel) {
+    const requestedText = `${safeTelemetry.requestedModel} ${resourceId.split(":")[1] || ""}`.toLowerCase();
+    const alias = ["haiku", "sonnet", "opus", "fable"].find((name) => requestedText.includes(name)) || "";
+    const currentCache = readSafeResourceCache();
     const claudePatch = {
       observedModel: safeTelemetry.observedModel,
       lastOutcomeAt: now,
     };
+    if (alias) {
+      claudePatch.aliasResolutions = {
+        ...(currentCache.claude?.aliasResolutions || {}),
+        [alias]: safeTelemetry.observedModel,
+      };
+    }
     if (success) claudePatch.lastSuccessAt = now;
     updateSafeResourceCache({
       claude: claudePatch,
@@ -3329,6 +3629,14 @@ function getClaudeStatusText() {
     "SupportedBridge: headless Claude Code CLI via claude -p",
     "Startup: passive; no Claude job is started by this status check.",
   ].join("\n");
+}
+
+function getClaudeUsageText() {
+  const status = findClaudeCode();
+  if (!status.found) return "ClaudeUsage:\nChecked: false\n- unavailable: Claude Code CLI was not found.";
+  const usage = safeClaudeUsageProbe(status.command);
+  updateSafeResourceCache({ claude: { found: true, usage, usageCheckedAt: utcStamp() } });
+  return formatClaudeUsage(usage);
 }
 
 function quoteCmdArg(value) {
@@ -5092,7 +5400,22 @@ function runSelfTest() {
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
   assert(roster.length === 2 && roster[0].id === "gemini-3.5-flash-medium", "Antigravity model roster is parsed without starting its UI");
   const claudeRoster = parseClaudeModelRoster("Provide an alias such as 'fable', 'opus', or 'sonnet'. Full name: claude-fable-5");
-  assert(claudeRoster.some((model) => model.id === "fable"), "Claude Fable is discovered from CLI help without starting a job");
+  assert(claudeRoster.some((model) => model.id === "fable" && model.resolvedId === "claude-fable-5"), "Claude Fable is discovered from CLI help without starting a job");
+  assert(claudeRoster.some((model) => model.id === "haiku"), "Claude Haiku remains available even when CLI help omits its alias");
+  const claudeUsage = parseClaudeUsage([
+    "Current session: 2% used - resets Jul 11, 8:50am (Australia/Perth)",
+    "Current week (all models): 13% used - resets Jul 12, 12pm (Australia/Perth)",
+    "Current week (Fable): 14% used - resets Jul 12, 12pm (Australia/Perth)",
+  ].join("\n"), new Date("2026-07-10T21:30:00Z"));
+  assert(claudeUsage.windows.length === 3 && claudeUsage.windows[0].resetAt === "2026-07-11T00:50:00.000Z", "Claude usage windows and timezone-aware resets are parsed without a model prompt");
+  const sonnetQuota = claudeQuotaForModel(claudeUsage, "sonnet");
+  const fableQuota = claudeQuotaForModel(claudeUsage, "fable");
+  assert(sonnetQuota.windows.length === 2 && sonnetQuota.remainingPercent === 87, "Sonnet uses shared session and all-model weekly quota windows");
+  assert(fableQuota.windows.length === 3 && fableQuota.remainingPercent === 86, "Fable uses its dedicated weekly window plus shared quota windows");
+  const compactCatalog = compactCodexModelCatalog({ client_version: "test", models: [{ slug: "gpt-test", display_name: "GPT Test", visibility: "list", supported_reasoning_levels: [{ effort: "high" }] }, { slug: "hidden", visibility: "hidden" }] });
+  assert(compactCatalog.models.length === 1 && compactCatalog.models[0].reasoningLevels[0] === "high", "Codex model catalog is compacted without private instructions");
+  const agyEvidence = liveAgyEvidence({ antigravityLiveReady: true, rawLimits: { Models: [{ Id: "model-x", DisplayName: "Model X", Quota: { RemainingPercent: 73, ResetTimeUtc: "2026-07-11T02:00:00Z" } }] }, recommendedAvailable: [] }, { id: "model-x", displayName: "Model X" });
+  assert(agyEvidence.remainingPercent === 73 && agyEvidence.resetAt === "2026-07-11T02:00:00Z", "Antigravity live per-model quota is read from the full model inventory");
   const fakeContext = {
     codexModel: "caller model",
     codexBudget: { state: "healthy", text: "healthy" },
@@ -5101,10 +5424,12 @@ function runSelfTest() {
     claudeFound: true,
     claudeAuth: { checked: true, loggedIn: true },
     claudeModels: [
+      { id: "haiku", displayName: "Claude Haiku (CLI alias)", evidence: "cli-help" },
       { id: "sonnet", displayName: "Claude Sonnet (CLI alias)", evidence: "cli-help" },
       { id: "opus", displayName: "Claude Opus (CLI alias)", evidence: "cli-help" },
       { id: "fable", displayName: "Claude Fable 5 (CLI alias)", evidence: "cli-help" },
     ],
+    claudeUsage,
     claudeObservedModel: "claude-sonnet-5",
     agyFound: true,
     agyModels: [
@@ -5139,7 +5464,34 @@ function runSelfTest() {
     mode: "patch",
     workItems: [{ id: "incident", objective: "Resolve a production incident with adversarial verification", kind: "incident-debugging", complexity: "critical", readOnly: false }],
   }, fakeContext);
-  assert(criticalDecision.workItems[0]?.assignment === "claude:fable", "critical work may select Claude Fable when its quality is justified");
+  assert(criticalDecision.workItems[0]?.assignment === "claude:sonnet", "critical work keeps the strongest healthy general coding model instead of spending Fable by default");
+  const resetOpportunityContext = {
+    ...fakeContext,
+    claudeUsage: {
+      ...claudeUsage,
+      windows: claudeUsage.windows.map((window) => window.scope === "fable"
+        ? { ...window, resetAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }
+        : window),
+    },
+  };
+  const resetOpportunityDecision = buildResourceOrchestrationDecision({
+    goal: "Use a high-value architecture review before dedicated Fable capacity resets",
+    horizonHours: 5,
+    mode: "review",
+    workItems: [{ id: "premium-window", objective: "Review a risky architecture decision", kind: "architecture-review", complexity: "high", readOnly: true }],
+  }, resetOpportunityContext);
+  assert(resetOpportunityDecision.workItems[0]?.assignment === "claude:fable", "high-value work may use healthy dedicated Fable capacity shortly before its reset");
+  const explicitFableArgs = {
+    goal: "Run an explicitly requested Fable review",
+    claudeModel: "claude-fable-5",
+    mode: "review",
+    workItems: [{ id: "explicit-fable", objective: "Review a bounded architecture decision with the explicitly requested model", kind: "architecture-review", complexity: "high", readOnly: true }],
+  };
+  const explicitFableDecision = buildResourceOrchestrationDecision(explicitFableArgs, fakeContext);
+  const explicitFableCandidate = explicitFableDecision.candidates.find((candidate) => candidate.id === "claude:fable");
+  const explicitFableScore = scoreResourceForWorkItem(explicitFableCandidate, explicitFableDecision.workItems[0], explicitFableArgs);
+  assert(Number.isFinite(explicitFableScore) && explicitFableScore > 100, "explicit Fable remains eligible after the automatic reserve gate");
+  assert(explicitFableDecision.workItems[0]?.assignment === "claude:fable", "an explicit full Fable model id overrides the automatic reserve policy");
   const criteriaDecision = buildResourceOrchestrationDecision({
     goal: "Implement a bounded change",
     workItems: [{ id: "criteria", objective: "Implement a bounded change", kind: "implementation", acceptanceCriteria: ["test passes"], verification: ["run focused test"], readOnly: false }],
@@ -5509,6 +5861,11 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "claude-usage") {
+        sendResult(id, { content: [{ type: "text", text: getClaudeUsageText() }] });
+        return;
+      }
+
       if (name === "submit-claude-job") {
         const text = submitClaudeJob(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
@@ -5595,7 +5952,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -5631,6 +5988,7 @@ if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-effi
     "submit-agy-job-cli": async (value) => submitAgyJob(value),
     "agy-job-worker-cli": async (value) => runWorkerFailClosed("antigravity-cli", value, runAgyJobWorker),
     "claude-status-cli": async () => getClaudeStatusText(),
+    "claude-usage-cli": async () => getClaudeUsageText(),
     "submit-claude-job-cli": async (value) => submitClaudeJob(value),
     "claude-job-worker-cli": async (value) => runWorkerFailClosed("claude-code", value, runClaudeJobWorker),
     "cursor-status-cli": async () => getCursorStatusText(),

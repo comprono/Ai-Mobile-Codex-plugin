@@ -77,6 +77,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" models
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
 
 # Goal-driven orchestration
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<goal>" -Workspace "<path>" -WaitSeconds 30
@@ -104,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 - `ai-mobile-local`: passive resource inventory, goal-driven orchestration, durable jobs, per-run telemetry, bounded failover, model switching, worker submission, job readback, and privacy scan.
 - `ai-mobile-devtools`: Chromium DevTools bridge for live Antigravity UI inspection and interaction.
 
-Important local tools include `resource-inventory`, `orchestrate-project`, `read-team-run`, `quick`, `models`, `limits-summary`, `run-efficient-task`, `submit-agy-job`, `submit-claude-job`, `submit-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
+Important local tools include `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `quick`, `models`, `limits-summary`, `run-efficient-task`, `submit-agy-job`, `submit-claude-job`, `submit-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
 
 ## Operating Rules
 
@@ -117,7 +118,8 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 - Use Antigravity CLI before desktop UI when visible project/chat state is not required.
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
 - Use Claude Code for local code, review, patch, and test lanes when UI context is not required.
-- Claude CLI aliases are inventoried passively: Sonnet is the routine default; Opus and Fable 5 are visible premium options. Fable is gated to critical, production, security, migration, release, adversarial, or explicitly premium work so it is not spent on ordinary tasks.
+- Claude CLI aliases are inventoried passively: Haiku handles small bounded work, Sonnet is the substantial implementation default, and Opus/Fable are premium options. Fable is used only when explicitly requested or when high-value work can use a healthy dedicated Fable window near reset, so it is not spent on ordinary tasks.
+- Apply every Claude quota window that matches the model. Shared five-hour and all-model weekly windows apply to all aliases; a Fable, Sonnet, Opus, or other model-specific weekly row applies only when `/usage` actually exposes it.
 - Treat "Claude/Sonnet/Opus in an Antigravity chat" as an Antigravity model choice, not Claude Code CLI.
 - Do not submit into an existing chat unless `expectedChat` matches the active Antigravity document title/context.
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
@@ -133,7 +135,9 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 
 ## Capacity Limits
 
-The plugin can read Antigravity model availability and, while its local service is already running, model percentage/reset evidence exposed by the Antigravity language server. Codex does not expose its private remaining-token ledger, so the plugin accepts caller-visible budget/model details. Claude Code does not expose remaining subscription allowance; AI Mobile passively discovers installed model aliases, records authenticated availability, exact models observed in real JSON results, per-run token telemetry, cooldowns, and failures. Unknown capacity remains explicitly unknown. The model policy is informed by [agent-skills orchestration patterns](https://github.com/addyosmani/agent-skills): use the cheapest sufficient direct lane, isolate research context, parallelize only independent work, and keep the merge/verification step in Codex.
+The plugin reads Claude's built-in `/usage` percentages and reset times without running a model prompt. It combines shared five-hour and all-model weekly windows with any model-specific weekly windows, then routes using the most restrictive applicable value. It can also read Antigravity model availability and, while its local service is already running, full per-model percentage/reset evidence from the local language server. Safe capacity snapshots are cached for 10 minutes to reduce repeated local probes.
+
+Codex does not expose its private remaining-token ledger, so the plugin accepts only caller-visible budget/model details. Unknown capacity remains explicitly unknown. Exact Claude alias ids are learned from CLI help or completed-run telemetry instead of being hardcoded. See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the bucket model, five-hour planning policy, reset-aware premium routing, failover rules, and privacy boundary. The policy also follows [agent-skills orchestration patterns](https://github.com/addyosmani/agent-skills): use the cheapest sufficient direct lane, isolate research context, parallelize only independent work, and keep the merge/verification step in Codex.
 
 ## Safety
 
