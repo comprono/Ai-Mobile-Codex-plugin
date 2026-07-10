@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added complexity-sized worker result budgets (5/6/8/10 bullets), bounded prompt/readback sizes, and prompt/result character telemetry for measurable token efficiency.
+- Added five-hour platform reliability routing so repeated recent failures move broad work to a proven alternative instead of cycling through more models on the same failing platform.
+- Reduced aggregate Codex readback while preserving detailed failed-lane evidence through `read-job`.
 - Reframed AI Mobile from a fixed lane scheduler into a goal-driven resource orchestrator with Codex as coach, critic, integrator, and final verifier.
 - Added passive `resource-inventory` discovery for Codex caller state, Claude auth/observed models, Antigravity CLI model roster/live quota evidence, Cursor headless availability, cooldowns, and evidence freshness.
 - Added `orchestrate-project` with structured work items, capability/quality/capacity scoring, dependency-aware dispatch, one-writer safety, independent read-only review, and a compatibility path through `run-team-task`.

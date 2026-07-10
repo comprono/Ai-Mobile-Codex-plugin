@@ -73,6 +73,7 @@ Tool discovery failure is not a blocker. If `ai-mobile-local` is missing from th
 - For a five-hour horizon, use real reset/cooldown metadata when present. Do not invent budgets or reset times.
 - Selection weighs capability fit, required quality, capacity/freshness, speed/cost, project continuity, independence, and user preference.
 - Learn task-kind affinity only from successful outcomes. A timeout or failed result must increase reliability penalties and must never create positive affinity for that resource.
+- Aggregate recent outcomes by platform for the five-hour horizon. After repeated failures with no recent success, route broad work to a proven alternative instead of cycling through more models on the same platform; keep micro tasks eligible for bounded cheap workers.
 - Use Flash Low only for tightly file-bounded low-complexity micro tasks. Prefer Flash Medium for broad read-only project review, health inspection, or work without an explicit file boundary.
 - Keep one writer per workspace. Run independent read-only scouts/reviewers in parallel. Respect explicit dependencies.
 - Keep failover pools provider-diverse. On quota, rate limit, outage, timeout, auth, model-unavailable, worker failure, or an insufficient/off-task result, cool down that resource and fail over the narrow item once. Do not retry loops.
@@ -95,6 +96,7 @@ Team launches also write:
 ```
 
 Use `read-team-run` for the aggregate state. Use `read-job` only for a failed or partial lane that needs detail.
+Keep results complexity-sized: low 5 bullets, medium 6, high 8, and critical 10. Prefer the capped aggregate readback; do not re-read successful jobs individually. Use worker telemetry prompt/result character counts and available token fields to verify efficiency rather than assuming it.
 
 Codex should read only:
 

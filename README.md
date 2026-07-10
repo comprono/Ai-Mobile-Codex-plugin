@@ -48,6 +48,8 @@ Workers write compact artifacts under:
 
 Codex reads those artifacts instead of watching full chats, logs, or source dumps. `status.json` is bridge-owned: worker-written terminal state is ignored until the bridge has finalized the result, telemetry, and execution summary. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
 
+Result budgets scale with complexity: low 5 bullets, medium 6, high 8, and critical 10. Aggregate team readback is capped independently; use `read-job` only when a failed or partial lane needs deeper evidence. Worker telemetry records prompt/result character counts, and Claude telemetry also records reported token usage.
+
 ## Install
 
 ```powershell
@@ -110,6 +112,7 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 - Codex is the goal owner, critic, integrator, and final verifier. External workers receive bounded work items and compact artifact contracts.
 - Selection uses capability fit, required quality, capacity/freshness, speed/cost, independence, and project continuity. It is not a fixed UI/backend/testing map.
 - Project affinity is learned only from successful worker outcomes. Timeouts and failed work lower reliability instead of making that resource more likely for the same task kind.
+- Repeated recent failures without a platform success move broad work to a proven alternative for the five-hour horizon; micro tasks remain eligible for cheap bounded workers.
 - Reserve Flash Low for tightly file-bounded micro tasks; prefer Flash Medium for broader repository review or project-health inspection.
 - Use Antigravity CLI before desktop UI when visible project/chat state is not required.
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
@@ -118,6 +121,7 @@ Important local tools include `resource-inventory`, `orchestrate-project`, `read
 - Do not submit into an existing chat unless `expectedChat` matches the active Antigravity document title/context.
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
 - Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
+- Keep worker prompts bounded and results complexity-sized. Do not stream worker narration or repeatedly read successful job artifacts into Codex.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
 - Treat `State: ready-for-codex` as an integration gate, not completion. Codex must verify before reporting the user goal complete.
 - If a worker exits after finalizing telemetry but before its terminal status write, recover the real success/failure category from telemetry and compact artifacts instead of reporting a generic process-gone failure.

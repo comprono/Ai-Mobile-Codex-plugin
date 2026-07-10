@@ -1307,8 +1307,29 @@ function candidateAvailability(found, authState, outcome = {}, measured = {}) {
   return { state: "available", resetAt: measured.resetAt || "" };
 }
 
+function platformReliabilitySummary(outcomes = {}, platform, horizonHours = 5) {
+  const cutoff = Date.now() - (Math.max(1, Math.min(12, Number(horizonHours || 5))) * 60 * 60 * 1000);
+  let recentFailures = 0;
+  let recentSuccesses = 0;
+  for (const [resourceId, outcome] of Object.entries(outcomes || {})) {
+    if (!resourceId.startsWith(`${platform}:`)) continue;
+    const successTime = Date.parse(String(outcome?.lastSuccessAt || ""));
+    const failureTime = Date.parse(String(outcome?.lastFailureAt || ""));
+    if (Number.isFinite(successTime) && successTime >= cutoff) recentSuccesses += 1;
+    if (Number.isFinite(failureTime) && failureTime >= cutoff && (!Number.isFinite(successTime) || failureTime > successTime)) recentFailures += 1;
+  }
+  return { recentFailures, recentSuccesses };
+}
+
 function buildResourceCandidates(args = {}, context = {}) {
   const outcomes = context.workspaceState?.outcomes || {};
+  const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  const platformReliability = {
+    codex: platformReliabilitySummary(outcomes, "codex", horizonHours),
+    claude: platformReliabilitySummary(outcomes, "claude", horizonHours),
+    antigravity: platformReliabilitySummary(outcomes, "antigravity", horizonHours),
+    cursor: platformReliabilitySummary(outcomes, "cursor", horizonHours),
+  };
   const codexState = ["critical", "low"].includes(context.codexBudget.state) ? "constrained" : "available";
   const candidates = [{
     id: "codex:current",
@@ -1327,6 +1348,7 @@ function buildResourceCandidates(args = {}, context = {}) {
     cost: 10,
     role: "goal owner, resource orchestrator, critic, integrator, and final verifier",
     outcome: compactOutcome(outcomes["codex:current"] || {}),
+    platformReliability: platformReliability.codex,
   }];
 
   const claudeOutcome = outcomes["claude:sonnet"] || {};
@@ -1348,6 +1370,7 @@ function buildResourceCandidates(args = {}, context = {}) {
     cost: 55,
     role: "high-value implementation, architecture, debugging, and independent review",
     outcome: compactOutcome(claudeOutcome),
+    platformReliability: platformReliability.claude,
   });
 
   const agyRoster = context.agyModels?.length
@@ -1379,6 +1402,7 @@ function buildResourceCandidates(args = {}, context = {}) {
       cost: profile.cost,
       role: /flash/i.test(model.displayName) ? "fast scout, research, drafting, and low-cost validation" : "reasoning, review, and bounded implementation",
       outcome: compactOutcome(outcome),
+      platformReliability: platformReliability.antigravity,
     });
   }
 
@@ -1402,6 +1426,7 @@ function buildResourceCandidates(args = {}, context = {}) {
       cost: 60,
       role: "editor-native UI implementation when a real headless agent exists",
       outcome: compactOutcome(cursorOutcome),
+      platformReliability: platformReliability.cursor,
     });
   }
   return candidates;
@@ -1621,6 +1646,13 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
     && item.expectedFiles.length > 0
     && item.expectedFiles.length <= 2
     && String(item.objective || "").length <= 280;
+  const platformFailures = Math.max(0, Number(candidate.platformReliability?.recentFailures || 0));
+  const platformSuccesses = Math.max(0, Number(candidate.platformReliability?.recentSuccesses || 0));
+  if (!microTask && platformFailures > platformSuccesses) {
+    score -= platformFailures >= 2 && platformSuccesses === 0
+      ? 35
+      : Math.min(24, (platformFailures - platformSuccesses) * 10);
+  }
   if (candidate.platform === "antigravity" && /flash.*low|low.*flash/i.test(candidate.displayName) && !microTask) score -= 10;
   if (candidate.platform === "antigravity" && /flash.*medium|medium.*flash/i.test(candidate.displayName) && item.readOnly && !microTask) score += 3;
   if (candidate.platform === "cursor" && item.requiredCapabilities.includes("ui")) score += 15;
@@ -1780,11 +1812,25 @@ function workItemBrief(items) {
   }).join("\n");
 }
 
+function resultBulletLimitForComplexity(complexityRank) {
+  return ({ 1: 5, 2: 6, 3: 8, 4: 10 })[Math.max(1, Math.min(4, Number(complexityRank || 2)))] || 6;
+}
+
+function boundedResultBulletLimit(args = {}, fallback = 8) {
+  const value = Number(args.maxResultBullets ?? fallback);
+  return Math.max(3, Math.min(10, Number.isFinite(value) ? Math.round(value) : fallback));
+}
+
+function resultCharacterLimit(args = {}, fallbackBullets = 8) {
+  return Math.max(1200, Math.min(4500, boundedResultBulletLimit(args, fallbackBullets) * 450));
+}
+
 function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const workspace = manifest.workspace;
   const readOnly = items.every((item) => item.readOnly);
   const mode = readOnly ? "review" : (manifest.mode || "patch");
   const complexityRank = Math.max(...items.map((item) => ({ low: 1, medium: 2, high: 3, critical: 4 }[item.complexity] || 2)));
+  const maxResultBullets = resultBulletLimitForComplexity(complexityRank);
   const goal = [
     manifest.goal,
     "",
@@ -1798,7 +1844,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const nextStep = [
     `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
     readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
-    "State assumptions and blockers explicitly. Keep result.md to ten bullets or fewer.",
+    `State assumptions and blockers explicitly. Keep result.md to ${maxResultBullets} bullets or fewer.`,
   ].join(" ");
   const expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
   let action = "";
@@ -1818,6 +1864,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
+      maxResultBullets,
       start: true,
     });
   } else if (resource.platform === "antigravity") {
@@ -1833,6 +1880,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
+      maxResultBullets,
       start: true,
     });
   } else if (resource.platform === "cursor") {
@@ -1846,6 +1894,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
+      maxResultBullets,
       start: true,
     });
   } else {
@@ -2166,18 +2215,23 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
 
   for (const [index, job] of snapshot.jobs.entries()) {
     const jobDir = jobDirFor(workspace, job.jobId);
-    const result = summarizeFile(path.join(jobDir, "result.md"), 2500).trim();
-    const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 1000).trim();
-    const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 1200).trim();
+    const workItemIds = job.workItemIds || job.assignedTasks || [];
+    const supersededBySuccess = ["failed", "cancelled"].includes(job.state)
+      && snapshot.jobs.slice(index + 1).some((later) => later.state === "completed"
+        && (later.workItemIds || later.assignedTasks || []).some((id) => workItemIds.includes(id)));
+    const result = summarizeFile(path.join(jobDir, "result.md"), 1200).trim();
+    const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 500).trim();
+    const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 600).trim();
     const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
     lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
-    if (job.blocker) lines.push(`   Blocker: ${truncateText(job.blocker, 500)}`);
-    if (job.warning) lines.push(`   Warning: ${truncateText(job.warning, 500)}`);
+    if (job.blocker) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
+    if (job.warning && !supersededBySuccess) lines.push(`   Warning: ${truncateText(job.warning, 300)}`);
     if (telemetry) lines.push(`   Telemetry: provider=${telemetry.provider || "unknown"}; observedModel=${telemetry.observedModel || "unknown"}; durationMs=${telemetry.durationMs ?? "unknown"}; inputTokens=${telemetry.inputTokens ?? "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
-    if (result) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
-    if (changed) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
-    if (tests) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
+    if (supersededBySuccess) lines.push("   Recovered: a later failover completed this work item; use read-job only if the failed attempt needs diagnosis.");
+    if (result && !supersededBySuccess) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
+    if (changed && !/^NONE$/i.test(changed) && !supersededBySuccess) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
+    if (tests && !supersededBySuccess) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
   if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact worker artifacts, run targeted final verification, and only then claim the goal complete.");
@@ -2476,13 +2530,14 @@ function modeGuidance(mode) {
   return "Fast mode: inspect only directly relevant files, make the smallest safe change, and run targeted verification only.";
 }
 
-function artifactContract(jobId, jobDir) {
+function artifactContract(jobId, jobDir, maxResultBullets = 8) {
+  const bulletLimit = boundedResultBulletLimit({ maxResultBullets }, 8);
   return [
     `JobId: ${jobId}`,
     `JobFolder: ${jobDir}`,
     "Required artifacts:",
     "- status.json is bridge-owned. Workers must not read, edit, or replace it.",
-    "- result.md: max 10 bullets with outcome, risk, and next step.",
+    `- result.md: max ${bulletLimit} bullets with outcome, risk, and next step.`,
     "- changed-files.txt: one changed path per line, or NONE.",
     "- diff.patch: compact patch/diff if files changed, or empty.",
     "- test-output-summary.md: commands run and pass/fail summary only.",
@@ -2509,7 +2564,7 @@ function buildJobRequest(args, jobId, jobDir) {
     `Next step: ${nextStep}`,
     expectedFiles.length ? `Allowed file boundary: ${expectedFiles.join(", ")}` : "Allowed file boundary: not specified; keep changes narrowly scoped to the assigned objective.",
     "",
-    artifactContract(jobId, jobDir),
+    artifactContract(jobId, jobDir, args.maxResultBullets),
     "",
     "Codex will read only result.md, changed-files.txt, diff.patch, test-output-summary.md, and status.json.",
   ].join("\n");
@@ -2530,6 +2585,7 @@ function createJob(args = {}) {
     createdAt,
     updatedAt: createdAt,
     currentStep: "created",
+    maxResultBullets: boundedResultBulletLimit(args, 8),
     requestFile: "request.md",
     resultFile: "result.md",
     changedFilesFile: "changed-files.txt",
@@ -2989,6 +3045,8 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
     cacheReadInputTokens: Number.isFinite(Number(telemetry.cacheReadInputTokens)) ? Number(telemetry.cacheReadInputTokens) : null,
     outputTokens: Number.isFinite(Number(telemetry.outputTokens)) ? Number(telemetry.outputTokens) : null,
     reportedCostUsdEquivalent: Number.isFinite(Number(telemetry.reportedCostUsdEquivalent)) ? Number(telemetry.reportedCostUsdEquivalent) : null,
+    promptChars: Number.isFinite(Number(telemetry.promptChars)) ? Number(telemetry.promptChars) : null,
+    resultChars: Number.isFinite(Number(telemetry.resultChars)) ? Number(telemetry.resultChars) : null,
     workItemKinds: Array.isArray(args.workItemKinds) ? args.workItemKinds.map(normalizeTaskLane).filter(Boolean).slice(0, 12) : [],
     completedAt: now,
   };
@@ -3413,12 +3471,14 @@ function safeAgyFlag(value, name) {
 
 function buildAgyJobPrompt(workspace, jobId, args = {}) {
   const jobDir = jobDirFor(workspace, jobId);
-  const request = summarizeFile(path.join(jobDir, "request.md"), 18000);
+  const request = summarizeFile(path.join(jobDir, "request.md"), 12000);
+  const maxResultBullets = boundedResultBulletLimit(args, 8);
+  const operationBudget = maxResultBullets <= 5 ? 12 : maxResultBullets <= 6 ? 16 : 20;
   return [
     "You are Antigravity CLI running as a low-RAM local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
     "Do not narrate planned tool calls. Use targeted rg/file reads, avoid .antigravity-bridge except this job folder, and stop exploring once the assigned evidence is sufficient.",
-    "Stay within roughly 20 targeted file/search operations. A concise blocker is better than a broad workspace crawl.",
+    `Stay within roughly ${operationBudget} targeted file/search operations. A concise blocker is better than a broad workspace crawl.`,
     "",
     request,
     "",
@@ -3427,7 +3487,7 @@ function buildAgyJobPrompt(workspace, jobId, args = {}) {
     `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
     `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
     "- If blocked, write one concise blocker and the next smallest action.",
-    "- Keep result.md to max 10 bullets.",
+    `- Keep result.md to max ${maxResultBullets} bullets.`,
     "",
     `Current next step: ${String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim()}`,
   ].join("\n");
@@ -3452,6 +3512,19 @@ function compactResultBullets(value, maxBullets = 10, maxChars = 6000) {
     .filter((line) => /^[-*]\s+\S/.test(line))
     .slice(0, maxBullets);
   return truncateText(bullets.length >= 2 ? bullets.join("\n") : text, maxChars);
+}
+
+function compactResultArtifact(resultPath, args = {}, fallbackBullets = 8) {
+  if (!fs.existsSync(resultPath)) return "";
+  const current = fs.readFileSync(resultPath, "utf8").trim();
+  if (!current) return "";
+  const compact = compactResultBullets(
+    current,
+    boundedResultBulletLimit(args, fallbackBullets),
+    resultCharacterLimit(args, fallbackBullets),
+  );
+  if (compact !== current) fs.writeFileSync(resultPath, `${compact}\n`, "utf8");
+  return compact;
 }
 
 function validateWorkerResult(resultText, args = {}) {
@@ -3561,15 +3634,16 @@ function runAgyJobWorker(args = {}) {
     const processFailed = result.status !== 0 || Boolean(result.error);
     const compact = processFailed
       ? `- Antigravity CLI did not complete this work item.\n- Failure: ${truncateText(result.error?.message || stderr || compactWorkerStdout(stdout, 1200) || "No output", 1200)}\n- Next: allow the resource orchestrator to fail over this narrow item once.\n`
-      : compactResultBullets(compactWorkerStdout(stdout)) || "- Antigravity CLI completed without a textual summary. Inspect test-output-summary.md.\n";
+      : compactResultBullets(compactWorkerStdout(stdout), boundedResultBulletLimit(args, 8), resultCharacterLimit(args, 8)) || "- Antigravity CLI completed without a textual summary. Inspect test-output-summary.md.\n";
     fs.writeFileSync(resultPath, compact, "utf8");
   }
+  const compactResultText = compactResultArtifact(resultPath, args, 8);
 
   writeAuthoritativeExecutionSummary(jobDir, "antigravity-cli", result, stderr);
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error);
-  const resultText = summarizeFile(resultPath, 8000);
+  const resultText = compactResultText || summarizeFile(resultPath, resultCharacterLimit(args, 8));
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
   const observedModel = inferAgyObservedModel(stdout, args.model || "");
   const modelMismatch = Boolean(args.model && observedModel && normalizedModelText(args.model) !== normalizedModelText(observedModel));
@@ -3589,6 +3663,8 @@ function runAgyJobWorker(args = {}) {
     success: !failed,
     failureCategory,
     durationMs: Date.now() - startedMs,
+    promptChars: prompt.length,
+    resultChars: resultText.length,
   });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
@@ -3694,13 +3770,15 @@ function submitAgyJob(args = {}) {
 
 function buildClaudeJobPrompt(workspace, jobId, args = {}) {
   const jobDir = jobDirFor(workspace, jobId);
-  const request = summarizeFile(path.join(jobDir, "request.md"), 18000);
+  const request = summarizeFile(path.join(jobDir, "request.md"), 12000);
+  const maxResultBullets = boundedResultBulletLimit(args, 8);
   const permissionMode = String(args.permissionMode || "").trim().toLowerCase();
   const artifactRules = permissionMode === "plan"
     ? [
         "Plan-mode output rules:",
         "- You may be unable to write files in this Claude Code session.",
         "- Return the compact result in stdout; the AI Mobile bridge will persist stdout into result.md.",
+        `- Return no more than ${maxResultBullets} result bullets.`,
         "- Do not edit repository files.",
       ]
     : [
@@ -3709,7 +3787,7 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
         `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
         `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
         "- If blocked, write one concise blocker and the next smallest action.",
-        "- Keep result.md to max 10 bullets.",
+        `- Keep result.md to max ${maxResultBullets} bullets.`,
       ];
   return [
     "You are Claude Code running as a local worker for Codex.",
@@ -3896,8 +3974,9 @@ function runClaudeJobWorker(args = {}) {
 
   const resultPath = path.join(jobDir, "result.md");
   if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
-    fs.writeFileSync(resultPath, compactResultBullets(parsedOutput.resultText || stderr || "<Claude Code produced no output>"), "utf8");
+    fs.writeFileSync(resultPath, compactResultBullets(parsedOutput.resultText || stderr || "<Claude Code produced no output>", boundedResultBulletLimit(args, 8), resultCharacterLimit(args, 8)), "utf8");
   }
+  const compactClaudeResult = compactResultArtifact(resultPath, args, 8);
 
   writeAuthoritativeExecutionSummary(jobDir, "claude-code", result, stderr);
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, mode);
@@ -3922,6 +4001,8 @@ function runClaudeJobWorker(args = {}) {
     cacheReadInputTokens: parsedOutput.cacheReadInputTokens,
     outputTokens: parsedOutput.outputTokens,
     reportedCostUsdEquivalent: parsedOutput.reportedCostUsdEquivalent,
+    promptChars: prompt.length,
+    resultChars: compactClaudeResult.length,
   });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
@@ -4032,7 +4113,8 @@ function safeCursorFlag(value, name) {
 
 function buildCursorJobPrompt(workspace, jobId, args = {}) {
   const jobDir = jobDirFor(workspace, jobId);
-  const request = summarizeFile(path.join(jobDir, "request.md"), 18000);
+  const request = summarizeFile(path.join(jobDir, "request.md"), 12000);
+  const maxResultBullets = boundedResultBulletLimit(args, 8);
   return [
     "You are Cursor Agent running as a local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
@@ -4044,7 +4126,7 @@ function buildCursorJobPrompt(workspace, jobId, args = {}) {
     `- Write changed file paths to: ${path.join(jobDir, "changed-files.txt")}`,
     `- Write command/test summary only to: ${path.join(jobDir, "test-output-summary.md")}`,
     "- If blocked, write one concise blocker and the next smallest action.",
-    "- Keep result.md to max 10 bullets.",
+    `- Keep result.md to max ${maxResultBullets} bullets.`,
     "",
     `Current next step: ${String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim()}`,
   ].join("\n");
@@ -4105,8 +4187,9 @@ function runCursorJobWorker(args = {}) {
 
   const resultPath = path.join(jobDir, "result.md");
   if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
-    fs.writeFileSync(resultPath, truncateText(stdout || stderr || "<Cursor agent produced no output>", 24000), "utf8");
+    fs.writeFileSync(resultPath, compactResultBullets(stdout || stderr || "<Cursor agent produced no output>", boundedResultBulletLimit(args, 8), resultCharacterLimit(args, 8)), "utf8");
   }
+  const compactCursorResult = compactResultArtifact(resultPath, args, 8);
 
   writeAuthoritativeExecutionSummary(jobDir, "cursor-agent", result, stderr);
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
@@ -4126,6 +4209,8 @@ function runCursorJobWorker(args = {}) {
     success: !failed,
     failureCategory,
     durationMs: Date.now() - startedMs,
+    promptChars: prompt.length,
+    resultChars: compactCursorResult.length,
   });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
@@ -4981,6 +5066,24 @@ function runSelfTest() {
   assert(microReviewDecision.workItems[0]?.assignment === "antigravity:gemini-3.5-flash-low", "file-bounded micro review may use Flash Low");
   const failedOutcome = compactOutcome({ lastFailureAt: utcStamp(), recentKinds: ["verification-review"] });
   assert(failedOutcome.successfulKinds.length === 0 && failedOutcome.consecutiveFailures === 1, "failed work does not become future capability affinity");
+  const reliabilityContext = {
+    ...fakeContext,
+    workspaceState: {
+      outcomes: {
+        "claude:sonnet": { lastSuccessAt: utcStamp(), successfulKinds: ["verification-review"] },
+        "antigravity:gemini-3.5-flash-low": { lastFailureAt: utcStamp(), lastCategory: "timeout" },
+        "antigravity:gemini-3.5-flash-medium": { lastFailureAt: utcStamp(), lastCategory: "timeout" },
+      },
+      decisions: [],
+    },
+  };
+  const reliabilityDecision = buildResourceOrchestrationDecision({
+    goal: "Review current project health after repeated platform timeouts",
+    mode: "review",
+    workItems: [{ id: "reliability-review", objective: "Review current project health after repeated platform timeouts", kind: "verification-review", complexity: "low", readOnly: true }],
+  }, reliabilityContext);
+  assert(reliabilityDecision.workItems[0]?.assignment === "claude:sonnet", "repeated recent platform failures route broad work to the proven alternative");
+  assert([1, 2, 3, 4].map(resultBulletLimitForComplexity).join(",") === "5,6,8,10", "result bullet budgets scale with work-item complexity");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
   assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
   assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
@@ -5015,6 +5118,35 @@ function runSelfTest() {
     const changed = finalizeWorkerGitArtifacts(workspace, created.jobDir, "review");
     assert(changed.reviewMutationDetected === true, "review workspace mutation is detected");
 
+    const compactJob = createJob({ goal: "compact result self-test", workspace, mode: "review", worker: "self-test", maxResultBullets: 5 });
+    fs.writeFileSync(path.join(compactJob.jobDir, "result.md"), Array.from({ length: 8 }, (_, index) => `- result ${index + 1}`).join("\n"), "utf8");
+    fs.writeFileSync(path.join(compactJob.jobDir, "changed-files.txt"), "NONE\n", "utf8");
+    fs.writeFileSync(path.join(compactJob.jobDir, "test-output-summary.md"), "Result: success\n", "utf8");
+    const compactArtifact = compactResultArtifact(path.join(compactJob.jobDir, "result.md"), { maxResultBullets: 5 });
+    assert(compactArtifact.split(/\r?\n/).length === 5, "result artifact compaction enforces the assigned bullet budget");
+    const compactSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      state: "ready-for-codex",
+      counts: { total: 1, completed: 1, running: 0, failed: 0 },
+      workItems: [{ id: "compact", state: "completed", assignment: "self-test", assignedModel: "none", dependsOn: [] }],
+      jobs: [{ jobId: compactJob.jobId, laneId: "compact", state: "completed", assignedTasks: ["compact"], model: "none" }],
+    }, 0);
+    assert(!compactSnapshot.includes("Changed: NONE") && compactSnapshot.length < 1800, "aggregate readback omits no-op changed markers and stays compact");
+    const supersededJob = createJob({ goal: "superseded failure self-test", workspace, mode: "review", worker: "self-test" });
+    fs.writeFileSync(path.join(supersededJob.jobDir, "result.md"), "- SUPERSEDED_DETAIL_SHOULD_NOT_BE_REPEATED\n", "utf8");
+    fs.writeFileSync(path.join(supersededJob.jobDir, "test-output-summary.md"), "Result: failed\n", "utf8");
+    const recoveredSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      state: "ready-for-codex",
+      counts: { total: 2, completed: 1, running: 0, failed: 1 },
+      workItems: [{ id: "compact", state: "completed", assignment: "self-test", assignedModel: "none", dependsOn: [] }],
+      jobs: [
+        { jobId: supersededJob.jobId, laneId: "failed", state: "failed", assignedTasks: ["compact"], workItemIds: ["compact"], model: "none", blocker: "timeout" },
+        { jobId: compactJob.jobId, laneId: "compact", state: "completed", assignedTasks: ["compact"], workItemIds: ["compact"], model: "none" },
+      ],
+    }, 0);
+    assert(recoveredSnapshot.includes("Recovered:") && !recoveredSnapshot.includes("SUPERSEDED_DETAIL_SHOULD_NOT_BE_REPEATED"), "successful failover collapses superseded failure detail in aggregate readback");
+
     updateJobStatus(workspace, created.jobId, { state: "completed", currentStep: "self-test-completed" });
     fs.writeFileSync(path.join(created.jobDir, "result.md"), "- self-test completed\n", "utf8");
     const manifest = {
@@ -5044,12 +5176,16 @@ function runSelfTest() {
       success: false,
       failureCategory: "timeout",
       durationMs: 100,
+      promptChars: 900,
+      resultChars: 48,
     });
     updateJobStatus(workspace, staleTelemetryJob.jobId, { state: "running", currentStep: "worker-running", workerPid: 2147483647, workerCommandMarker: staleTelemetryJob.jobId });
     const telemetryRepair = repairStaleRunningJob(workspace, staleTelemetryJob.jobId, staleTelemetryJob.jobDir, readJsonFile(path.join(staleTelemetryJob.jobDir, "status.json"), {}));
     assert(telemetryRepair.status.state === "failed" && telemetryRepair.status.failureCategory === "timeout" && telemetryRepair.source === "telemetry", "stale running status recovers the authoritative failure category from finalized telemetry");
     const failedResourceOutcome = compactOutcome(readWorkspaceResourceState(workspace).outcomes["antigravity:self-test"] || {});
     assert(failedResourceOutcome.successfulKinds.length === 0 && failedResourceOutcome.consecutiveFailures === 1, "failed telemetry records reliability without creating successful task affinity");
+    const efficiencyTelemetry = readJsonFile(path.join(staleTelemetryJob.jobDir, "worker-telemetry.json"), {});
+    assert(efficiencyTelemetry.promptChars === 900 && efficiencyTelemetry.resultChars === 48, "worker telemetry records prompt and compact-result sizes for efficiency checks");
 
     let fakeLaunchCount = 0;
     const fakeLaunch = (runManifest, resource, items, failoverOf = "") => {
