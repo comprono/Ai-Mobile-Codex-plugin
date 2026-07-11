@@ -68,7 +68,7 @@ The bridge may start external CLI jobs, but an MCP server cannot invoke host-nat
 - Worker calls use complexity-adaptive safety leases from 10 to 90 minutes when `maxWorkerMinutes=0`. A lease timeout rescoping/failover protects against a dead provider process but does not terminate the project.
 - At a capacity checkpoint, refresh catalogs, quota windows, resets, cooldowns, and recent outcomes. Preserve running assignments; reroute only pending or resource-blocked work.
 - The detached CLI supervisor uses no model tokens. It advances sequential external stages while the run is `running` and exits when current Codex input or a terminal decision is required.
-- Claude workers receive a provider cost cap and a reported output-token cap. `budget-exceeded` stops the lane without failover so cost is not doubled.
+- Claude budgeting is auth-aware: claude.ai subscription auth (Pro/Max/Team/Enterprise, no API key) omits the USD cap and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic USD cap, and an explicit user cap always wins. `budget-exceeded` stops the lane without failover so cost is not doubled.
 - Antigravity CLI may launch a browser OAuth flow. Do not auto-dispatch it unless the user explicitly enables `allowAntigravityCli=true` or supplies a specific `agyModel`. Prefer Claude/current Codex when that authorization is absent.
 
 Detailed policy: [capacity-and-routing.md](references/capacity-and-routing.md).

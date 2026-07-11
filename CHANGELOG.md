@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Made Claude budgeting subscription-aware: claude.ai Pro/Max/Team/Enterprise auth without `ANTHROPIC_API_KEY` no longer passes `--max-budget-usd` and relies on measured 5-hour/weekly/model quota windows plus output-token and worker-lease guards; API-key/PAYG/unknown billing keeps a conservative automatic USD cap, `maxClaudeBudgetUsd=0` selects the auth-aware automatic policy, an explicit user cap is preserved, and the chosen policy is exposed in plan/status output without storing account identifiers.
 - Replaced the default project deadline with continuous objective duration: work remains resumable until verified, genuinely blocked, or explicitly stopped; an optional explicit deadline remains available.
 - Added rolling 20-minute capacity checkpoints that refresh models, quota/reset windows, cooldowns, and pending assignments without interrupting running workers.
 - Added a detached low-RAM, zero-model-token supervisor that advances sequential external stages and checkpoints, then exits when Codex input or a terminal decision is required.

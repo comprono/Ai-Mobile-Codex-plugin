@@ -237,7 +237,7 @@ const tools = [
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
-        maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker, expressed as provider-reported USD equivalent.", default: 0.75 },
+        maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap. 0 (default) selects the auth-aware automatic policy: claude.ai subscription auth (Pro/Max/Team/Enterprise, no ANTHROPIC_API_KEY) omits --max-budget-usd and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic cap.", default: 0 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes.", default: false },
       },
       required: ["goal", "workspace"],
@@ -273,7 +273,7 @@ const tools = [
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
-        maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker.", default: 0.75 },
+        maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns a dry plan.", default: true },
         waitSeconds: { type: "number", description: "Short bounded wait before returning resumable status.", default: 5 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes before assignment.", default: false },
@@ -414,7 +414,7 @@ const tools = [
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
-        maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker.", default: 0.75 },
+        maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
         waitSeconds: { type: "number", description: "Bounded wait for compact worker artifacts.", default: 30 },
         refreshInventory: { type: "boolean", description: "Force fresh CLI probes before assigning work.", default: false },
@@ -565,7 +565,7 @@ const tools = [
         effort: { type: "string", description: "Current Claude CLI effort level, such as low, medium, high, xhigh, or max." },
         fallbackModel: { type: "string", description: "Optional Claude Code fallback model alias or id." },
         permissionMode: { type: "string", description: "Claude Code permission mode. Defaults to plan for review and acceptEdits otherwise." },
-        maxBudgetUsd: { type: "number", description: "Optional Claude Code maximum spend for this job." },
+        maxBudgetUsd: { type: "number", description: "Optional explicit Claude Code USD cap for this job. When omitted, the auth-aware automatic policy applies: subscription auth runs uncapped against measured quota windows; API-key/PAYG/unknown billing gets a conservative automatic cap." },
         maxOutputTokens: { type: "number", description: "Fail the worker result when Claude reports output above this token budget." },
         start: { type: "boolean", description: "Set false to create the job and payload without starting Claude Code.", default: true },
         maxMinutes: { type: "number", description: "Maximum minutes the direct background Claude worker may run.", default: 30 },
@@ -1969,6 +1969,7 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     lines.push(`- ${window.id}: used=${window.usedPercent}%; remaining=${window.remainingPercent}%; reset=${window.resetAt || window.resetText || "unknown"}; applies=${window.scope}`);
   }
   if (!(context.claudeUsage?.windows || []).length) lines.push("- unknown");
+  lines.push(`ClaudeBudgetPolicy: ${describeClaudeBudgetPolicy({ maxClaudeBudgetUsd: Number(args.maxClaudeBudgetUsd ?? 0) }, context.claudeAuth || cachedClaudeAuth())}`);
   lines.push("CodexCapacityWindows:");
   for (const window of context.codexTelemetry?.windows || []) {
     lines.push(`- ${window.id}: used=${window.usedPercent ?? "unknown"}%; remaining=${window.remainingPercent ?? "unknown"}%; reset=${window.resetAt || "unknown"}; periodMinutes=${window.windowMinutes ?? "unknown"}`);
@@ -2405,7 +2406,9 @@ function normalizedRunControls(args = {}) {
       ? Math.max(1, Math.min(180, requestedWorkerCap))
       : 0,
     maxClaudeOutputTokens: Math.max(2000, Math.min(50000, Number(args.maxClaudeOutputTokens ?? 12000))),
-    maxClaudeBudgetUsd: Math.max(0.1, Math.min(10, Number(args.maxClaudeBudgetUsd ?? 0.75))),
+    maxClaudeBudgetUsd: Number.isFinite(Number(args.maxClaudeBudgetUsd ?? 0)) && Number(args.maxClaudeBudgetUsd ?? 0) > 0
+      ? Math.max(0.1, Math.min(10, Number(args.maxClaudeBudgetUsd)))
+      : 0,
   };
 }
 
@@ -2418,9 +2421,41 @@ function workerMinutesFor(manifest, complexityRank, platform) {
   return Math.max(1, optionalCap > 0 ? Math.min(optionalCap, adaptiveLease) : adaptiveLease);
 }
 
-function claudeBudgetFor(manifest, complexityRank) {
+function cachedClaudeAuth() {
+  return readSafeResourceCache().claude?.auth || { checked: false, loggedIn: null };
+}
+
+function claudeSubscriptionBillingActive(auth = {}, env = process.env) {
+  if (String(env.ANTHROPIC_API_KEY || "").trim()) return false;
+  if (env.CLAUDE_CODE_USE_BEDROCK === "1" || env.CLAUDE_CODE_USE_VERTEX === "1") return false;
+  const authMethod = String(auth.authMethod || "").trim().toLowerCase();
+  const apiProvider = String(auth.apiProvider || "").trim().toLowerCase();
+  return auth.loggedIn === true
+    && authMethod === "claude.ai"
+    && (!apiProvider || apiProvider === "firstparty")
+    && /^(pro|max|team|enterprise)\b/i.test(String(auth.subscriptionType || "").trim());
+}
+
+function claudeBudgetPolicy(manifest = {}, auth = cachedClaudeAuth(), env = process.env) {
+  const explicitCap = Number(manifest.maxClaudeBudgetUsd || 0);
+  if (Number.isFinite(explicitCap) && explicitCap > 0) return { policy: "explicit-usd-cap", capUsd: Math.max(0.1, Math.min(10, explicitCap)) };
+  if (claudeSubscriptionBillingActive(auth, env)) return { policy: "subscription-quota-windows", capUsd: null };
+  return { policy: "auto-usd-cap", capUsd: 0.75 };
+}
+
+function describeClaudeBudgetPolicy(manifest = {}, auth = cachedClaudeAuth(), env = process.env) {
+  const policy = claudeBudgetPolicy(manifest, auth, env);
+  return policy.capUsd === null
+    ? "subscription-quota-windows (included plan; no --max-budget-usd; measured 5h/weekly/model windows plus output-token and lease guards)"
+    : `${policy.policy}<=$${policy.capUsd}/worker`;
+}
+
+function claudeBudgetFor(manifest, complexityRank, auth = cachedClaudeAuth(), env = process.env) {
+  const policy = claudeBudgetPolicy(manifest, auth, env);
+  if (policy.capUsd === null) return null;
+  if (policy.policy === "explicit-usd-cap") return policy.capUsd;
   const desired = ({ 1: 0.2, 2: 0.35, 3: 0.55, 4: 0.75 })[complexityRank] || 0.35;
-  return Math.max(0.1, Math.min(Number(manifest.maxClaudeBudgetUsd || 0.75), desired));
+  return Math.max(0.1, Math.min(policy.capUsd, desired));
 }
 
 function capabilitiesForWorkItem(kind, objective) {
@@ -3306,7 +3341,7 @@ function runContractChanges(manifest, args = {}) {
       capacityCheckpointMinutes: Number(manifest.capacityCheckpointMinutes ?? 20),
       maxWorkerMinutes: Number(manifest.maxWorkerMinutes ?? 0),
       maxClaudeOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
-      maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd || 0.75),
+      maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd ?? 0) > 0 ? Number(manifest.maxClaudeBudgetUsd) : 0,
     },
     constraints: manifest.constraints || [],
     acceptanceCriteria: manifest.acceptanceCriteria || [],
@@ -3839,7 +3874,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     `Workspace: ${workspace}`,
     orchestrated ? `ProjectDuration: ${snapshot.deadlineAt ? `optional deadline ${snapshot.deadlineAt}` : "continuous until verified, blocked, or explicitly stopped"}` : null,
     orchestrated ? `CapacityHorizon: rolling ${snapshot.horizonHours || 5}h forecast; nextReview=${snapshot.nextCapacityCheckpointAt || "on next status refresh"}; reviews=${snapshot.capacityCheckpointCount || 0}` : null,
-    orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
+    orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; claudeBudget=${describeClaudeBudgetPolicy(snapshot)}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
     orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
@@ -6081,11 +6116,18 @@ function runClaudeJobWorker(args = {}) {
   if (dispatchModel) cliArgs.push("--model", safeClaudeFlag(dispatchModel, "model"));
   if (args.effort) cliArgs.push("--effort", safeClaudeFlag(args.effort, "effort"));
   if (args.fallbackModel) cliArgs.push("--fallback-model", safeClaudeFlag(args.fallbackModel, "fallbackModel"));
-  if (args.maxBudgetUsd !== undefined && args.maxBudgetUsd !== null && String(args.maxBudgetUsd).trim() !== "") {
-    const budget = Number(args.maxBudgetUsd);
-    if (!Number.isFinite(budget) || budget <= 0) throw new Error("maxBudgetUsd must be a positive number.");
-    cliArgs.push("--max-budget-usd", String(budget));
-  }
+  const suppliedBudgetUsd = args.maxBudgetUsd !== undefined && args.maxBudgetUsd !== null && String(args.maxBudgetUsd).trim() !== ""
+    ? Number(args.maxBudgetUsd)
+    : null;
+  if (suppliedBudgetUsd !== null && (!Number.isFinite(suppliedBudgetUsd) || suppliedBudgetUsd <= 0)) throw new Error("maxBudgetUsd must be a positive number.");
+  const autoBudgetPolicy = claudeBudgetPolicy({});
+  const appliedBudgetUsd = suppliedBudgetUsd !== null ? suppliedBudgetUsd : autoBudgetPolicy.capUsd;
+  if (appliedBudgetUsd !== null) cliArgs.push("--max-budget-usd", String(appliedBudgetUsd));
+  const budgetPolicyLabel = suppliedBudgetUsd !== null
+    ? `explicit-usd-cap<=$${suppliedBudgetUsd}`
+    : appliedBudgetUsd !== null
+      ? `auto-usd-cap<=$${appliedBudgetUsd}`
+      : "subscription-quota-windows";
 
   updateJobStatus(workspace, jobId, {
     state: "running",
@@ -6097,6 +6139,7 @@ function runClaudeJobWorker(args = {}) {
     claudeModel: args.model || "",
     claudePermissionMode: permissionMode,
     claudeIsolationMode: "safe-mode",
+    claudeBudgetPolicy: budgetPolicyLabel,
     maxOutputTokens,
   });
 
@@ -7249,7 +7292,19 @@ function runSelfTest() {
   const defaultControls = normalizedRunControls({});
   assert(defaultControls.runDeadlineMinutes === 0 && defaultControls.capacityCheckpointMinutes === 20 && defaultControls.maxWorkerMinutes === 0 && defaultControls.maxClaudeOutputTokens === 12000, "projects default to continuous duration with rolling capacity checkpoints");
   assert(workerMinutesFor(defaultControls, 4, "antigravity") === 60 && workerMinutesFor(defaultControls, 4, "claude") === 90 && workerMinutesFor({ ...defaultControls, maxWorkerMinutes: 25 }, 4, "claude") === 25, "worker leases adapt to complexity and honor only an explicit ceiling");
-  assert(claudeBudgetFor(defaultControls, 4) === 0.75, "Claude output remains cost-bounded without limiting project duration");
+  assert(defaultControls.maxClaudeBudgetUsd === 0, "maxClaudeBudgetUsd defaults to 0 so the auth-aware automatic budget policy applies");
+  const subscriptionAuth = { checked: true, loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" };
+  const unknownAuth = { checked: true, loggedIn: true, subscriptionType: "" };
+  const apiCredentialAuth = { checked: true, loggedIn: true, authMethod: "apiKey", apiProvider: "firstParty", subscriptionType: "pro" };
+  assert(claudeBudgetFor(defaultControls, 4, subscriptionAuth, {}) === null, "claude.ai subscription auth without an API key omits the per-worker USD cap and relies on measured quota windows");
+  assert(claudeBudgetFor(defaultControls, 4, subscriptionAuth, { ANTHROPIC_API_KEY: "sk-test" }) === 0.75, "an active ANTHROPIC_API_KEY forces the conservative automatic USD cap even with a subscription");
+  assert(claudeBudgetFor(defaultControls, 4, unknownAuth, {}) === 0.75, "unknown billing keeps the conservative automatic USD cap");
+  assert(claudeBudgetFor(defaultControls, 4, apiCredentialAuth, {}) === 0.75, "non-claude.ai authentication cannot be mistaken for included subscription billing");
+  assert(claudeBudgetFor({ ...defaultControls, maxClaudeBudgetUsd: 0.5 }, 4, subscriptionAuth, {}) === 0.5, "an explicit user USD cap is preserved even under subscription auth");
+  assert(claudeBudgetFor({ ...defaultControls, maxClaudeBudgetUsd: 2 }, 4, subscriptionAuth, {}) === 2, "an explicit user USD cap is passed unchanged instead of being reduced by automatic complexity scaling");
+  assert(claudeBudgetPolicy(defaultControls, subscriptionAuth, {}).policy === "subscription-quota-windows" && claudeBudgetPolicy(defaultControls, unknownAuth, {}).policy === "auto-usd-cap" && claudeBudgetPolicy({ maxClaudeBudgetUsd: 2 }, subscriptionAuth, {}).policy === "explicit-usd-cap", "the selected Claude budget policy is classified for plan/status exposure");
+  assert(/subscription-quota-windows/.test(describeClaudeBudgetPolicy(defaultControls, subscriptionAuth, {})) && /auto-usd-cap<=\$0\.75/.test(describeClaudeBudgetPolicy(defaultControls, unknownAuth, {})), "plan/status output names the selected Claude budget policy");
+  assert(claudeBudgetFor(defaultControls, 4, subscriptionAuth, { CLAUDE_CODE_USE_BEDROCK: "1" }) === 0.75, "Bedrock/Vertex billing keeps the conservative automatic USD cap");
   const safetyConstraints = normalizedRunConstraints({ constraints: ["Do not access email."] });
   assert(safetyConstraints.some((item) => /OAuth consent/.test(item)) && safetyConstraints.some((item) => /browser and account state/.test(item)) && safetyConstraints.some((item) => /Do not access email/.test(item)), "default browser, account, OAuth, and user constraints are propagated together");
   const contractArgs = { goal: "Refactor a bounded module", mode: "patch", horizonHours: 5 };

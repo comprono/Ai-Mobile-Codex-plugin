@@ -76,7 +76,7 @@ param(
   [int] $CapacityCheckpointMinutes = 20,
   [int] $MaxWorkerMinutes = 0,
   [int] $MaxClaudeOutputTokens = 12000,
-  [double] $MaxClaudeBudgetUsd = 0.75,
+  [double] $MaxClaudeBudgetUsd = 0,
   [int] $WaitSeconds = 30,
   [int] $EstimatedCodexInputTokens = 2000
 )

@@ -16,7 +16,8 @@
 - Default to safe-mode, non-persistent sessions. Record the dominant model plus the bounded model mix so helper-model calls do not masquerade as the requested worker model.
 - Prefer an exact model id learned from real CLI telemetry over a moving alias. Keep the alias only for quota-window applicability and policy.
 - Never infer live runtime state from source control. Consume recorded dependency evidence or report the state as unknown.
-- Every Claude lane receives a complexity-adaptive safety lease, provider budget cap, and output-token ceiling. Direct bridge jobs default to 30 minutes. A budget breach is terminal for that lane and does not trigger a second paid attempt; it does not terminate the project.
+- Every Claude lane receives a complexity-adaptive safety lease and output-token ceiling. Direct bridge jobs default to 30 minutes. A budget breach is terminal for that lane and does not trigger a second paid attempt; it does not terminate the project.
+- Budget policy is auth-aware: claude.ai subscription auth (Pro/Max/Team/Enterprise, no `ANTHROPIC_API_KEY`) omits `--max-budget-usd` and relies on measured 5-hour/weekly/model quota windows plus the output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic per-worker USD cap. `maxClaudeBudgetUsd=0` means automatic policy, an explicit positive cap is preserved, and no account identifiers or credentials are stored.
 
 ## Antigravity CLI
 
