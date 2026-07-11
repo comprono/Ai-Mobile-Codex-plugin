@@ -14,6 +14,7 @@ __pycache__/
 *.webp
 *.jpg
 *.jpeg
+!assets/ai-mobile-control-room.png
 
 # Local Antigravity runtime/status artifacts
 notes/

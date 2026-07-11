@@ -23,7 +23,11 @@ param(
   [string] $UpdateStyle = "",
   [string] $Role = "",
   [string] $CodexModelAllowPattern = "",
+  [string] $ClaudeModelAllowPattern = "",
+  [string] $ClaudePreferredModelPattern = "",
+  [string] $AntigravityPreferredTaskPattern = "",
   [string] $ModelPolicyReviewAfter = "",
+  [object] $AdaptiveRouting = $null,
   [string] $WorkItemsJson = "",
   [string] $WorkItemsFile = "",
   [string] $ConstraintsJson = "",
@@ -33,6 +37,7 @@ param(
   [string] $FailedCodexItems = "",
   [string] $TakeoverCodexItems = "",
   [string] $CodexEvidenceJson = "",
+  [string] $HostWorkerEventsJson = "",
   [object] $ProjectVerified = $false,
   [object] $ProjectVerificationFailed = $false,
   [string] $ProjectVerificationSummary = "",
@@ -68,12 +73,15 @@ param(
   [object] $SkipModelSwitch = $false,
   [object] $HasWorkspaceWork = $true,
   [object] $IncludeCursor = $false,
+  [object] $ManagerOnly = $true,
   [object] $AllowPremiumModels = $false,
   [object] $AllowAntigravityCli = $false,
   [object] $IncludePlan = $false,
   [object] $RefreshInventory = $false,
   [int] $RunDeadlineMinutes = 0,
   [int] $CapacityCheckpointMinutes = 20,
+  [int] $CodexManagerReservePercent = 15,
+  [int] $MaxConcurrentCodexWorkers = 1,
   [int] $MaxWorkerMinutes = 0,
   [int] $MaxClaudeOutputTokens = 12000,
   [double] $MaxClaudeBudgetUsd = 0,
@@ -525,13 +533,23 @@ function Get-PrivacyReport {
   )
 
   $findings = @()
-  $scanFiles = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.FullName -notmatch "\\.git\\" -and
-      $_.FullName -notmatch "\\node_modules\\" -and
-      $_.FullName -notmatch "\\.pytest_cache\\" -and
-      $_.FullName -notmatch "\\__pycache__\\"
-    })
+  $scanFiles = @()
+  $gitFiles = @(& git -C $repoRoot ls-files --cached --others --exclude-standard 2>$null)
+  if ($LASTEXITCODE -eq 0) {
+    $scanFiles = @($gitFiles |
+      ForEach-Object { Join-Path $repoRoot $_ } |
+      Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+      ForEach-Object { Get-Item -LiteralPath $_ })
+  } else {
+    $scanFiles = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.FullName -notmatch "\\.git\\" -and
+        $_.FullName -notmatch "\\.antigravity-bridge\\" -and
+        $_.FullName -notmatch "\\node_modules\\" -and
+        $_.FullName -notmatch "\\.pytest_cache\\" -and
+        $_.FullName -notmatch "\\__pycache__\\"
+      })
+  }
   foreach ($pattern in $patterns) {
     $matches = @($scanFiles |
       Select-String -Pattern $pattern -ErrorAction SilentlyContinue |
@@ -547,11 +565,12 @@ function Get-PrivacyReport {
   }
 
   [PSCustomObject]@{
-    Source = "Local repository pattern scan"
+    Source = "Publishable repository pattern scan"
     GeneratedAtUtc = [datetime]::UtcNow.ToString("o")
+    ScannedFileCount = $scanFiles.Count
     FindingCount = $findings.Count
     Findings = $findings
-    Note = "Review findings manually before publishing. Runtime CSRF handling in code is expected; actual runtime token values must never be committed."
+    Note = "Scans tracked and unignored working-tree files; ignored runtime jobs are excluded. Review findings manually before publishing. Runtime CSRF handling and security field names in code are expected; actual values must never be committed."
   } | ConvertTo-Json -Depth 6
 }
 
@@ -1149,6 +1168,7 @@ function Invoke-TeamCommand {
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
+  $managerOnlyValue = ConvertTo-BooleanValue -Value $ManagerOnly -Default $true
   $allowPremiumModelsValue = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
   $allowAntigravityCliValue = ConvertTo-BooleanValue -Value $AllowAntigravityCli -Default $false
   $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
@@ -1177,8 +1197,11 @@ function Invoke-TeamCommand {
     allowPremiumModels = $allowPremiumModelsValue
     allowAntigravityCli = $allowAntigravityCliValue
     includeCursor = $includeCursorValue
+    managerOnly = $managerOnlyValue
     runDeadlineMinutes = $RunDeadlineMinutes
     capacityCheckpointMinutes = $CapacityCheckpointMinutes
+    codexManagerReservePercent = $CodexManagerReservePercent
+    maxConcurrentCodexWorkers = $MaxConcurrentCodexWorkers
     maxWorkerMinutes = $MaxWorkerMinutes
     maxClaudeOutputTokens = $MaxClaudeOutputTokens
     maxClaudeBudgetUsd = $MaxClaudeBudgetUsd
@@ -1192,11 +1215,19 @@ function Invoke-TeamCommand {
     start = $startValue
     action = $ProfileAction
     communicationStyle = $CommunicationStyle
-    address = $Address
     updateStyle = $UpdateStyle
     role = $Role
     codexModelAllowPattern = $CodexModelAllowPattern
+    claudeModelAllowPattern = $ClaudeModelAllowPattern
+    claudePreferredModelPattern = $ClaudePreferredModelPattern
+    antigravityPreferredTaskPattern = $AntigravityPreferredTaskPattern
     modelPolicyReviewAfter = $ModelPolicyReviewAfter
+  }
+  if (-not [string]::IsNullOrWhiteSpace($Address)) {
+    $payloadObject.address = $Address
+  }
+  if ($null -ne $AdaptiveRouting) {
+    $payloadObject.adaptiveRouting = ConvertTo-BooleanValue -Value $AdaptiveRouting -Default $true
   }
   $remainingPercentValue = 0.0
   if ([double]::TryParse($CodexRemainingPercent, [ref]$remainingPercentValue)) {
@@ -1368,6 +1399,14 @@ function Invoke-BridgeJobCommand {
       throw "CodexEvidenceJson must be a valid JSON array. $($_.Exception.Message)"
     }
   }
+  $hostWorkerEventValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($HostWorkerEventsJson)) {
+    try {
+      $hostWorkerEventValues = @(ConvertFrom-Json -InputObject $HostWorkerEventsJson | ForEach-Object { $_ })
+    } catch {
+      throw "HostWorkerEventsJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
   $projectVerifiedValue = ConvertTo-BooleanValue -Value $ProjectVerified -Default $false
   $projectVerificationFailedValue = ConvertTo-BooleanValue -Value $ProjectVerificationFailed -Default $false
   $addConstraintValues = @()
@@ -1399,6 +1438,7 @@ function Invoke-BridgeJobCommand {
     failedCodexItems = $failedCodexItemValues
     takeoverCodexItems = $takeoverCodexItemValues
     codexEvidence = $codexEvidenceValues
+    hostWorkerEvents = $hostWorkerEventValues
     codexModel = $CodexModel
     projectVerified = $projectVerifiedValue
     projectVerificationFailed = $projectVerificationFailedValue

@@ -8,7 +8,7 @@ The orchestrator preserves the source and freshness of every capacity fact:
 
 | Resource | Models | Capacity and reset evidence | Dispatch |
 | --- | --- | --- | --- |
-| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Native host agent tool; current Codex remains PM, active integrator, and verifier |
+| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Separate native host agents; current Codex chat remains manager-only |
 | Claude Code | Installed aliases plus exact ids learned from CLI help or completed-run telemetry | Built-in `/usage` output, cached for 10 minutes | Headless CLI |
 | Antigravity CLI | `agy models` | CLI roster plus recent outcomes | Headless CLI |
 | Antigravity desktop | Full named model roster | Per-model remaining percentage and reset time while the local service is already running | UI only when visible project/chat state is required |
@@ -20,7 +20,11 @@ Evidence is classified as measured, observed, cached, caller-provided, or unknow
 
 The local reader scans only bounded tails of recent Codex JSONL session files and accepts only `event_msg` rows whose payload type is `token_count`. It normalizes current five-hour, seven-day, and future window shapes, plus numeric session token totals. Prompts, responses, file paths, and thread identifiers are discarded. Because this is an undocumented local event shape, stale or incompatible data fails closed.
 
-Host-native model ids and reasoning efforts come from the current spawn-agent schema when exposed, with the local model catalog as a passive fallback. The planner selects only an effort supported by that model. Maximum efforts are reserved for material criticality or risk; availability alone is not a reason to spend them.
+Host-native model ids and reasoning efforts come from the current spawn-agent schema when exposed, with the local model catalog as a passive fallback. The planner selects only an effort supported by that model. Maximum efforts are reserved for material criticality or risk; availability alone is not a reason to spend them. The parent chat never impersonates a selected Codex worker: it first records a token-bound reservation, exposes the exact spawn action while reserved, binds the returned agent id on `started`, and requires compact completion evidence.
+
+Codex capacity windows currently apply to the shared Codex agent pool unless the observed source explicitly identifies a model-specific window. A private local allow pattern can restrict eligible catalog models without hardcoding those names into the public plugin.
+
+Because native Codex workers consume that same shared pool, AI Mobile protects a configurable manager reserve (15% by default), penalizes native dispatch as headroom shrinks, and stops new native workers at the reserve. Default native concurrency is one. Claude and Antigravity CLI workers use independent capacity and can continue in parallel through the durable supervisor.
 
 ## Claude Quota Windows
 
@@ -44,15 +48,19 @@ It also does not infer model quality from a separate quota bucket. Fable availab
 The baseline family roles follow [Claude Code model configuration](https://code.claude.com/docs/en/model-config) and [cost guidance](https://code.claude.com/docs/en/costs); local alias ids and quota rows remain runtime evidence because they can change before public documentation does.
 
 1. Apply a quality floor before considering cost or reset timing.
-2. Use Haiku or efficient Antigravity Flash models for tightly bounded discovery, summaries, and low-risk checks.
-3. Prefer Sonnet for substantial implementation, architecture, debugging, and tests when its shared windows are healthy.
-4. Reserve Opus for complex premium reasoning. Use Fable only when explicitly requested or when its dedicated window creates a high-value capacity opportunity.
-5. Treat healthy dedicated Fable capacity that resets inside the planning horizon as an opportunity only for high-value work. A reset is not a reason to waste premium capacity on routine work.
+2. Apply the private local model allow/preference patterns before scoring; public defaults remain neutral.
+3. Use efficient Antigravity Flash models for tightly bounded browser/file-reading, discovery, summaries, and low-risk checks when their capability and quota evidence fit.
+4. Prefer Sonnet for substantial Claude implementation, architecture, debugging, and tests when its shared windows are healthy and the local profile permits it.
+5. Reserve Opus/Fable for complex premium reasoning or a justified dedicated-capacity opportunity.
 6. Penalize any resource below 15 percent effective remaining capacity and stop dispatching it when an applicable window is exhausted.
-7. Keep one workspace writer. Parallelize only independent read-only work.
+7. Keep one workspace writer. Parallelize only independent read-only work, and honor the separate native Codex concurrency ceiling.
 8. Record successful task affinity, failures, cooldowns, exact observed model ids, duration, and available token telemetry.
 9. On quota, outage, timeout, auth, model-unavailable, or insufficient output, fail over the narrow work item once to a provider-diverse alternate.
-10. Return all worker results to Codex for critique, integration, and final verification.
+10. Keep the parent Codex chat on planning, steering, evidence review, user decisions, and reporting; project execution belongs to separate native or CLI workers.
+
+Claude jobs feature-detect the installed CLI instead of relying on a fixed version. On Windows the bridge prefers Claude's native executable for exact argument transport, uses isolated non-persistent sessions, assigns bounded scout/reviewer/verifier/writer contracts, and accepts structured final evidence when supported. A small optional Claude plugin with the same roles lives under `claude-plugin/`; bridge safe mode uses explicit equivalent role instructions because safe mode suppresses plugin components.
+
+Direct manual provider jobs default to 30 minutes. Orchestrated provider calls instead receive complexity-adaptive 10-90 minute safety leases unless an explicit ceiling is supplied.
 
 ## Five-Hour Planning Horizon
 
@@ -66,6 +74,8 @@ The default horizon is five hours because it captures the immediate work period 
 - whether waiting, using an alternate, or spending premium capacity gives the best expected outcome.
 
 Provider snapshots are cached to avoid repeatedly calling local CLIs or the Antigravity language server. Codex local capacity is read from a recent event with a shorter freshness boundary. `refresh=true` or `-RefreshInventory true` forces a fresh provider probe when a quota change, outage, or reset makes the cache stale in practice.
+
+The nominal capacity checkpoint is 20 minutes, reduced to five minutes when Codex reaches or approaches the manager reserve. External CLI jobs and their dependency state are durable under `.antigravity-bridge`, so they can continue without parent-chat tokens; after a Codex reset, `project-manager-status` resumes the same run.
 
 ## Privacy Boundary
 

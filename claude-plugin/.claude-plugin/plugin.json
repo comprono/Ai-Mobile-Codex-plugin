@@ -1,0 +1,10 @@
+{
+  "name": "ai-mobile-workers",
+  "version": "0.1.0",
+  "description": "Bounded Claude Code worker roles for AI Mobile orchestration.",
+  "author": {
+    "name": "comprono"
+  },
+  "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
+  "license": "MIT"
+}

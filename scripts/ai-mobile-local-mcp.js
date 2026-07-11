@@ -13,7 +13,7 @@ const {
   selectReasoningEffort,
   shouldFanOut,
 } = require("./lib/project-manager");
-const { modelPattern, readProfile, writeProfile } = require("./lib/orchestrator-profile");
+const { DEFAULT_PROFILE, modelPattern, normalizeProfile, readProfile, writeProfile } = require("./lib/orchestrator-profile");
 
 const pluginRoot = path.resolve(__dirname, "..");
 const helperScript = path.join(pluginRoot, "scripts", "antigravity.ps1");
@@ -22,6 +22,8 @@ const resourceCacheFile = path.join(process.env.LOCALAPPDATA || os.tmpdir(), "AI
 const codexModelsCacheFile = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "models_cache.json");
 const resourceCacheTtlMs = 10 * 60 * 1000;
 const processIdentityCache = new Map();
+const claudeCliCapabilityCache = new Map();
+const claudeWorkerPluginDir = path.join(pluginRoot, "claude-plugin");
 
 const tools = [
   {
@@ -232,9 +234,12 @@ const tools = [
         currentCodexModel: { type: "string", description: "Current caller model label when visible." },
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
+        managerOnly: { type: "boolean", description: "Plan the calling Codex chat as a management/reporting control room rather than an implementation worker.", default: true },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
+        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager chat, steering, and failover. Native Codex workers stop dispatching at or below this percentage.", default: 15 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneously active native Codex workers. External CLI workers can still run in parallel.", default: 1 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap. 0 (default) selects the auth-aware automatic policy: claude.ai subscription auth (Pro/Max/Team/Enterprise, no ANTHROPIC_API_KEY) omits --max-budget-usd and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic cap.", default: 0 },
@@ -246,7 +251,7 @@ const tools = [
   },
   {
     name: "run-project-manager",
-    description: "Default AI Mobile call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, keep externally consequential actions with the current Codex session, and return one compact operating result. Reuses only the same active goal instead of duplicating it.",
+    description: "Default AI Mobile control-room call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, and return one compact operating result. Manager-only mode is the default: the calling Codex chat manages, steers, reviews compact evidence, and reports instead of exploring the repository, running project diagnostics, editing files, or duplicating delegated work. Externally consequential and protected live-state boundaries remain with the current Codex session.",
     inputSchema: {
       type: "object",
       properties: {
@@ -262,6 +267,7 @@ const tools = [
         codexBudgetState: { type: "string", description: "Caller-visible Codex capacity state.", default: "unknown" },
         codexRemainingPercent: { type: "number", description: "Optional caller-visible Codex remaining percentage." },
         codexResetAt: { type: "string", description: "Optional caller-visible Codex reset time." },
+        hostCodexAvailable: { type: "boolean", description: "True only when the current Codex host exposes multi_agent_v1__spawn_agent. Enables separate native Codex worker lanes while the parent chat remains manager-only.", default: false },
         estimatedCodexInputTokens: { type: "number", description: "Rough direct-work cost used only as a routing signal.", default: 5000 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
         agyModel: { type: "string", description: "Optional Antigravity model override.", default: "auto" },
@@ -269,8 +275,11 @@ const tools = [
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside automatic policy.", default: false },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
+        managerOnly: { type: "boolean", description: "Keep the calling Codex chat as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
+        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; native Codex workers stop at this threshold.", default: 15 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; defaults to one to protect the shared five-hour pool.", default: 1 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
@@ -285,7 +294,7 @@ const tools = [
   },
   {
     name: "project-manager-status",
-    description: "Compact continuation call for the latest AI Mobile project-manager run. Waits briefly when requested, advances dependency-ready CLI work, repairs stale jobs, and returns only integration-relevant artifacts.",
+    description: "Compact continuation call for the latest AI Mobile project-manager run. Acknowledges token-bound native Codex host-worker events, advances dependency-ready CLI work, repairs stale jobs, and returns only manager-relevant actions and artifacts.",
     inputSchema: {
       type: "object",
       properties: {
@@ -294,6 +303,31 @@ const tools = [
         completedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that this chat completed and verified, allowing dependent CLI work to start." },
         failedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that failed or were blocked, preventing unsafe dependent dispatch." },
         takeoverCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Failed, blocked, or pending worker item ids that the current Codex session will explicitly take over." },
+        hostWorkerEvents: {
+          type: "array",
+          maxItems: 12,
+          description: "Acknowledged lifecycle events for native Codex host workers. Every event must match the run, work item, attempt, and attempt-bound dispatch token returned by HostCodexActions.",
+          items: {
+            type: "object",
+            properties: {
+              event: { type: "string", enum: ["reserved", "started", "completed", "failed", "cancelled", "cancellation-unconfirmed"] },
+              runId: { type: "string" },
+              workItemId: { type: "string" },
+              attemptId: { type: "string" },
+              dispatchToken: { type: "string" },
+              agentId: { type: "string" },
+              nickname: { type: "string" },
+              summary: { type: "string" },
+              artifactRefs: { type: "array", items: { type: "string" }, maxItems: 12 },
+              changedFiles: { type: "array", items: { type: "string" }, maxItems: 20 },
+              testSummary: { type: "string" },
+              observedModel: { type: "string" },
+              failureCategory: { type: "string" },
+            },
+            required: ["event", "runId", "workItemId", "attemptId", "dispatchToken"],
+            additionalProperties: false,
+          },
+        },
         codexEvidence: {
           type: "array",
           maxItems: 12,
@@ -335,7 +369,11 @@ const tools = [
         updateStyle: { type: "string", enum: ["concise-executive", "technical", "minimal"] },
         role: { type: "string", description: "Local project-manager role label." },
         codexModelAllowPattern: { type: "string", description: "Local regex policy for native Codex models." },
+        claudeModelAllowPattern: { type: "string", description: "Local regex allow policy for Claude Code model aliases and ids." },
+        claudePreferredModelPattern: { type: "string", description: "Local regex preference used to favor a Claude model when capability and quota are otherwise suitable." },
+        antigravityPreferredTaskPattern: { type: "string", description: "Local regex describing task kinds and objectives that should preferentially use Antigravity." },
         modelPolicyReviewAfter: { type: "string", description: "Optional ISO date after which model policy should be reviewed." },
+        adaptiveRouting: { type: "boolean", description: "Learn project affinity from verified successes and penalize recent failures.", default: true },
         cliFirst: { type: "boolean" },
         uiFallbackOnly: { type: "boolean" },
       },
@@ -354,6 +392,7 @@ const tools = [
         codexRemainingPercent: { type: "number", description: "Optional caller-visible Codex remaining percentage." },
         codexResetAt: { type: "string", description: "Optional caller-visible Codex reset time." },
         horizonHours: { type: "number", description: "Decision horizon for resets and cooldowns.", default: 5 },
+        hostCodexAvailable: { type: "boolean", description: "True when the current host exposes native Codex subagents.", default: false },
         includeCursor: { type: "boolean", description: "Probe for a true headless Cursor agent.", default: false },
         refresh: { type: "boolean", description: "Refresh CLI model/auth probes instead of accepting a recent safe cache.", default: false },
       },
@@ -412,6 +451,8 @@ const tools = [
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
+        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager chat, steering, and recovery.", default: 15 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; external providers remain independently parallel.", default: 1 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
@@ -823,6 +864,8 @@ function buildHandoffTemplate(args = {}) {
     "```text",
     `Goal: ${goal}`,
     `Workspace: ${workspace}`,
+    orchestrated ? `ControlRoomMode: ${snapshot.managerOnly === true ? "manager-only" : "manager-and-integrator"}` : null,
+    orchestrated && snapshot.managerOnly === true ? "RequiredHostBehavior: use AI Mobile status/steering calls and compact worker artifacts only; do not scan project files, run project diagnostics/tests, edit source, or silently take over worker work." : null,
     "Constraints: inspect files locally; do not paste full files, full logs, or full source; use search before reading whole files.",
     `Token rule: work token-efficiently; write progress to ${statusFile}; output max 10 bullets plus changed file list.`,
     `Next step: ${nextStep}`,
@@ -1686,6 +1729,24 @@ function normalizedModelText(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9.]+/g, " ").trim();
 }
 
+function regexMatches(value, pattern, fallback = false) {
+  try {
+    return new RegExp(String(pattern || ""), "i").test(String(value || ""));
+  } catch {
+    return fallback;
+  }
+}
+
+function neutralLocalRoutingProfile() {
+  return {
+    codexModelAllowPattern: "^gpt-",
+    claudeModelAllowPattern: ".*",
+    claudePreferredModelPattern: "(?!)",
+    antigravityPreferredTaskPattern: "(?!)",
+    adaptiveRouting: true,
+  };
+}
+
 function liveAgyEvidence(context, model) {
   const needle = normalizedModelText(`${model.id} ${model.displayName}`);
   const liveModels = [
@@ -1793,6 +1854,7 @@ function platformReliabilitySummary(outcomes = {}, platform, horizonHours = 5) {
 }
 
 function buildResourceCandidates(args = {}, context = {}) {
+  const localProfile = args.localProfile || neutralLocalRoutingProfile();
   const outcomes = context.workspaceState?.outcomes || {};
   const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
   const platformReliability = {
@@ -1830,9 +1892,15 @@ function buildResourceCandidates(args = {}, context = {}) {
     platformReliability: platformReliability.codex,
   }];
 
-  const claudeModels = context.claudeModels?.length
+  const discoveredClaudeModels = context.claudeModels?.length
     ? context.claudeModels
     : [{ id: "sonnet", displayName: context.claudeObservedModel || "Claude Sonnet (local alias)", evidence: "detected-cli" }];
+  const explicitClaudeModel = normalizedModelText(args.claudeModel || "");
+  const claudeModels = discoveredClaudeModels.filter((model) => {
+    const value = `${model.id || ""} ${model.resolvedId || ""} ${model.displayName || ""}`;
+    return regexMatches(value, localProfile.claudeModelAllowPattern, true)
+      || (explicitClaudeModel && explicitClaudeModel !== "auto" && normalizedModelText(value).includes(explicitClaudeModel));
+  });
   for (const model of claudeModels) {
     const modelId = String(model.id || "sonnet").toLowerCase();
     const resolvedModelId = String(model.resolvedId || "").trim();
@@ -1940,8 +2008,48 @@ function buildResourceCandidates(args = {}, context = {}) {
   return candidates;
 }
 
+function buildNativeCodexCandidates(args = {}, context = {}) {
+  const localProfile = args.localProfile || readProfile();
+  const outcomes = context.workspaceState?.outcomes || {};
+  const controls = normalizedRunControls(args);
+  const effectiveRemainingPercent = Number.isFinite(context.codexRemainingPercent)
+    ? context.codexRemainingPercent
+    : Number.isFinite(context.codexTelemetry?.effectiveRemainingPercent)
+      ? context.codexTelemetry.effectiveRemainingPercent
+      : null;
+  const effectiveTelemetry = {
+    ...(context.codexTelemetry || {}),
+    effectiveRemainingPercent,
+    state: context.codexBudget?.state === "exhausted" ? "exhausted" : context.codexTelemetry?.state,
+  };
+  return buildHostCodexCandidates(context.codexCatalog || {}, effectiveTelemetry, {
+    includePattern: modelPattern(localProfile),
+    hostCapabilityVerified: args.hostCodexAvailable === true,
+  }).map((candidate) => ({
+    ...candidate,
+    managerReservePercent: controls.codexManagerReservePercent,
+    capacityHeadroomPercent: Number.isFinite(candidate.remainingPercent)
+      ? candidate.remainingPercent - controls.codexManagerReservePercent
+      : null,
+    dispatchable: candidate.dispatchable
+      && !(["low", "critical", "exhausted"].includes(context.codexBudget?.state)
+        || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent)),
+    hostDispatchable: candidate.hostDispatchable
+      && !(["low", "critical", "exhausted"].includes(context.codexBudget?.state)
+        || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent)),
+    state: candidate.state === "available"
+      && (["low", "critical", "exhausted"].includes(context.codexBudget?.state)
+        || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent))
+      ? "manager-reserve"
+      : candidate.state,
+    outcome: compactOutcome(outcomes[candidate.id] || {}),
+    platformReliability: platformReliabilitySummary(outcomes, "codex", args.horizonHours || 5),
+  }));
+}
+
 function formatResourceInventory(args = {}, context = {}, candidates = buildResourceCandidates(args, context)) {
   const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  const localProfile = args.localProfile || readProfile();
   const lines = [
     "AiMobileResourceInventory:",
     `GeneratedAtUtc: ${utcStamp()}`,
@@ -1952,6 +2060,7 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}; efforts=${context.claudeEfforts?.join(",") || "unknown"}`,
     `- Antigravity: cli=${context.agyFound}; cli-version=${context.agyVersion || "unknown"}; desktop-live=${context.antigravityLiveReady}; live-models=${(context.rawLimits?.Models || []).filter((model) => model.DisplayName).length}`,
     `- Cursor: ui=${context.cursorUiFound}; headless-agent=${context.cursorHeadlessFound}; version=${String(context.cursorUiVersion || "unknown").split(/\r?\n/)[0]}`,
+    `LocalRoutingProfile: codex=${localProfile.codexModelAllowPattern}; claudeAllow=${localProfile.claudeModelAllowPattern}; claudePrefer=${localProfile.claudePreferredModelPattern}; antigravityTasks=${localProfile.antigravityPreferredTaskPattern}; adaptive=${localProfile.adaptiveRouting !== false}`,
     "TeamsAndModels:",
   ];
   for (const candidate of candidates) {
@@ -1962,7 +2071,10 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
         ? "; policy=explicit or high-value dedicated-reset opportunity"
         : "; policy=complex premium reasoning or explicit request")
       : "";
-    lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}${policy}`);
+    const runway = candidate.dispatchMode === "host-subagent"
+      ? `; managerReserve=${candidate.managerReservePercent ?? 15}%; headroom=${candidate.capacityHeadroomPercent ?? "unknown"}%`
+      : "";
+    lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}${policy}${runway}`);
   }
   lines.push("ClaudeQuotaWindows:");
   for (const window of context.claudeUsage?.windows || []) {
@@ -2003,8 +2115,9 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
 
 async function getResourceInventory(args = {}) {
   const context = await getTeamCapacityContext(args);
-  const candidates = buildResourceCandidates(args, context);
-  return formatResourceInventory(args, context, candidates);
+  const profiledArgs = { ...args, localProfile: readProfile() };
+  const candidates = [...buildResourceCandidates(profiledArgs, context), ...buildNativeCodexCandidates(profiledArgs, context)];
+  return formatResourceInventory(profiledArgs, context, candidates);
 }
 
 function formatCodexUsage(telemetry = readCodexUsageTelemetry()) {
@@ -2041,10 +2154,14 @@ function profileSummary(profile = readProfile()) {
     updateStyle: profile.updateStyle,
     role: profile.role,
     codexModelAllowPattern: profile.codexModelAllowPattern,
+    claudeModelAllowPattern: profile.claudeModelAllowPattern,
+    claudePreferredModelPattern: profile.claudePreferredModelPattern,
+    antigravityPreferredTaskPattern: profile.antigravityPreferredTaskPattern,
     modelPolicyReviewAfter: profile.modelPolicyReviewAfter,
     modelPolicyReviewDue: Number.isFinite(reviewAt) && reviewAt <= Date.now(),
     cliFirst: profile.cliFirst,
     uiFallbackOnly: profile.uiFallbackOnly,
+    adaptiveRouting: profile.adaptiveRouting !== false,
     source: profile.source,
     path: profile.path,
   };
@@ -2060,10 +2177,14 @@ function formatOrchestratorProfile(profile = readProfile()) {
     `UpdateStyle: ${safe.updateStyle}`,
     `Role: ${safe.role}`,
     `CodexModelAllowPattern: ${safe.codexModelAllowPattern}`,
+    `ClaudeModelAllowPattern: ${safe.claudeModelAllowPattern}`,
+    `ClaudePreferredModelPattern: ${safe.claudePreferredModelPattern}`,
+    `AntigravityPreferredTaskPattern: ${safe.antigravityPreferredTaskPattern}`,
     `ModelPolicyReviewAfter: ${safe.modelPolicyReviewAfter || "not-set"}`,
     `ModelPolicyReviewDue: ${safe.modelPolicyReviewDue}`,
     `CliFirst: ${safe.cliFirst}`,
     `UiFallbackOnly: ${safe.uiFallbackOnly}`,
+    `AdaptiveRouting: ${safe.adaptiveRouting}`,
     `LocalPath: ${safe.path}`,
     "Privacy: this profile is local runtime configuration and is not stored in the public plugin repository.",
   ].join("\n");
@@ -2094,6 +2215,9 @@ function projectManagerResourceScore(candidate, item, args = {}, primaryWriterId
     if (/architecture|integration|security|incident|migration|risk|final-verification/.test(intent)) score += 24;
     if (item.complexity === "critical") score += 16;
     if (item.complexity === "low" && item.readOnly) score -= 12;
+    if (/architecture|integration|security|incident|migration|risk/.test(intent) && /\bsol\b/i.test(candidate.model)) score += 24;
+    if (/implementation|debug|test|refactor|patch/.test(intent) && /\bterra\b/i.test(candidate.model)) score += 22;
+    if (/discovery|summary|docs|mechanical|focused|scout/.test(intent) && /\bluna\b/i.test(candidate.model)) score += 22;
   }
   if (candidate.platform === "antigravity" && item.readOnly && /discovery|research|review|docs/.test(intent)) score += 10;
   if (candidate.platform === "claude" && item.readOnly === false && /implementation|debug|refactor|test/.test(intent)) score += 8;
@@ -2130,10 +2254,13 @@ function topologicalStage(workItem, byId, memo = new Map(), stack = new Set()) {
 }
 
 async function buildProjectManagerPlan(args = {}) {
+  args = normalizeManagerOnly(args);
+  const controls = normalizedRunControls(args);
   const workspace = safeWorkspacePath(args.workspace);
   const goal = String(args.goal || "").trim();
   if (!goal) throw new Error("project-manager-plan requires a non-empty goal.");
   const profile = readProfile();
+  args.localProfile = profile;
   const context = await getTeamCapacityContext({ ...args, workspace, codexModel: args.currentCodexModel || args.codexModel });
   const workItems = buildGoalWorkGraph(args);
   const capsuleResult = writeContextCapsule({
@@ -2149,14 +2276,7 @@ async function buildProjectManagerPlan(args = {}) {
   });
   const external = buildResourceCandidates(args, context)
     .filter((candidate) => candidate.platform !== "codex" && candidate.dispatchable);
-  const host = buildHostCodexCandidates(context.codexCatalog, context.codexTelemetry, {
-    includePattern: modelPattern(profile),
-    hostCapabilityVerified: args.hostCodexAvailable === true,
-  }).map((candidate) => ({
-    ...candidate,
-    outcome: compactOutcome(context.workspaceState?.outcomes?.[candidate.id] || {}),
-    platformReliability: platformReliabilitySummary(context.workspaceState?.outcomes || {}, "codex", args.horizonHours || 5),
-  }));
+  const host = buildNativeCodexCandidates({ ...args, localProfile: profile }, context);
   const candidates = [...external, ...host];
   const writable = workItems.filter((item) => !item.readOnly && !item.externallyConsequential).sort((a, b) => b.priority - a.priority);
   const primaryWriterId = writable.length
@@ -2231,6 +2351,8 @@ async function buildProjectManagerPlan(args = {}) {
             }
           : resource?.platform === "cursor"
             ? { goal: prompt, workspace, mode, model: resource.model, start: true }
+          : args.managerOnly
+            ? { action: "blocked-manager-only", reason: "No dispatchable worker satisfies this item; do not execute it in the control-room chat." }
             : { action: "current-codex", prompt };
     return {
       workItemId: item.id,
@@ -2238,11 +2360,11 @@ async function buildProjectManagerPlan(args = {}) {
       objective: item.objective,
       readOnly: item.readOnly,
       dependsOn: item.dependsOn,
-      resourceId: resource?.id || "codex-current",
-      platform: resource?.platform || "codex",
-      model: resource?.model || context.codexModel,
+      resourceId: resource?.id || (args.managerOnly ? "resource:unavailable" : "codex-current"),
+      platform: resource?.platform || (args.managerOnly ? "none" : "codex"),
+      model: resource?.model || (args.managerOnly ? "none" : context.codexModel),
       reasoningEffort: providerEffort,
-      dispatchMode: resource?.dispatchMode || (resource ? "external-cli" : "current-codex"),
+      dispatchMode: resource?.dispatchMode || (resource ? "external-cli" : args.managerOnly ? "blocked-manager-only" : "current-codex"),
       toolName,
       toolArgs,
       score: selected?.score ?? null,
@@ -2276,13 +2398,28 @@ async function buildProjectManagerPlan(args = {}) {
     fanOutReadyStageZero: shouldFanOut(workItems),
     oneWriterPerWorkspace: true,
     orchestrationDepth: 1,
-    mainCodexRole: [
-      "Own the goal, lifecycle gates, and architecture/risk decisions.",
-      "Launch only dependency-ready actions and keep one workspace writer.",
-      "Work directly on the narrow integration path while independent workers run.",
-      "Critique artifacts once, request one bounded correction or provider-diverse failover, then integrate.",
-      "Run final focused verification and report only evidence-backed completion.",
-    ],
+    controls: {
+      runDeadlineMinutes: controls.runDeadlineMinutes,
+      capacityCheckpointMinutes: controls.capacityCheckpointMinutes,
+      codexManagerReservePercent: controls.codexManagerReservePercent,
+      maxConcurrentCodexWorkers: controls.maxConcurrentCodexWorkers,
+      crossResetContinuity: "durable-run-resume",
+    },
+    mainCodexRole: args.managerOnly
+      ? [
+          "Own the goal, lifecycle gates, resource decisions, and user communication.",
+          "Launch only dependency-ready actions and keep one workspace writer.",
+          "Do not inspect project files, run project diagnostics or tests, edit source, or duplicate worker execution.",
+          "Critique compact artifacts once, request one bounded correction or provider-diverse failover, then record the integration decision.",
+          "Approve only explicit user-boundary actions and report evidence-backed state.",
+        ]
+      : [
+          "Own the goal, lifecycle gates, and architecture/risk decisions.",
+          "Launch only dependency-ready actions and keep one workspace writer.",
+          "Work directly on the narrow integration path while independent workers run.",
+          "Critique artifacts once, request one bounded correction or provider-diverse failover, then integrate.",
+          "Run final focused verification and report only evidence-backed completion.",
+        ],
     actions,
     gates: {
       execute: "Goal, constraints, ownership, and acceptance criteria are explicit.",
@@ -2303,6 +2440,8 @@ async function buildProjectManagerPlan(args = {}) {
     `Communication: ${profile.communicationStyle}; address=${profile.address || "none"}; role=${profile.role}`,
     `CodexCapacity: state=${context.codexTelemetry?.state || "unknown"}; remaining=${context.codexTelemetry?.effectiveRemainingPercent ?? "unknown"}%; fresh=${context.codexTelemetry?.fresh === true}`,
     `HostCodex: available=${args.hostCodexAvailable === true}; eligibleModels=${host.filter((candidate) => candidate.state === "available").map((candidate) => candidate.model).join(",") || "none"}`,
+    ...projectManagerRunwayLines(controls, context, candidates),
+    `ControlRoomMode: ${args.managerOnly ? "manager-only" : "manager-and-integrator"}`,
     `FanOutStageZero: ${plan.fanOutReadyStageZero}`,
     "Actions:",
   ];
@@ -2311,7 +2450,9 @@ async function buildProjectManagerPlan(args = {}) {
   }
   lines.push(
     "ExecutionContract:",
-    "- The current Codex session is the PM, integration owner, and an active narrow contributor; it does not wait idly while independent work runs.",
+    args.managerOnly
+      ? "- The current Codex session is the manager and reporter. Do not inspect project files, run project diagnostics/tests, edit source, or duplicate a worker."
+      : "- The current Codex session is the PM, integration owner, and an active narrow contributor; it does not wait idly while independent work runs.",
     "- Execute only stage-0 independent actions in parallel. After each dependency gate, launch the next stage.",
     "- For host-subagent actions, call the host spawn-agent tool with the exact model and reasoning effort in project-manager-plan.json. Never launch codex.exe.",
     "- For external-cli actions, call the named AI Mobile submit tool with the stored bounded prompt. Use UI only when the CLI cannot represent required visible state.",
@@ -2319,6 +2460,28 @@ async function buildProjectManagerPlan(args = {}) {
     `Next: read ${planPath} for exact bounded prompts, then execute dependency-ready actions.`,
   );
   return lines.join("\n");
+}
+
+// Single source of truth for the manager-only default: every orchestration entrypoint must call this
+// before reading args.managerOnly, so an omitted/undefined value never silently falls through to the
+// less-safe manager-and-integrator mode.
+function normalizeManagerOnly(args = {}) {
+  return { ...args, managerOnly: args.managerOnly !== false };
+}
+
+function projectManagerRunwayLines(controls = normalizedRunControls({}), context = {}, resources = []) {
+  const remaining = Number.isFinite(context.codexRemainingPercent)
+    ? context.codexRemainingPercent
+    : Number.isFinite(context.codexTelemetry?.effectiveRemainingPercent)
+      ? context.codexTelemetry.effectiveRemainingPercent
+      : null;
+  const checkpointDelay = capacityCheckpointDelayMinutes({ ...controls, resources });
+  return [
+    `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; current=${remaining === null ? "unknown" : `${remaining}%`}`,
+    `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent capacity`,
+    `CapacityCheckpoint: ${checkpointDelay}m; accelerates near the manager reserve without ending the project`,
+    "QuotaResetContinuity: durable run state persists; running external work continues and pending work is reconsidered after capacity refresh",
+  ];
 }
 
 function normalizeTaskLane(value) {
@@ -2387,6 +2550,9 @@ function defaultOperationalBoundaries() {
 function normalizedRunConstraints(args = {}) {
   return boundedTextList([
     ...defaultOperationalBoundaries(),
+    ...(args.managerOnly === true
+      ? ["Manager-only control room: the current Codex chat may steer, approve user-boundary actions, review compact evidence, and report, but must not explore project files, run project diagnostics or tests, edit source, or duplicate worker execution."]
+      : []),
     ...(Array.isArray(args.constraints) ? args.constraints : []),
   ], 20, 600);
 }
@@ -2395,6 +2561,8 @@ function normalizedRunControls(args = {}) {
   const requestedDeadline = Number(args.runDeadlineMinutes ?? 0);
   const requestedCheckpoint = Number(args.capacityCheckpointMinutes ?? 20);
   const requestedWorkerCap = Number(args.maxWorkerMinutes ?? 0);
+  const requestedManagerReserve = Number(args.codexManagerReservePercent ?? 15);
+  const requestedConcurrentCodex = Number(args.maxConcurrentCodexWorkers ?? 1);
   return {
     runDeadlineMinutes: Number.isFinite(requestedDeadline) && requestedDeadline > 0
       ? Math.max(2, Math.min(10080, requestedDeadline))
@@ -2402,6 +2570,12 @@ function normalizedRunControls(args = {}) {
     capacityCheckpointMinutes: Number.isFinite(requestedCheckpoint)
       ? Math.max(5, Math.min(240, requestedCheckpoint))
       : 20,
+    codexManagerReservePercent: Number.isFinite(requestedManagerReserve)
+      ? Math.max(5, Math.min(50, requestedManagerReserve))
+      : 15,
+    maxConcurrentCodexWorkers: Number.isFinite(requestedConcurrentCodex)
+      ? Math.max(1, Math.min(3, Math.round(requestedConcurrentCodex)))
+      : 1,
     maxWorkerMinutes: Number.isFinite(requestedWorkerCap) && requestedWorkerCap > 0
       ? Math.max(1, Math.min(180, requestedWorkerCap))
       : 0,
@@ -2619,7 +2793,7 @@ function requiredQuality(complexity) {
 
 function hoursUntil(value) {
   const timestamp = Date.parse(String(value || ""));
-  return Number.isFinite(timestamp) ? Math.max(0, (timestamp - Date.now()) / (60 * 60 * 1000)) : null;
+  return Number.isFinite(timestamp) ? (timestamp - Date.now()) / (60 * 60 * 1000) : null;
 }
 
 function premiumCapacityOpportunity(candidate, item, args = {}) {
@@ -2631,11 +2805,13 @@ function premiumCapacityOpportunity(candidate, item, args = {}) {
     && Number.isFinite(candidate.sharedRemainingPercent)
     && candidate.sharedRemainingPercent >= 30
     && Number.isFinite(resetHours)
+    && resetHours > 0
     && resetHours <= horizon;
 }
 
 function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = "") {
   if (!candidate.dispatchable || candidate.state !== "available") return Number.NEGATIVE_INFINITY;
+  const localProfile = args.localProfile || neutralLocalRoutingProfile();
   const availableCapabilities = new Set(candidate.capabilities || []);
   const required = item.requiredCapabilities || [];
   const matched = required.filter((capability) => availableCapabilities.has(capability));
@@ -2646,9 +2822,14 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
   score += candidate.speed * (item.complexity === "low" ? 0.16 : 0.08);
   score += candidate.cost * (item.complexity === "low" || item.kind.includes("discovery") ? 0.14 : 0.05);
   if (candidate.remainingPercent !== null) score += Math.max(-20, Math.min(15, (candidate.remainingPercent - 30) / 4));
+  if (candidate.dispatchMode === "host-subagent" && Number.isFinite(candidate.capacityHeadroomPercent) && candidate.capacityHeadroomPercent < 30) {
+    score -= Math.min(40, (30 - candidate.capacityHeadroomPercent) * 1.5);
+  }
   if (candidate.evidence === "observed-run" || candidate.evidence === "measured-live") score += 7;
-  if ((candidate.outcome?.successfulKinds || []).includes(item.kind)) score += 8;
-  score -= Math.min(24, Math.max(0, Number(candidate.outcome?.consecutiveFailures || 0)) * 8);
+  if (localProfile.adaptiveRouting !== false) {
+    if ((candidate.outcome?.successfulKinds || []).includes(item.kind)) score += 8;
+    score -= Math.min(24, Math.max(0, Number(candidate.outcome?.consecutiveFailures || 0)) * 8);
+  }
   if (item.preferredPlatform && item.preferredPlatform === candidate.platform) score += 25;
   const requestedClaudeModel = normalizedModelText(args.claudeModel || "");
   if (candidate.platform === "claude" && requestedClaudeModel && requestedClaudeModel !== "auto") {
@@ -2664,6 +2845,12 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
     else score -= 20;
   }
   if (candidate.platform === "claude" && !item.readOnly) score += ["high", "critical"].includes(item.complexity) ? 22 : 14;
+  if (candidate.platform === "claude" && regexMatches(`${candidate.model} ${candidate.displayName}`, localProfile.claudePreferredModelPattern, false)) {
+    score += 14;
+  }
+  if (candidate.platform === "antigravity" && regexMatches(`${item.kind} ${item.objective}`, localProfile.antigravityPreferredTaskPattern, false)) {
+    score += 14;
+  }
   const capacityOpportunity = premiumCapacityOpportunity(candidate, item, args);
   const premiumWork = item.complexity === "critical"
     || capacityOpportunity
@@ -2689,7 +2876,7 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
     && String(item.objective || "").length <= 280;
   const platformFailures = Math.max(0, Number(candidate.platformReliability?.recentFailures || 0));
   const platformSuccesses = Math.max(0, Number(candidate.platformReliability?.recentSuccesses || 0));
-  if (!microTask && platformFailures > platformSuccesses) {
+  if (localProfile.adaptiveRouting !== false && !microTask && platformFailures > platformSuccesses) {
     score -= platformFailures >= 2 && platformSuccesses === 0
       ? 35
       : Math.min(24, (platformFailures - platformSuccesses) * 10);
@@ -2748,20 +2935,27 @@ function requiresProtectedLiveState(item) {
 }
 
 function buildResourceOrchestrationDecision(args = {}, context = {}) {
-  const candidates = buildResourceCandidates(args, context);
+  args = normalizeManagerOnly(args);
+  const managerOnly = args.managerOnly === true;
+  const localProfile = args.localProfile || (process.env.AI_MOBILE_SELF_TEST === "1" ? neutralLocalRoutingProfile() : readProfile());
+  const routingArgs = { ...args, localProfile };
+  const candidates = [
+    ...buildResourceCandidates(routingArgs, context),
+    ...buildNativeCodexCandidates(routingArgs, context),
+  ];
   const workItems = buildGoalWorkGraph(args);
   const workItemsById = new Map(workItems.map((item) => [item.id, item]));
   const writable = workItems.filter((item) => !item.readOnly && !item.externallyConsequential).sort((a, b) => b.priority - a.priority);
   let primaryWriterId = "";
   if (writable.length) {
-    primaryWriterId = rankResourcesForWorkItem(candidates, writable[0], args)[0]?.candidate.id || "";
+    primaryWriterId = rankResourcesForWorkItem(candidates, writable[0], routingArgs)[0]?.candidate.id || "";
   }
 
   const decisions = [];
   const assignedItems = workItems.map((item) => {
     const directOperationalReview = isRedundantOperationalReview(item, workItemsById);
     const protectedLiveState = requiresProtectedLiveState(item);
-    if (item.externallyConsequential || directOperationalReview || protectedLiveState) {
+    if (item.externallyConsequential || protectedLiveState || (directOperationalReview && !managerOnly)) {
       const reason = directOperationalReview
         ? "low-complexity review of current-Codex operational evidence; redundant external dispatch omitted"
         : protectedLiveState
@@ -2783,26 +2977,29 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
         decisionReason: reason,
       };
     }
-    const ranked = rankResourcesForWorkItem(candidates, item, args, primaryWriterId);
+    const ranked = rankResourcesForWorkItem(candidates, item, routingArgs, primaryWriterId);
     let selected = ranked[0];
     if (!item.readOnly && primaryWriterId) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
     const assignment = selected?.candidate || null;
     const alternates = selectAlternateResourceIds(ranked, assignment, 3);
+    const fallbackResourceId = managerOnly ? "resource:unavailable" : "codex:current";
     const reason = assignment
-      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${resourceCapacityReason(assignment, item, args)}; ${item.readOnly ? "independent read-only work" : "single workspace writer"}`
-      : "no dispatchable resource currently satisfies the work item";
+      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${resourceCapacityReason(assignment, item, routingArgs)}; ${item.readOnly ? "independent read-only work" : "single workspace writer"}`
+      : managerOnly
+        ? "no dispatchable worker currently satisfies the work item; manager-only mode refuses silent current-Codex execution"
+        : "no dispatchable resource currently satisfies the work item";
     decisions.push({
       workItemId: item.id,
-      resourceId: assignment?.id || "codex:current",
-      model: assignment?.model || context.codexModel,
+      resourceId: assignment?.id || fallbackResourceId,
+      model: assignment?.model || (managerOnly ? "none" : context.codexModel),
       score: selected?.score ?? null,
       reason,
       alternates,
     });
     return {
       ...item,
-      assignment: assignment?.id || "codex:current",
-      assignedModel: assignment?.model || (assignment?.platform === "claude" ? String(args.claudeModel || "sonnet") : context.codexModel),
+      assignment: assignment?.id || fallbackResourceId,
+      assignedModel: assignment?.model || (managerOnly ? "none" : context.codexModel),
       alternates,
       decisionReason: reason,
     };
@@ -2844,12 +3041,17 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     `CapacityHorizonHours: ${horizonHours} (rolling forecast, not a countdown)`,
     `ProjectDuration: ${controls.runDeadlineMinutes > 0 ? `optional deadline ${controls.runDeadlineMinutes}m` : "continuous until verified, blocked, or explicitly stopped"}`,
     `CapacityCheckpointMinutes: ${controls.capacityCheckpointMinutes}`,
+    `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; native workers stop at the reserve and are penalized as headroom shrinks`,
+    `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent parallelism`,
     `WorkerLeasePolicy: ${controls.maxWorkerMinutes > 0 ? `adaptive with ${controls.maxWorkerMinutes}m ceiling` : "complexity-adaptive (10m to 90m), no global worker cap"}`,
     `MaxClaudeOutputTokens: ${controls.maxClaudeOutputTokens}`,
     `AntigravityCliAutoDispatch: ${args.allowAntigravityCli === true}`,
+    `ControlRoomMode: ${args.managerOnly === true ? "manager-only" : "manager-and-integrator"}`,
     `OperatingMode: ${dispatchable.length ? "goal-driven-team" : "codex-only-until-workers-available"}`,
     "UtilizationPolicy: use appropriate healthy resources for distinct dependency-ready work; never duplicate a lane merely to keep every model busy.",
-    "Orchestrator: Codex owns goal interpretation, risk, feedback, integration, and final verification; workers own bounded execution.",
+    args.managerOnly === true
+      ? "Orchestrator: Codex owns goal interpretation, capacity decisions, steering, evidence review, and reporting; workers own project exploration, diagnostics, implementation, and tests."
+      : "Orchestrator: Codex owns goal interpretation, risk, feedback, integration, and final verification; workers own bounded execution.",
     "",
     "ResourceEvidence:",
     ...decision.candidates.map((candidate) => {
@@ -2868,8 +3070,11 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     "2. Dispatch dependency-ready work; keep one writer per workspace and parallelize independent read-only scouts/reviewers.",
     "3. Read compact artifacts and per-run telemetry, then continue dependent work automatically within the bounded wait.",
     "4. On quota, outage, timeout, auth, or model failure, cool down that resource and fail over the narrow work item once.",
-    "5. Codex critiques worker output, requests a narrow correction when needed, integrates the accepted result, and performs final verification.",
-    "6. Persist only compact decision/outcome evidence so the next run benefits from project continuity.",
+    "5. Protect manager runway: before the shared Codex pool reaches its reserve, route remaining work to durable external CLI jobs so the local supervisor can continue without Codex tokens.",
+    args.managerOnly === true
+      ? "6. Codex critiques compact worker output, requests a narrow correction when needed, records the integration decision, and reports verified state without repeating project work."
+      : "6. Codex critiques worker output, requests a narrow correction when needed, integrates the accepted result, and performs final verification.",
+    "7. Persist only compact decision/outcome evidence so a reset or restarted manager resumes without replaying the project.",
     "",
     "Execution:",
     "Use run-project-manager for normal dispatch and project-manager-status for continuation. Do not reconstruct provider commands from this plan.",
@@ -2877,6 +3082,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
 }
 
 async function buildTeamOrchestrationPlan(args = {}) {
+  args = normalizeManagerOnly(args);
   const context = await getTeamCapacityContext(args);
   return formatTeamOrchestrationPlan(args, context);
 }
@@ -2937,6 +3143,13 @@ function dependencyEvidenceForItems(manifest, items) {
         ? `; refs=${dependency.codexEvidence.artifactRefs.join(", ")}`
         : "";
       lines.push(`- ${dependencyId} [Codex verified]: ${truncateText(dependency.codexEvidence.summary, 900)}${refs}`);
+      continue;
+    }
+    if (dependency.hostEvidence?.summary) {
+      const refs = (dependency.hostEvidence.artifactRefs || []).length
+        ? `; refs=${dependency.hostEvidence.artifactRefs.join(", ")}`
+        : "";
+      lines.push(`- ${dependencyId} [native Codex worker; ${dependency.assignedModel || "model unknown"}]: ${truncateText(dependency.hostEvidence.summary, 900)}${refs}`);
       continue;
     }
     const completedJob = [...(manifest.jobs || [])].reverse().find((job) => job.state === "completed" && (job.workItemIds || job.assignedTasks || []).includes(dependencyId));
@@ -3046,8 +3259,10 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   if (!readOnly && !expectedFiles.length) {
     return {
       launched: false,
-      codexTakeover: true,
-      blocker: "External writer dispatch refused because no verified file boundary was available. Current Codex must scope or implement this narrow item.",
+      codexTakeover: manifest.managerOnly !== true,
+      blocker: manifest.managerOnly === true
+        ? "External writer dispatch refused because no verified file boundary was available. Manager-only mode will not inspect or implement the item; rescope it through one bounded discovery worker."
+        : "External writer dispatch refused because no verified file boundary was available. Current Codex must scope or implement this narrow item.",
     };
   }
   const maxWorkerMinutes = workerMinutesFor(manifest, complexityRank, resource.platform);
@@ -3162,7 +3377,8 @@ function deriveOrchestrationState(manifest) {
   if (manifest.termination?.category) return "blocked";
   if (manifest.finalVerification?.passed === true && items.every((item) => item.state === "completed")) return "completed";
   if (manifest.finalVerification?.passed === false) return "blocked";
-  if (items.some((item) => ["running", "pending", "codex-pending"].includes(item.state))) return "running";
+  if (items.some((item) => ["running", "pending", "codex-pending", "host-pending", "host-running"].includes(item.state))) return "running";
+  if (items.some((item) => ["host-dispatch-required", "host-reserved", "host-cancel-required"].includes(item.state))) return "ready-for-codex";
   if (items.every((item) => ["completed", "codex"].includes(item.state))) return "ready-for-codex";
   if (items.some((item) => item.state === "blocked")) return "blocked";
   if (items.some((item) => item.state === "completed")) return "partial";
@@ -3180,7 +3396,17 @@ function syncWorkItemsFromJobs(manifest) {
     const matching = jobs.filter((job) => (job.workItemIds || job.assignedTasks || []).includes(item.id));
     const latest = matching[matching.length - 1];
     if (!latest) return item;
-    if (["queued", "running", "unknown"].includes(latest.state)) return { ...item, state: "running", activeJobId: latest.jobId, failureCategory: "", blocker: "" };
+    if (latest.transport === "host-subagent") {
+      if (latest.state === "queued") {
+        const state = ["host-dispatch-required", "host-reserved", "host-cancel-required"].includes(item.state)
+          ? item.state
+          : "host-dispatch-required";
+        return { ...item, state, activeJobId: latest.jobId, failureCategory: state === "host-cancel-required" ? item.failureCategory : "", blocker: latest.blocker || item.blocker || "" };
+      }
+      if (latest.state === "running") return { ...item, state: item.state === "host-cancel-required" ? "host-cancel-required" : "host-running", activeJobId: latest.jobId, failureCategory: "", blocker: latest.blocker || item.blocker || "" };
+      if (latest.state === "unknown") return { ...item, state: "host-cancel-required", activeJobId: latest.jobId, failureCategory: latest.failureCategory || "cancellation-pending", blocker: latest.blocker || item.blocker || "" };
+    }
+    if (["queued", "running", "unknown"].includes(latest.state)) return { ...item, state: "running", activeJobId: latest.jobId, failureCategory: "", blocker: latest.blocker || "" };
     if (latest.state === "completed") return { ...item, state: "completed", activeJobId: latest.jobId, failureCategory: "", blocker: "" };
     if (["failed", "cancelled"].includes(latest.state)) {
       return {
@@ -3218,6 +3444,16 @@ function terminateOrchestrationRun(workspace, suppliedManifest, reason, category
   const jobs = (suppliedManifest.jobs || []).map((job) => {
     if (!["queued", "running", "unknown"].includes(job.state) || !job.jobId) return job;
     targetedWorkers += 1;
+    if (job.transport === "host-subagent") {
+      cancellationUnconfirmed += 1;
+      return {
+        ...job,
+        state: "unknown",
+        failureCategory: "cancellation-pending",
+        blocker: terminationReason,
+        currentStep: "host-cancel-required",
+      };
+    }
     try {
       const cancellation = cancelJob({ workspace, jobId: job.jobId, reason: terminationReason });
       if (/ProcessTreeStopped:\s*true/i.test(cancellation)) cancelledWorkers += 1;
@@ -3247,9 +3483,15 @@ function terminateOrchestrationRun(workspace, suppliedManifest, reason, category
     supervisorPid: supervisorTermination.stopped ? 0 : supervisorPid,
     supervisorEndedAt: supervisorTermination.stopped ? utcStamp() : suppliedManifest.supervisorEndedAt,
     jobs,
-    workItems: (suppliedManifest.workItems || []).map((item) => item.state === "completed"
-      ? item
-      : { ...item, state: "blocked", blocker: terminationReason, failureCategory: terminationCategory, activeJobId: "" }),
+    workItems: (suppliedManifest.workItems || []).map((item) => {
+      if (item.state === "completed") return item;
+      const activeHost = jobs.find((job) => job.transport === "host-subagent"
+        && ["queued", "running", "unknown"].includes(job.state)
+        && (job.workItemIds || []).includes(item.id));
+      return activeHost
+        ? { ...item, state: "host-cancel-required", blocker: terminationReason, failureCategory: "cancellation-pending", activeJobId: activeHost.jobId }
+        : { ...item, state: "blocked", blocker: terminationReason, failureCategory: terminationCategory, activeJobId: "" };
+    }),
     termination: {
       category: terminationCategory,
       reason: terminationReason,
@@ -3300,6 +3542,7 @@ function routingPolicyFromArgs(args = {}) {
     agyModel: requestedAgyModel,
     claudeModel: String(args.claudeModel || "auto").trim().toLowerCase() || "auto",
     includeCursor: args.includeCursor === true,
+    hostCodexAvailable: args.hostCodexAvailable === true,
   };
 }
 
@@ -3325,6 +3568,7 @@ function runContractChanges(manifest, args = {}) {
   const controls = normalizedRunControls(args);
   const requested = {
     mode: String(args.mode || "patch").trim().toLowerCase(),
+    managerOnly: args.managerOnly === true,
     horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
     controls,
     constraints: normalizedRunConstraints(args),
@@ -3335,10 +3579,13 @@ function runContractChanges(manifest, args = {}) {
   };
   const existing = {
     mode: String(manifest.mode || "patch").trim().toLowerCase(),
+    managerOnly: manifest.managerOnly === true,
     horizonHours: Math.max(1, Math.min(12, Number(manifest.horizonHours || 5))),
     controls: {
       runDeadlineMinutes: Number(manifest.runDeadlineMinutes ?? 0),
       capacityCheckpointMinutes: Number(manifest.capacityCheckpointMinutes ?? 20),
+      codexManagerReservePercent: Number(manifest.codexManagerReservePercent ?? 15),
+      maxConcurrentCodexWorkers: Number(manifest.maxConcurrentCodexWorkers ?? 1),
       maxWorkerMinutes: Number(manifest.maxWorkerMinutes ?? 0),
       maxClaudeOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
       maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd ?? 0) > 0 ? Number(manifest.maxClaudeBudgetUsd) : 0,
@@ -3352,6 +3599,7 @@ function runContractChanges(manifest, args = {}) {
       agyModel: "auto",
       claudeModel: "auto",
       includeCursor: false,
+      hostCodexAvailable: false,
     },
     workGraph: workGraphContract(manifest.workItems || []),
   };
@@ -3360,6 +3608,9 @@ function runContractChanges(manifest, args = {}) {
 
 function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
   const next = { ...effectiveArgs };
+  for (const key of ["runDeadlineMinutes", "capacityCheckpointMinutes", "codexManagerReservePercent", "maxConcurrentCodexWorkers", "maxWorkerMinutes", "maxClaudeOutputTokens", "maxClaudeBudgetUsd"]) {
+    if (rawArgs[key] === undefined && manifest[key] !== undefined) next[key] = manifest[key];
+  }
   next.constraints = boundedTextList([...(manifest.constraints || []), ...(Array.isArray(rawArgs.constraints) ? rawArgs.constraints : [])], 20, 600);
   next.acceptanceCriteria = boundedTextList([...(manifest.acceptanceCriteria || []), ...(Array.isArray(rawArgs.acceptanceCriteria) ? rawArgs.acceptanceCriteria : [])], 12, 400);
   next.verification = boundedTextList([...(manifest.verification || []), ...(Array.isArray(rawArgs.verification) ? rawArgs.verification : [])], 12, 400);
@@ -3377,18 +3628,35 @@ function capacityCheckpointDue(manifest, now = Date.now()) {
   return Number.isFinite(baseline) && now >= baseline + (interval * 60000);
 }
 
+function capacityCheckpointDelayMinutes(manifest, candidates = manifest?.resources || []) {
+  const configured = Math.max(5, Math.min(240, Number(manifest?.capacityCheckpointMinutes || 20)));
+  const reserve = Math.max(5, Math.min(50, Number(manifest?.codexManagerReservePercent || 15)));
+  const nativeCodex = (candidates || []).filter((candidate) => candidate.dispatchMode === "host-subagent");
+  const remaining = nativeCodex.map((candidate) => Number(candidate.remainingPercent)).filter(Number.isFinite);
+  if (nativeCodex.some((candidate) => ["manager-reserve", "exhausted", "capacity-stale"].includes(candidate.state))) return 5;
+  if (!remaining.length) return configured;
+  const lowest = Math.min(...remaining);
+  if (lowest <= reserve + 10) return 5;
+  if (lowest <= reserve + 25) return Math.min(configured, 10);
+  return configured;
+}
+
 function capacityArgsFromManifest(manifest) {
   const routing = manifest.routingPolicy || {};
   return {
     goal: manifest.goal,
     workspace: manifest.workspace,
     mode: manifest.mode,
+    managerOnly: manifest.managerOnly === true,
     horizonHours: manifest.horizonHours,
     allowAntigravityCli: routing.allowAntigravityCli === true || manifest.allowAntigravityCli === true,
     allowPremiumModels: routing.allowPremiumModels === true,
     agyModel: routing.agyModel || "auto",
     claudeModel: routing.claudeModel || "auto",
     includeCursor: routing.includeCursor === true,
+    hostCodexAvailable: routing.hostCodexAvailable === true || manifest.hostCodexAvailable === true,
+    codexManagerReservePercent: manifest.codexManagerReservePercent,
+    maxConcurrentCodexWorkers: manifest.maxConcurrentCodexWorkers,
     refreshInventory: true,
   };
 }
@@ -3410,7 +3678,7 @@ function applyCapacityCheckpointCandidates(manifest, candidates, args = {}) {
     if (!selected) return { ...item, alternates: [] };
     const alternates = selectAlternateResourceIds(ranked, selected, 3);
     if (selected.id !== item.assignment) reroutes.push({ workItemId: item.id, from: item.assignment, to: selected.id });
-    return {
+    const reassigned = {
       ...item,
       state: resourceBlocked ? "pending" : item.state,
       assignment: selected.id,
@@ -3422,6 +3690,12 @@ function applyCapacityCheckpointCandidates(manifest, candidates, args = {}) {
         ? item.decisionReason
         : "Rolling capacity checkpoint selected a healthy resource for remaining work.",
     };
+    if (selected.dispatchMode === "host-subagent") {
+      return item.assignment === selected.id && item.hostAttempt
+        ? reassigned
+        : prepareHostAssignedItem(manifest, reassigned, selected);
+    }
+    return { ...reassigned, hostAction: null, hostAttempt: null };
   });
   let next = { ...manifest, resources: candidates, workItems };
   const writerReroute = reroutes.find((reroute) => workItems.find((item) => item.id === reroute.workItemId && !item.readOnly));
@@ -3448,7 +3722,7 @@ async function refreshCapacityCheckpoint(workspace) {
     context = await getTeamCapacityContext(args);
   } catch (error) {
     return withFileLock(manifestPath, () => {
-      let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, observed));
+      let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, observed), true);
       if (latest.runId !== observed.runId) return latest;
       if (!capacityCheckpointDue(latest)) return latest;
       latest = appendOrchestrationDecision(latest, {
@@ -3456,21 +3730,21 @@ async function refreshCapacityCheckpoint(workspace) {
         reason: truncateText(redactArtifactContent(error?.message || String(error)), 500),
       });
       latest.lastCapacityCheckpointAt = utcStamp();
-      latest.nextCapacityCheckpointAt = new Date(Date.now() + Number(latest.capacityCheckpointMinutes || 20) * 60000).toISOString();
+      latest.nextCapacityCheckpointAt = new Date(Date.now() + capacityCheckpointDelayMinutes(latest) * 60000).toISOString();
       writeTeamRunManifest(workspace, latest);
       return latest;
     });
   }
-  const candidates = buildResourceCandidates(args, context);
+  const candidates = [...buildResourceCandidates(args, context), ...buildNativeCodexCandidates(args, context)];
   return withFileLock(manifestPath, () => {
-    let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, observed));
+    let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, observed), true);
     if (latest.runId !== observed.runId) return latest;
     if (!capacityCheckpointDue(latest)) return latest;
     const refreshed = applyCapacityCheckpointCandidates(latest, candidates, args);
     latest = refreshed.manifest;
     latest.capacityProbe = context.capacityProbe;
     latest.lastCapacityCheckpointAt = utcStamp();
-    latest.nextCapacityCheckpointAt = new Date(Date.now() + Number(latest.capacityCheckpointMinutes || 20) * 60000).toISOString();
+    latest.nextCapacityCheckpointAt = new Date(Date.now() + capacityCheckpointDelayMinutes(latest, candidates) * 60000).toISOString();
     latest.capacityCheckpointCount = Number(latest.capacityCheckpointCount || 0) + 1;
     latest = appendOrchestrationDecision(latest, {
       type: "capacity-checkpoint",
@@ -3484,9 +3758,10 @@ async function refreshCapacityCheckpoint(workspace) {
 }
 
 function shouldRunOrchestrationSupervisor(manifest) {
-  return Number(manifest?.version || 1) >= 2
-    && manifest?.state === "running"
-    && !manifest?.termination?.category;
+  if (Number(manifest?.version || 1) < 2 || manifest?.state !== "running" || manifest?.termination?.category) return false;
+  const externalJobActive = (manifest.jobs || []).some((job) => job.transport !== "host-subagent" && ["queued", "running", "unknown"].includes(job.state));
+  const externalDispatchPending = (manifest.workItems || []).some((item) => item.state === "pending" && !String(item.assignment || "").startsWith("codex-host:"));
+  return externalJobActive || externalDispatchPending;
 }
 
 function orchestrationSupervisorHealthy(manifest) {
@@ -3499,7 +3774,7 @@ function orchestrationSupervisorHealthy(manifest) {
 function ensureOrchestrationSupervisor(workspace, suppliedManifest = null) {
   const manifestPath = lastTeamRunJsonPath(workspace);
   return withFileLock(manifestPath, () => {
-    let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, suppliedManifest) || suppliedManifest);
+    let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, suppliedManifest) || suppliedManifest, true);
     if (!shouldRunOrchestrationSupervisor(latest) || orchestrationSupervisorHealthy(latest)) return latest;
     const supervisorDir = path.join(bridgeRootFor(workspace), "orchestrator");
     const payloadPath = path.join(supervisorDir, `supervisor-${latest.runId}.json`);
@@ -3565,7 +3840,7 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
   if (!lockHeld) {
     return withFileLock(lastTeamRunJsonPath(workspace), () => {
       const latest = readJsonFile(lastTeamRunJsonPath(workspace), suppliedManifest) || suppliedManifest;
-      const refreshed = refreshTeamRunManifest(workspace, latest);
+      const refreshed = refreshTeamRunManifest(workspace, latest, true);
       return advanceOrchestrationRun(workspace, refreshed, true, launchGroup);
     });
   }
@@ -3632,9 +3907,8 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
       to: alternate.id,
       reason: `${item.failureCategory}; one bounded failover`,
     });
-    return {
+    const reassigned = {
       ...item,
-      state: "pending",
       assignment: alternate.id,
       assignedModel: alternate.model,
       failoverCount: 1,
@@ -3643,6 +3917,9 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
       blocker: "",
       decisionReason: `Failover from ${latestJob?.resourceId || item.assignment} after ${item.failureCategory}.`,
     };
+    return alternate.dispatchMode === "host-subagent"
+      ? prepareHostAssignedItem(manifest, reassigned, alternate)
+      : { ...reassigned, state: "pending", hostAction: null, hostAttempt: null };
   });
   manifest = { ...manifest, workItems: recoveredItems };
 
@@ -3651,7 +3928,7 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     if (item.state !== "blocked") return item;
     const blocker = String(item.blocker || "");
     if (blocker.startsWith("Dependency ")) {
-      const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex", "codex-pending"].includes(currentById.get(id)?.state));
+      const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex", "codex-pending", "host-pending", "host-dispatch-required", "host-reserved", "host-running"].includes(currentById.get(id)?.state));
       if (!dependenciesRecoveringOrComplete) return item;
       changed = true;
       return { ...item, state: "pending", blocker: "" };
@@ -3686,6 +3963,21 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     return item;
   });
 
+  currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
+  manifest.workItems = manifest.workItems.map((item) => {
+    if (item.state !== "host-pending") return item;
+    const failedDependency = item.dependsOn.find((id) => ["failed", "blocked"].includes(currentById.get(id)?.state));
+    if (failedDependency) {
+      changed = true;
+      return { ...item, state: "blocked", blocker: `Dependency ${failedDependency} did not complete.` };
+    }
+    if (item.dependsOn.every((id) => currentById.get(id)?.state === "completed")) {
+      changed = true;
+      return { ...item, state: "host-dispatch-required", blocker: "" };
+    }
+    return item;
+  });
+
   const ready = manifest.workItems
     .filter((item) => item.state === "pending" && item.dependsOn.every((id) => currentById.get(id)?.state === "completed"))
     .sort((a, b) => b.priority - a.priority);
@@ -3715,9 +4007,8 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
         if (!items.some((candidate) => candidate.id === item.id)) return item;
         const alternate = reroutes.get(item.id);
         if (!alternate) return { ...item, state: "blocked", blocker: `Assigned resource ${resourceId} is not dispatchable and no healthy alternate is available.` };
-        return {
+        const reassigned = {
           ...item,
-          state: "pending",
           assignment: alternate.id,
           assignedModel: alternate.model,
           alternates: (item.alternates || []).filter((id) => id !== alternate.id && id !== resourceId),
@@ -3725,6 +4016,9 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
           failureCategory: "",
           decisionReason: `Rerouted before launch because ${resourceId} was unavailable.`,
         };
+        return alternate.dispatchMode === "host-subagent"
+          ? prepareHostAssignedItem(manifest, reassigned, alternate)
+          : { ...reassigned, state: "pending", hostAction: null, hostAttempt: null };
       });
       changed = true;
       continue;
@@ -3770,6 +4064,12 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     changed = true;
   }
 
+  const reservedJobs = ensureHostDispatchReservations(manifest.workItems, manifest.jobs);
+  if (reservedJobs.length !== (manifest.jobs || []).length) {
+    manifest.jobs = reservedJobs;
+    changed = true;
+  }
+
   manifest.state = deriveOrchestrationState(manifest);
   manifest.counts = {
     total: (manifest.jobs || []).length,
@@ -3801,14 +4101,21 @@ function teamStateFromJobs(jobs) {
   return "failed";
 }
 
-function refreshTeamRunManifest(workspace, suppliedManifest = null) {
+function refreshTeamRunManifest(workspace, suppliedManifest = null, lockHeld = false) {
   const manifestPath = lastTeamRunJsonPath(workspace);
+  if (!lockHeld) {
+    return withFileLock(manifestPath, () => {
+      const latest = readJsonFile(manifestPath, suppliedManifest) || suppliedManifest;
+      return refreshTeamRunManifest(workspace, latest, true);
+    });
+  }
   const manifest = suppliedManifest || readJsonFile(manifestPath, null);
   if (!manifest || !Array.isArray(manifest.jobs)) {
     throw new Error(`No team run manifest found at ${manifestPath}. Start run-team-task first.`);
   }
 
   const jobs = manifest.jobs.map((job) => {
+    if (job.transport === "host-subagent") return job;
     if (!job.jobId) return { ...job, state: "failed", currentStep: "missing-job-id", blocker: "Worker launch did not return a JobId." };
     const jobDir = jobDirFor(workspace, job.jobId);
     const statusPath = path.join(jobDir, "status.json");
@@ -3864,6 +4171,19 @@ async function waitForTeamRun(workspace, waitSeconds = 0, suppliedManifest = nul
 
 function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
   const orchestrated = Number(snapshot.version || 1) >= 2;
+  // Native Codex workers share the manager's five-hour pool. Bound concurrent host actions even when
+  // several read-only items are ready; external CLI workers keep their independent parallelism.
+  const maxConcurrentHostWorkers = Math.max(1, Math.min(3, Number(snapshot.maxConcurrentCodexWorkers || 1)));
+  let availableHostSlots = maxConcurrentHostWorkers - (snapshot.jobs || []).filter((job) => job.transport === "host-subagent" && ["running", "unknown"].includes(job.state)).length;
+  let writerSlotTaken = (snapshot.jobs || []).some((job) => ["running", "unknown"].includes(job.state)
+    && (job.workItemIds || []).some((id) => (snapshot.workItems || []).find((item) => item.id === id && !item.readOnly)));
+  const emittableHostDispatchItems = (snapshot.workItems || []).filter((item) => ["host-dispatch-required", "host-reserved"].includes(item.state)).filter((item) => {
+    if (availableHostSlots <= 0) return false;
+    if (!item.readOnly && writerSlotTaken) return false;
+    availableHostSlots -= 1;
+    if (!item.readOnly) writerSlotTaken = true;
+    return true;
+  });
   const lines = [
     orchestrated ? "AiMobileResourceOrchestrationRun:" : "AiMobileTeamRun:",
     orchestrated ? `RunId: ${snapshot.runId || "unknown"}` : null,
@@ -3875,14 +4195,52 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     orchestrated ? `ProjectDuration: ${snapshot.deadlineAt ? `optional deadline ${snapshot.deadlineAt}` : "continuous until verified, blocked, or explicitly stopped"}` : null,
     orchestrated ? `CapacityHorizon: rolling ${snapshot.horizonHours || 5}h forecast; nextReview=${snapshot.nextCapacityCheckpointAt || "on next status refresh"}; reviews=${snapshot.capacityCheckpointCount || 0}` : null,
     orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; claudeBudget=${describeClaudeBudgetPolicy(snapshot)}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
+    orchestrated ? `CodexRunway: reserve=${snapshot.codexManagerReservePercent ?? 15}%; nativeConcurrency=${snapshot.maxConcurrentCodexWorkers ?? 1}; checkpointDelay=${capacityCheckpointDelayMinutes(snapshot)}m` : null,
+    orchestrated ? "Continuity: external CLI jobs and the low-RAM supervisor continue from durable state without parent-chat tokens; after a Codex reset, call project-manager-status to resume the same run." : null,
     orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
     orchestrated ? "WorkGraph:" : null,
-    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary || item.hostEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    ...(orchestrated && emittableHostDispatchItems.filter((item) => item.state === "host-dispatch-required").length
+      ? [
+          "HostCodexReservationActions:",
+          ...emittableHostDispatchItems
+            .filter((item) => item.state === "host-dispatch-required")
+            .map((item) => `- ${item.id}: call project-manager-status with one reserved hostWorkerEvent: event=reserved; runId=${snapshot.runId}; workItemId=${item.id}; attemptId=${item.hostAttempt?.attemptId}; dispatchToken=${item.hostAttempt?.dispatchToken}. Do not spawn until the next status response still exposes this reservation.`),
+        ]
+      : []),
+    ...(orchestrated && emittableHostDispatchItems.filter((item) => item.state === "host-reserved").length
+      ? [
+          "HostCodexActions:",
+          ...emittableHostDispatchItems
+            .filter((item) => item.state === "host-reserved")
+            .flatMap((item) => [
+              `- ${item.id}: runId=${snapshot.runId}; attemptId=${item.hostAttempt?.attemptId}; dispatchToken=${item.hostAttempt?.dispatchToken}; call ${item.hostAction?.toolName || "multi_agent_v1__spawn_agent"} with agent_type=${item.hostAction?.agentType || (item.readOnly ? "explorer" : "worker")}, model=${item.hostAction?.model || item.assignedModel}, reasoning_effort=${item.hostAction?.reasoningEffort || "medium"}, fork_context=false.`,
+              `  Message: ${truncateText(item.hostAction?.message || item.objective, 1800)}`,
+              "  Immediately acknowledge started with the returned agentId through project-manager-status using the exact runId, workItemId, attemptId, and dispatchToken. Never reuse the token for another item.",
+            ]),
+        ]
+      : []),
+    ...(orchestrated && (snapshot.workItems || []).some((item) => item.state === "host-running")
+      ? [
+          "HostCodexWorkers:",
+          ...(snapshot.workItems || [])
+            .filter((item) => item.state === "host-running")
+            .map((item) => `- ${item.id}: agent=${item.hostAgent?.agentId || "unknown"}; nickname=${item.hostAgent?.nickname || "none"}; model=${item.assignedModel}`),
+        ]
+      : []),
+    ...(orchestrated && (snapshot.workItems || []).some((item) => item.state === "host-cancel-required")
+      ? [
+          "HostCodexCancellationActions:",
+          ...(snapshot.workItems || [])
+            .filter((item) => item.state === "host-cancel-required")
+            .map((item) => `- ${item.id}: call multi_agent_v1__close_agent with target=${item.hostAgent?.agentId || "unknown"}; then acknowledge cancelled or cancellation-unconfirmed through hostWorkerEvents with runId=${snapshot.runId}, attemptId=${item.hostAttempt?.attemptId}, dispatchToken=${item.hostAttempt?.dispatchToken}.`),
+        ]
+      : []),
     ...(orchestrated && (snapshot.workItems || []).some((item) => item.state === "codex")
       ? [
-          "CodexOwnedActions:",
+          snapshot.managerOnly === true ? "ManagerBoundaryActions:" : "CodexOwnedActions:",
           ...(snapshot.workItems || [])
             .filter((item) => item.state === "codex")
             .map((item) => `- ${item.id}: ${truncateText(item.objective || "Complete the Codex-owned integration action.", 360)}${item.externallyConsequential ? " Authorization and live safety checks remain mandatory." : ""}`),
@@ -3894,6 +4252,14 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
           ...(snapshot.workItems || [])
             .filter((item) => item.codexEvidence?.summary)
             .map((item) => `- ${item.id}: ${truncateText(item.codexEvidence.summary, 300)}`),
+        ]
+      : []),
+    ...(orchestrated && (snapshot.workItems || []).some((item) => item.hostEvidence?.summary)
+      ? [
+          "HostCodexEvidence:",
+          ...(snapshot.workItems || [])
+            .filter((item) => item.hostEvidence?.summary)
+            .map((item) => `- ${item.id}: ${truncateText(item.hostEvidence.summary, 300)}`),
         ]
       : []),
     ...(orchestrated && (snapshot.constraints || []).length
@@ -3917,17 +4283,18 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
   if (allJobs.length > visibleJobs.length) lines.push(`- ${allJobs.length - visibleJobs.length} older worker attempts omitted; use read-job for diagnosis.`);
   for (const job of visibleJobs) {
     const index = allJobs.indexOf(job);
-    const jobDir = jobDirFor(workspace, job.jobId);
+    const hostTransport = job.transport === "host-subagent";
+    const jobDir = hostTransport ? "" : jobDirFor(workspace, job.jobId);
     const workItemIds = job.workItemIds || job.assignedTasks || [];
     const supersededBySuccess = ["failed", "cancelled"].includes(job.state)
       && snapshot.jobs.slice(index + 1).some((later) => later.state === "completed"
         && (later.workItemIds || later.assignedTasks || []).some((id) => workItemIds.includes(id)));
     const supersededByCodex = ["failed", "cancelled"].includes(job.state)
       && workItemIds.some((id) => (snapshot.workItems || []).some((item) => item.id === id && item.assignment === "codex:current" && item.state === "completed"));
-    const result = summarizeFile(path.join(jobDir, "result.md"), 500).trim();
-    const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 250).trim();
-    const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 250).trim();
-    const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
+    const result = hostTransport ? String(job.inlineEvidence?.summary || "").trim() : summarizeFile(path.join(jobDir, "result.md"), 500).trim();
+    const changed = hostTransport ? (job.inlineEvidence?.changedFiles || []).join(", ") : summarizeFile(path.join(jobDir, "changed-files.txt"), 250).trim();
+    const tests = hostTransport ? String(job.inlineEvidence?.testSummary || "").trim() : summarizeFile(path.join(jobDir, "test-output-summary.md"), 250).trim();
+    const telemetry = hostTransport ? null : readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
     lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
     if (job.blocker && !supersededByCodex) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
@@ -3940,9 +4307,15 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (snapshot.termination?.category) lines.push("Next: this run is stopped. Apply the latest user constraints and start a new objective run only if the user still wants continuation.");
+  if (snapshot.termination?.category) lines.push(Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0
+    ? "Next: execute HostCodexCancellationActions and acknowledge the result. Do not start a replacement run while any host worker stop remains unconfirmed."
+    : "Next: this run is stopped. Apply the latest user constraints and start a new objective run only if the user still wants continuation.");
   else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker and continue or re-verify this objective; completion is not allowed.");
-  else if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
+  else if (snapshot.state === "ready-for-codex") lines.push((snapshot.workItems || []).some((item) => ["host-dispatch-required", "host-reserved"].includes(item.state))
+    ? "Next: acknowledge HostCodexReservationActions before spawning. Spawn only the returned HostCodexActions, then bind the returned agent id with hostWorkerEvents. The manager chat must not perform those tasks itself."
+    : snapshot.managerOnly === true
+      ? "Next: the manager must review the compact artifacts and recorded verification evidence, request one bounded correction if needed, then call project-manager-status with projectVerified=true. Do not rerun project work in this chat."
+      : "Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
   else if (snapshot.state === "completed") lines.push("Next: this objective is verified complete. Continuous mode does not invent more work after the acceptance gates pass.");
   else if (snapshot.state === "running") lines.push(`Next: call project-manager-status for ${workspace}; completion is not yet allowed.`);
   else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
@@ -3961,6 +4334,7 @@ async function readTeamRun(args = {}) {
 }
 
 async function orchestrateProject(args = {}) {
+  args = normalizeManagerOnly(args);
   const workspace = safeWorkspacePath(args.workspace);
   const goal = String(args.goal || "").trim();
   if (!goal) throw new Error("orchestrate-project requires a non-empty goal.");
@@ -3985,22 +4359,44 @@ async function orchestrateProject(args = {}) {
 
   const runId = `orc-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
   const createdAt = utcStamp();
-  const workItems = decision.workItems.map((item) => ({
+  const stagedWorkItems = decision.workItems.map((item) => ({
     ...item,
     state: item.assignment === "codex:current"
       ? (item.dependsOn.length ? "codex-pending" : "codex")
-      : "pending",
+      : item.assignment.startsWith("codex-host:")
+        ? (item.dependsOn.length ? "host-pending" : "host-dispatch-required")
+        : "pending",
   }));
   const capsule = writeContextCapsule({
     goal,
     workspace,
     lifecycleStage: "execute",
-    workItems,
+    workItems: stagedWorkItems,
     constraints,
     acceptanceCriteria,
     verification,
     continuitySummary: args.continuitySummary,
     artifactRefs: args.artifactRefs,
+  });
+  const workItems = stagedWorkItems.map((item) => {
+    if (!item.assignment.startsWith("codex-host:")) return item;
+    const resource = decision.candidates.find((candidate) => candidate.id === item.assignment);
+    const hostAction = resource ? chooseHostCodexAction([resource], item) : null;
+    const taskCapsulePath = capsule.taskCapsules?.[item.id]?.path || capsule.outputPath;
+    const attemptId = `host-${crypto.randomBytes(6).toString("hex")}`;
+    const dispatchToken = crypto.randomBytes(18).toString("hex");
+    return {
+      ...item,
+      hostAttempt: { attemptId, dispatchToken, state: "dispatch-required", createdAt: utcStamp() },
+      hostAction: hostAction ? {
+        toolName: hostAction.hostTool,
+        agentType: item.readOnly ? "explorer" : "worker",
+        model: hostAction.model,
+        reasoningEffort: hostAction.reasoningEffort,
+        forkContext: false,
+        message: boundedWorkerPrompt(item, goal, taskCapsulePath),
+      } : null,
+    };
   });
   const manifest = {
     version: 2,
@@ -4010,11 +4406,13 @@ async function orchestrateProject(args = {}) {
       ? new Date(Date.now() + controls.runDeadlineMinutes * 60000).toISOString()
       : "",
     projectDurationMode: controls.runDeadlineMinutes > 0 ? "optional-deadline" : "continuous",
-    nextCapacityCheckpointAt: new Date(Date.now() + controls.capacityCheckpointMinutes * 60000).toISOString(),
+    nextCapacityCheckpointAt: new Date(Date.now() + capacityCheckpointDelayMinutes(controls, decision.candidates) * 60000).toISOString(),
     capacityCheckpointCount: 0,
     goal,
     workspace,
     mode: String(args.mode || "patch").trim().toLowerCase(),
+    managerOnly: args.managerOnly === true,
+    hostCodexAvailable: args.hostCodexAvailable === true,
     horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
     ...controls,
     constraints,
@@ -4024,18 +4422,20 @@ async function orchestrateProject(args = {}) {
     contextCapsulePath: capsule.outputPath,
     allowAntigravityCli: routingPolicy.allowAntigravityCli,
     capacityProbe: context.capacityProbe,
-    codexRole: "goal owner, resource orchestrator, critic, integration owner, and final verifier",
+    codexRole: args.managerOnly === true
+      ? "manager, capacity orchestrator, critic, user-boundary owner, and reporter"
+      : "goal owner, resource orchestrator, critic, integration owner, and final verifier",
     primaryWriterId: decision.primaryWriterId,
     resources: decision.candidates,
     decisions: decision.decisions.map((item) => ({ at: utcStamp(), type: "assignment", ...item })),
     workItems,
     state: "running",
-    jobs: [],
+    jobs: ensureHostDispatchReservations(workItems, []),
   };
   withFileLock(lastTeamRunJsonPath(workspace), () => {
     const existingManifestPath = lastTeamRunJsonPath(workspace);
     if (fs.existsSync(existingManifestPath)) {
-      const existing = refreshTeamRunManifest(workspace, readJsonFile(existingManifestPath, null));
+      const existing = refreshTeamRunManifest(workspace, readJsonFile(existingManifestPath, null), true);
       if (isActiveOrchestrationRun(existing)) {
         throw new Error(`Workspace already has active orchestration run ${existing.runId || "<legacy>"}. Use read-team-run or cancel its running jobs before starting another run.`);
       }
@@ -4055,9 +4455,12 @@ async function orchestrateProject(args = {}) {
     `Goal: ${goal}`,
     `CapacityProbe: ${context.capacityProbe}`,
     `WorkItems: ${workItems.length}`,
-    `ExternalResourcesSelected: ${[...new Set(workItems.filter((item) => item.assignment !== "codex:current").map((item) => item.assignment))].length}`,
+    `ExternalResourcesSelected: ${[...new Set(workItems.filter((item) => !["codex:current", "resource:unavailable"].includes(item.assignment)).map((item) => item.assignment))].length}`,
     `WaitSeconds: ${waitSeconds}`,
-    "CodexRole: understand, direct, critique, integrate, and verify; do not duplicate delegated broad work.",
+    `ControlRoomMode: ${args.managerOnly === true ? "manager-only" : "manager-and-integrator"}`,
+    args.managerOnly === true
+      ? "CodexRole: inventory, assign, steer, review compact evidence, and report. Do not inspect project files, run project diagnostics/tests, edit source, or duplicate worker execution."
+      : "CodexRole: understand, direct, critique, integrate, and verify; do not duplicate delegated broad work.",
     "",
     compactResult,
   ].join("\n");
@@ -4068,12 +4471,12 @@ async function orchestrateProject(args = {}) {
 
 async function runProjectManager(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
-  let effectiveArgs = {
+  let effectiveArgs = normalizeManagerOnly({
     ...args,
     workspace,
     waitSeconds: args.waitSeconds === undefined ? 5 : args.waitSeconds,
     includePlan: args.includePlan === true,
-  };
+  });
   const prior = readJsonFile(lastTeamRunJsonPath(workspace), null);
   if (prior && String(prior.goal || "").trim() === String(effectiveArgs.goal || "").trim()) {
     effectiveArgs = carryForwardSameGoalContract(effectiveArgs, args, prior);
@@ -4098,7 +4501,7 @@ async function runProjectManager(args = {}) {
           : `the active run contract changed (${contractChanges.join(", ")})`;
       let stoppedManifest = null;
       withFileLock(lastTeamRunJsonPath(workspace), () => {
-        const latest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), existing));
+        const latest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), existing), true);
         const stopped = terminateOrchestrationRun(
           workspace,
           latest,
@@ -4167,6 +4570,195 @@ function normalizedCodexEvidence(args = {}) {
   return evidence;
 }
 
+function hostDispatchReservationJob(item) {
+  return {
+    toolName: item.hostAction?.toolName || "multi_agent_v1__spawn_agent",
+    laneId: `native-${item.assignment}`,
+    worker: "Codex native worker",
+    resourceId: item.assignment,
+    assignedTasks: [item.id],
+    workItemIds: [item.id],
+    model: item.assignedModel,
+    jobId: item.hostAttempt.attemptId,
+    transport: "host-subagent",
+    state: "queued",
+    agentId: "",
+    reservedAt: utcStamp(),
+  };
+}
+
+// Reserve a token-bound job entry the moment an item becomes host-dispatch-required, before any spawn
+// happens, so terminateOrchestrationRun always has a target to cancel even if "started" is never acknowledged.
+function ensureHostDispatchReservations(workItems, jobs) {
+  const existingIds = new Set((jobs || []).map((job) => job.jobId));
+  const reservations = (workItems || [])
+    .filter((item) => ["host-dispatch-required", "host-reserved"].includes(item.state) && item.hostAttempt?.attemptId && !existingIds.has(item.hostAttempt.attemptId))
+    .map(hostDispatchReservationJob);
+  return reservations.length ? [...(jobs || []), ...reservations] : (jobs || []);
+}
+
+function prepareHostAssignedItem(manifest, item, resource, state = "host-dispatch-required") {
+  if (resource?.dispatchMode !== "host-subagent") return { ...item, state };
+  const hostAction = chooseHostCodexAction([resource], item);
+  const capsulePath = path.join(bridgeRootFor(manifest.workspace), "orchestrator", "task-capsules", `${item.id}.json`);
+  return {
+    ...item,
+    state,
+    hostAttempt: {
+      attemptId: `host-${crypto.randomBytes(6).toString("hex")}`,
+      dispatchToken: crypto.randomBytes(18).toString("hex"),
+      state: "dispatch-required",
+      createdAt: utcStamp(),
+    },
+    hostAction: hostAction ? {
+      toolName: hostAction.hostTool,
+      agentType: item.readOnly ? "explorer" : "worker",
+      model: hostAction.model,
+      reasoningEffort: hostAction.reasoningEffort,
+      forkContext: false,
+      message: boundedWorkerPrompt(item, manifest.goal, fs.existsSync(capsulePath) ? capsulePath : manifest.contextCapsulePath),
+    } : null,
+  };
+}
+
+function recordNativeCodexOutcome(workspace, item, success) {
+  const resourceId = String(item?.assignment || "");
+  if (!resourceId.startsWith("codex-host:")) return;
+  const now = utcStamp();
+  mutateWorkspaceResourceState(workspace, (state) => {
+    const previous = state.outcomes?.[resourceId] || {};
+    const successfulKinds = success
+      ? [...(Array.isArray(previous.successfulKinds) ? previous.successfulKinds : []), item.kind].filter(Boolean).slice(-5)
+      : (Array.isArray(previous.successfulKinds) ? previous.successfulKinds : []).slice(-5);
+    const outcome = {
+      ...previous,
+      lastState: success ? "available" : "cooldown",
+      lastCategory: success ? "" : "worker-failure",
+      lastSuccessAt: success ? now : String(previous.lastSuccessAt || ""),
+      lastFailureAt: success ? String(previous.lastFailureAt || "") : now,
+      cooldownUntil: success ? "" : new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      observedModel: String(item.assignedModel || previous.observedModel || ""),
+      recentKinds: successfulKinds,
+      successfulKinds,
+      successCount: Math.max(0, Number(previous.successCount || 0)) + (success ? 1 : 0),
+      failureCount: Math.max(0, Number(previous.failureCount || 0)) + (success ? 0 : 1),
+      consecutiveFailures: success ? 0 : Math.max(0, Number(previous.consecutiveFailures || 0)) + 1,
+    };
+    return { ...state, outcomes: { ...(state.outcomes || {}), [resourceId]: outcome } };
+  });
+}
+
+function applyHostWorkerEvents(manifest, args = {}) {
+  const events = Array.isArray(args.hostWorkerEvents) ? args.hostWorkerEvents : [];
+  let next = { ...manifest, workItems: [...(manifest.workItems || [])], jobs: [...(manifest.jobs || [])] };
+  for (const raw of events) {
+    const event = String(raw?.event || "").trim().toLowerCase();
+    const workItemId = normalizeTaskLane(raw?.workItemId);
+    const target = next.workItems.find((item) => item.id === workItemId);
+    if (String(raw?.runId || "") !== String(next.runId || "")) throw new Error(`Host worker event runId does not match active run ${next.runId}.`);
+    if (!target || !String(target.assignment || "").startsWith("codex-host:")) throw new Error(`Host worker event references unknown native Codex item: ${workItemId}`);
+    if (String(raw?.attemptId || "") !== String(target.hostAttempt?.attemptId || "")
+      || String(raw?.dispatchToken || "") !== String(target.hostAttempt?.dispatchToken || "")) {
+      throw new Error(`Host worker event token does not match ${workItemId}.`);
+    }
+    const existingJob = next.jobs.find((job) => job.transport === "host-subagent" && job.jobId === target.hostAttempt.attemptId);
+    const agentId = truncateText(String(raw?.agentId || existingJob?.agentId || "").trim(), 160);
+    if (existingJob?.agentId && agentId && existingJob.agentId !== agentId) throw new Error(`Host worker event agentId does not match ${workItemId}.`);
+
+    if (event === "reserved") {
+      if (agentId) throw new Error(`Host worker reservation must precede spawn for ${workItemId}.`);
+      if (target.state === "host-reserved" && existingJob?.state === "queued") continue;
+      if (target.state !== "host-dispatch-required" || !existingJob || existingJob.state !== "queued") {
+        throw new Error(`Host worker ${workItemId} is not awaiting a pre-spawn reservation.`);
+      }
+      const reservedAt = utcStamp();
+      next.workItems = next.workItems.map((item) => item.id === workItemId
+        ? { ...item, state: "host-reserved", activeJobId: existingJob.jobId, hostAttempt: { ...item.hostAttempt, state: "reserved", reservedAt } }
+        : item);
+      next = appendOrchestrationDecision(next, { type: "host-codex-reserved", workItemId, attemptId: existingJob.jobId, resourceId: target.assignment });
+      continue;
+    }
+
+    if (event === "started") {
+      if (!agentId) throw new Error(`Host worker started event requires agentId for ${workItemId}.`);
+      if (existingJob && ["running", "completed"].includes(existingJob.state)) continue;
+      const cancelledBeforeStart = target.state === "host-cancel-required" && existingJob?.state === "unknown";
+      if (existingJob && existingJob.state !== "queued" && !cancelledBeforeStart) {
+        throw new Error(`Host worker attempt ${target.hostAttempt.attemptId} already has terminal state ${existingJob.state}.`);
+      }
+      if (target.state !== "host-reserved" && !cancelledBeforeStart) throw new Error(`Work item ${workItemId} must be reserved before host spawn.`);
+      const startedAt = utcStamp();
+      const nickname = truncateText(String(raw?.nickname || "").trim(), 80);
+      const jobId = target.hostAttempt.attemptId;
+      // Bind the pre-spawn reservation in place when present; only a manifest predating reservations falls back to inserting fresh.
+      next.jobs = existingJob
+        ? next.jobs.map((job) => job.jobId === jobId ? { ...job, state: "running", agentId, nickname, startedAt } : job)
+        : [...next.jobs, { ...hostDispatchReservationJob(target), state: "running", agentId, nickname, startedAt }];
+      next.workItems = next.workItems.map((item) => item.id === workItemId
+        ? { ...item, state: cancelledBeforeStart ? "host-cancel-required" : "host-running", activeJobId: jobId, hostAgent: { agentId, nickname, startedAt }, hostAttempt: { ...item.hostAttempt, state: cancelledBeforeStart ? "cancellation-pending" : "running", acknowledgedAt: utcStamp() } }
+        : item);
+      next = appendOrchestrationDecision(next, { type: cancelledBeforeStart ? "host-codex-started-after-cancellation" : "host-codex-started", workItemId, attemptId: jobId, agentId, resourceId: target.assignment });
+      continue;
+    }
+
+    const cancelledBeforeStart = target.state === "host-cancel-required" && existingJob?.state === "unknown";
+    if (!existingJob || (existingJob.state === "queued" && !cancelledBeforeStart) || (existingJob.state === "unknown" && !cancelledBeforeStart)) throw new Error(`Host worker ${event} event has no acknowledged start for ${workItemId}.`);
+    if (["completed", "failed", "cancelled"].includes(existingJob.state)) {
+      if (existingJob.state === event || (event === "cancellation-unconfirmed" && existingJob.state === "cancelled")) continue;
+      throw new Error(`Host worker attempt ${existingJob.jobId} is already ${existingJob.state}.`);
+    }
+
+    if (event === "completed") {
+      const summary = truncateText(redactArtifactContent(String(raw?.summary || "").trim()), 1600);
+      const artifactRefs = boundedTextList(raw?.artifactRefs, 12, 300);
+      const changedFiles = boundedTextList(raw?.changedFiles, 20, 300);
+      const testSummary = truncateText(redactArtifactContent(String(raw?.testSummary || "").trim()), 800);
+      if (summary.length < 12) throw new Error(`Host worker completion requires a compact summary for ${workItemId}.`);
+      if (!target.readOnly && (!changedFiles.length || testSummary.length < 3)) {
+        throw new Error(`Host writer completion requires changedFiles and testSummary for ${workItemId}.`);
+      }
+      const hostEvidence = { summary, artifactRefs, changedFiles, testSummary, recordedAt: utcStamp() };
+      next.jobs = next.jobs.map((job) => job.jobId === existingJob.jobId
+        ? { ...job, state: "completed", completedAt: utcStamp(), observedModel: truncateText(String(raw?.observedModel || target.assignedModel), 160), inlineEvidence: hostEvidence }
+        : job);
+      next.workItems = next.workItems.map((item) => item.id === workItemId
+        ? { ...item, state: "completed", hostEvidence, blocker: "", failureCategory: "", hostAttempt: { ...item.hostAttempt, state: "completed", completedAt: utcStamp() } }
+        : item);
+      next = appendOrchestrationDecision(next, { type: "host-codex-completed", workItemId, attemptId: existingJob.jobId, resourceId: target.assignment });
+      continue;
+    }
+
+    if (["failed", "cancelled", "cancellation-unconfirmed"].includes(event)) {
+      const failureCategory = normalizeTaskLane(raw?.failureCategory || (event === "cancelled" ? "cancelled" : event === "cancellation-unconfirmed" ? "cancellation-unconfirmed" : "worker-failure"));
+      const state = event === "cancellation-unconfirmed" ? "unknown" : event;
+      next.jobs = next.jobs.map((job) => job.jobId === existingJob.jobId
+        ? { ...job, state, failureCategory, blocker: truncateText(String(raw?.summary || `Native Codex worker ${event}.`), 500), completedAt: event === "cancellation-unconfirmed" ? "" : utcStamp() }
+        : job);
+      next.workItems = next.workItems.map((item) => item.id === workItemId
+        ? { ...item, state: event === "cancellation-unconfirmed" ? "host-cancel-required" : event, blocker: truncateText(String(raw?.summary || `Native Codex worker ${event}.`), 500), failureCategory }
+        : item);
+      if (next.termination && ["cancelled", "failed"].includes(event)) {
+        next.termination = {
+          ...next.termination,
+          cancelledWorkers: Number(next.termination.cancelledWorkers || 0) + 1,
+          cancellationUnconfirmed: Math.max(0, Number(next.termination.cancellationUnconfirmed || 0) - 1),
+        };
+      }
+      next = appendOrchestrationDecision(next, { type: `host-codex-${event}`, workItemId, attemptId: existingJob.jobId, resourceId: target.assignment });
+      continue;
+    }
+    throw new Error(`Unsupported host worker event: ${event}`);
+  }
+  next.counts = {
+    total: next.jobs.length,
+    completed: next.jobs.filter((job) => job.state === "completed").length,
+    running: next.jobs.filter((job) => ["queued", "running", "unknown"].includes(job.state)).length,
+    failed: next.jobs.filter((job) => ["failed", "cancelled"].includes(job.state)).length,
+  };
+  next.state = deriveOrchestrationState(next);
+  return next;
+}
+
 function applyProjectManagerUpdates(manifest, args = {}) {
   const completed = new Set((args.completedCodexItems || []).map(normalizeTaskLane).filter(Boolean));
   const failed = new Set((args.failedCodexItems || []).map(normalizeTaskLane).filter(Boolean));
@@ -4180,6 +4772,9 @@ function applyProjectManagerUpdates(manifest, args = {}) {
 
   for (const id of takeover) {
     const target = next.workItems.find((item) => item.id === id);
+    if (next.managerOnly === true) {
+      throw new Error(`Manager-only mode refuses current-Codex takeover of ${id}. Reassign or rescope the bounded worker item instead.`);
+    }
     if (target.state === "running") throw new Error(`Work item ${id} is still running. Cancel its active worker before Codex takeover.`);
     if (target.state === "completed") continue;
     const byId = new Map(next.workItems.map((item) => [item.id, item]));
@@ -4255,14 +4850,15 @@ async function projectManagerStatus(args = {}) {
   if (args.stopRun === true && !String(args.stopReason || steeringDirective).trim()) {
     throw new Error("stopReason or steeringDirective is required when stopRun=true.");
   }
-  const hasUpdates = ["completedCodexItems", "failedCodexItems", "takeoverCodexItems", "codexEvidence"]
+  const hasUpdates = ["completedCodexItems", "failedCodexItems", "takeoverCodexItems", "codexEvidence", "hostWorkerEvents"]
     .some((key) => Array.isArray(args[key]) && args[key].length)
     || args.projectVerified === true
     || args.projectVerificationFailed === true
     || hasSteering;
   if (hasUpdates) {
+    let updatedManifest = null;
     withFileLock(lastTeamRunJsonPath(workspace), () => {
-      let manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+      let manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null), true);
       if (hasSteering) {
         manifest = {
           ...manifest,
@@ -4291,9 +4887,16 @@ async function projectManagerStatus(args = {}) {
           manifest.contextCapsulePath = capsule.outputPath;
         }
       }
+      manifest = applyHostWorkerEvents(manifest, args);
       if (!manifest.termination?.category) manifest = applyProjectManagerUpdates(manifest, args);
       writeTeamRunManifest(workspace, manifest);
+      updatedManifest = manifest;
     });
+    for (const event of Array.isArray(args.hostWorkerEvents) ? args.hostWorkerEvents : []) {
+      if (!event || !["completed", "failed"].includes(String(event.event || "").toLowerCase())) continue;
+      const item = updatedManifest?.workItems?.find((candidate) => candidate.id === normalizeTaskLane(event.workItemId));
+      recordNativeCodexOutcome(workspace, item, String(event.event).toLowerCase() === "completed");
+    }
   }
   return readTeamRun({ workspace, waitSeconds: args.waitSeconds });
 }
@@ -4437,12 +5040,31 @@ function readJsonFile(filePath, fallback = null) {
   }
 }
 
+function transientRenameError(error) {
+  return ["EACCES", "EBUSY", "EPERM", "ENOTEMPTY"].includes(String(error?.code || "").toUpperCase());
+}
+
+function atomicRenameWithRetry(tempPath, filePath, attempts = 5) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      fs.renameSync(tempPath, filePath);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!transientRenameError(error) || attempt === attempts - 1) break;
+      sleepSync(20 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 function writeJsonFile(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(3).toString("hex")}.tmp`);
   fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   try {
-    fs.renameSync(tempPath, filePath);
+    atomicRenameWithRetry(tempPath, filePath);
   } catch (error) {
     try {
       fs.rmSync(tempPath, { force: true });
@@ -5049,6 +5671,10 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
     reportedCostUsdEquivalent: Number.isFinite(Number(telemetry.reportedCostUsdEquivalent)) ? Number(telemetry.reportedCostUsdEquivalent) : null,
     promptChars: Number.isFinite(Number(telemetry.promptChars)) ? Number(telemetry.promptChars) : null,
     resultChars: Number.isFinite(Number(telemetry.resultChars)) ? Number(telemetry.resultChars) : null,
+    workerRole: normalizeTaskLane(telemetry.workerRole || ""),
+    sessionId: truncateText(String(telemetry.sessionId || ""), 160),
+    numTurns: Number.isFinite(Number(telemetry.numTurns)) ? Number(telemetry.numTurns) : null,
+    structuredOutput: telemetry.structuredOutput === true,
     workItemKinds: Array.isArray(args.workItemKinds) ? args.workItemKinds.map(normalizeTaskLane).filter(Boolean).slice(0, 12) : [],
     completedAt: now,
   };
@@ -5142,9 +5768,17 @@ function parseClaudeJsonOutput(stdout) {
     return { model, costUsdEquivalent, inputTokens, cacheReadInputTokens, outputTokens, dominance };
   }).sort((a, b) => b.dominance - a.dominance || a.model.localeCompare(b.model));
   const usage = parsed.usage || {};
+  const structuredOutput = parsed.structured_output && typeof parsed.structured_output === "object"
+    ? parsed.structured_output
+    : parsed.structuredOutput && typeof parsed.structuredOutput === "object"
+      ? parsed.structuredOutput
+      : null;
   return {
     parsed,
-    resultText: String(parsed.result || parsed.message || "").trim(),
+    resultText: String(parsed.result || parsed.message || "").trim() || compactClaudeStructuredOutput(structuredOutput),
+    structuredOutput,
+    sessionId: String(parsed.session_id ?? parsed.sessionId ?? ""),
+    numTurns: Number(parsed.num_turns ?? parsed.numTurns),
     observedModel: observedModels[0]?.model || "",
     observedModels: observedModels.map(({ dominance, ...row }) => row),
     durationMs: Number(parsed.duration_ms ?? parsed.durationMs),
@@ -5298,13 +5932,17 @@ function normalizeClaudeDispatchModel(value) {
   return !model || model.toLowerCase() === "auto" ? "sonnet" : model;
 }
 
+function claudeCommandSupportsExactArgs(command) {
+  return process.platform !== "win32" || /\.(?:exe|com)$/i.test(String(command || ""));
+}
+
 function claudeIsolationFlags() {
   return ["--safe-mode", "--no-session-persistence"];
 }
 
 function runClaudeCli(command, args, options = {}) {
   const safeArgs = args.map((arg) => String(arg));
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && !claudeCommandSupportsExactArgs(command)) {
     const commandLine = [quoteCmdArg(command), ...safeArgs.map(quoteCmdArg)].join(" ");
     return spawnSync(commandLine, {
       ...options,
@@ -5323,6 +5961,94 @@ function runClaudeCli(command, args, options = {}) {
   });
 }
 
+function parseClaudeCliCapabilities(helpText, command = "") {
+  const help = String(helpText || "");
+  const disallowedToolsFlag = /(^|\s)--disallowedTools\b/m.test(help)
+    ? "--disallowedTools"
+    : /(^|\s)--disallowed-tools\b/m.test(help)
+      ? "--disallowed-tools"
+      : "";
+  return {
+    exactArguments: claudeCommandSupportsExactArgs(command),
+    agent: /(^|\s)--agent\s+</m.test(help),
+    pluginDir: /(^|\s)--plugin-dir\s+</m.test(help),
+    jsonSchema: /(^|\s)--json-schema\s+</m.test(help),
+    appendSystemPrompt: /(^|\s)--append-system-prompt\s+</m.test(help),
+    disallowedTools: Boolean(disallowedToolsFlag),
+    disallowedToolsFlag,
+    safeMode: /(^|\s)--safe-mode\b/m.test(help),
+    noSessionPersistence: /(^|\s)--no-session-persistence\b/m.test(help),
+  };
+}
+
+function getClaudeCliCapabilities(command) {
+  const key = String(command || "").toLowerCase();
+  if (claudeCliCapabilityCache.has(key)) return claudeCliCapabilityCache.get(key);
+  const result = runClaudeCli(command, ["--help"], { timeout: 15000, maxBuffer: 2 * 1024 * 1024 });
+  const capabilities = parseClaudeCliCapabilities(`${result.stdout || ""}\n${result.stderr || ""}`, command);
+  claudeCliCapabilityCache.set(key, capabilities);
+  return capabilities;
+}
+
+function claudeWorkerRole(args = {}) {
+  const permissionMode = String(args.permissionMode || "").toLowerCase();
+  const readOnly = permissionMode === "plan" || String(args.mode || "").toLowerCase() === "review";
+  const intent = `${(args.workItemKinds || []).join(" ")} ${args.goal || ""} ${args.nextStep || ""}`.toLowerCase();
+  if (!readOnly) return { name: "ai-mobile-writer", role: "writer" };
+  if (/\b(test|testing|verify|verification|qa|validation|regression)\b/.test(intent)) return { name: "ai-mobile-verifier", role: "verifier" };
+  if (/\b(architecture|security|risk|audit|review|critique|incident|migration)\b/.test(intent)) return { name: "ai-mobile-reviewer", role: "reviewer" };
+  return { name: "ai-mobile-scout", role: "scout" };
+}
+
+function claudeWorkerSystemPrompt(role) {
+  const common = "You are a bounded AI Mobile worker. Work only on the assigned item, never launch an Agent or subagent, preserve unrelated changes, and return concise verification evidence instead of narration.";
+  return {
+    writer: `${common} Act as the single workspace writer: edit only the declared file boundary, implement one coherent change, and run focused checks.`,
+    reviewer: `${common} Act as an independent read-only reviewer: prioritize concrete defects, risks, exact paths, and the smallest safe correction.`,
+    verifier: `${common} Act as a read-only verifier: run only named checks, distinguish observation from inference, and fail closed when evidence is missing.`,
+    scout: `${common} Act as a read-only scout: inspect the minimum relevant files and return exact paths, facts, assumptions, and blockers for the next worker.`,
+  }[role] || common;
+}
+
+function claudeWorkerResultSchema(maxResultBullets = 8) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      status: { type: "string", enum: ["completed", "blocked"] },
+      summary: { type: "array", maxItems: boundedResultBulletLimit({ maxResultBullets }, 8), items: { type: "string", maxLength: 500 } },
+      changedFiles: { type: "array", maxItems: 20, items: { type: "string", maxLength: 300 } },
+      tests: { type: "array", maxItems: 10, items: { type: "string", maxLength: 500 } },
+      blocker: { type: "string", maxLength: 800 },
+    },
+    required: ["status", "summary", "changedFiles", "tests", "blocker"],
+  };
+}
+
+function compactClaudeStructuredOutput(value, maxResultBullets = 8) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const lines = [];
+  if (value.status) lines.push(`- Status: ${String(value.status).trim()}`);
+  for (const item of Array.isArray(value.summary) ? value.summary : []) lines.push(`- ${String(item).trim()}`);
+  if (Array.isArray(value.changedFiles) && value.changedFiles.length) lines.push(`- Changed files: ${value.changedFiles.join(", ")}`);
+  if (Array.isArray(value.tests) && value.tests.length) lines.push(`- Tests: ${value.tests.join("; ")}`);
+  if (value.blocker) lines.push(`- Blocker: ${String(value.blocker).trim()}`);
+  return compactResultBullets(lines.filter((line) => line !== "- ").join("\n"), boundedResultBulletLimit({ maxResultBullets }, 8), resultCharacterLimit({ maxResultBullets }, 8));
+}
+
+function removeCliOptions(args, optionNames) {
+  const names = new Set(optionNames);
+  const result = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (names.has(args[index])) {
+      index += 1;
+      continue;
+    }
+    result.push(args[index]);
+  }
+  return result;
+}
+
 function commandExists(command) {
   const result = runClaudeCli(command, ["--version"], { timeout: 10000 });
   return {
@@ -5336,12 +6062,18 @@ function commandExists(command) {
 function findClaudeCode() {
   const candidates = [];
   if (process.platform === "win32") {
+    if (process.env.APPDATA) {
+      candidates.push(path.join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
+    }
     const where = spawnSync("where.exe", ["claude"], { encoding: "utf8", timeout: 10000, windowsHide: true });
     for (const line of String(where.stdout || "").split(/\r?\n/)) {
       const trimmed = line.trim();
-      if (trimmed) candidates.push(trimmed);
+      if (!trimmed) continue;
+      if (/\.cmd$/i.test(trimmed)) {
+        candidates.push(path.join(path.dirname(trimmed), "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
+      }
+      candidates.push(trimmed);
     }
-    candidates.sort((a, b) => Number(!a.toLowerCase().endsWith(".cmd")) - Number(!b.toLowerCase().endsWith(".cmd")));
     candidates.push("claude.cmd", "claude");
   } else {
     candidates.push("claude");
@@ -5354,7 +6086,7 @@ function findClaudeCode() {
     seen.add(key);
     const check = commandExists(candidate);
     if (check.ok) {
-      return { found: true, command: candidate, version: check.stdout || check.stderr };
+      return { found: true, command: candidate, version: check.stdout || check.stderr, capabilities: getClaudeCliCapabilities(candidate) };
     }
   }
   return { found: false, command: "", version: "", message: "Claude Code CLI was not found on PATH." };
@@ -5362,12 +6094,16 @@ function findClaudeCode() {
 
 function getClaudeStatusText() {
   const status = findClaudeCode();
+  const capabilities = status.capabilities || {};
   return [
     "ClaudeCodeStatus:",
     `Found: ${status.found}`,
     `Command: ${status.command || "<not found>"}`,
     `Version: ${status.version || "<unknown>"}`,
     "SupportedBridge: headless Claude Code CLI via claude -p",
+    `ExactArgumentTransport: ${capabilities.exactArguments === true}`,
+    `SpecializedWorkerPlugin: ${capabilities.pluginDir === true && capabilities.agent === true && fs.existsSync(path.join(claudeWorkerPluginDir, ".claude-plugin", "plugin.json"))}`,
+    `StructuredOutput: ${capabilities.jsonSchema === true && capabilities.exactArguments === true}`,
     "Startup: passive; no Claude job is started by this status check.",
   ].join("\n");
 }
@@ -6103,6 +6839,10 @@ function runClaudeJobWorker(args = {}) {
   const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 30)));
   const maxOutputTokens = Math.max(2000, Math.min(50000, Number(args.maxOutputTokens ?? 12000)));
   const prompt = buildClaudeJobPrompt(workspace, jobId, { ...args, permissionMode });
+  const capabilities = status.capabilities || getClaudeCliCapabilities(status.command);
+  const workerRole = claudeWorkerRole({ ...args, permissionMode });
+  const roleSystemPromptEnabled = capabilities.appendSystemPrompt === true && capabilities.exactArguments === true;
+  const structuredOutputEnabled = capabilities.jsonSchema === true && capabilities.exactArguments === true;
   const cliArgs = [
     "-p",
     ...claudeIsolationFlags(),
@@ -6111,6 +6851,9 @@ function runClaudeJobWorker(args = {}) {
     "--permission-mode",
     permissionMode,
   ];
+  if (roleSystemPromptEnabled) cliArgs.push("--append-system-prompt", claudeWorkerSystemPrompt(workerRole.role));
+  if (capabilities.disallowedToolsFlag) cliArgs.push(capabilities.disallowedToolsFlag, "Agent");
+  if (structuredOutputEnabled) cliArgs.push("--json-schema", JSON.stringify(claudeWorkerResultSchema(args.maxResultBullets)));
   if (permissionMode === "plan") cliArgs.push("--tools", "Read,Grep,Glob");
   const dispatchModel = normalizeClaudeDispatchModel(args.model);
   if (dispatchModel) cliArgs.push("--model", safeClaudeFlag(dispatchModel, "model"));
@@ -6139,23 +6882,43 @@ function runClaudeJobWorker(args = {}) {
     claudeModel: args.model || "",
     claudePermissionMode: permissionMode,
     claudeIsolationMode: "safe-mode",
+    claudeWorkerRole: workerRole.role,
+    claudeWorkerContract: roleSystemPromptEnabled ? "role-system-prompt" : "bounded-prompt",
+    claudeStructuredOutput: structuredOutputEnabled,
     claudeBudgetPolicy: budgetPolicyLabel,
     maxOutputTokens,
   });
 
   const startedMs = Date.now();
-  let result = runClaudeCli(status.command, cliArgs, {
+  let effectiveCliArgs = cliArgs;
+  let result = runClaudeCli(status.command, effectiveCliArgs, {
     cwd: workspace,
     input: prompt,
     timeout: maxMinutes * 60 * 1000,
     maxBuffer: 8 * 1024 * 1024,
   });
   let isolationMode = "safe-mode";
-  const initialErrorText = `${result.stderr || ""} ${result.error?.message || ""}`;
+  let workerContractMode = roleSystemPromptEnabled ? "role-system-prompt" : "bounded-prompt";
+  let structuredOutputMode = structuredOutputEnabled;
+  let initialErrorText = `${result.stderr || ""} ${result.error?.message || ""}`;
   if (result.status !== 0 && /unknown (?:option|argument).*(?:safe-mode|no-session-persistence)|(?:safe-mode|no-session-persistence).*unknown (?:option|argument)/i.test(initialErrorText)) {
     isolationMode = "legacy-cli-fallback";
-    const legacyArgs = cliArgs.filter((value) => !claudeIsolationFlags().includes(value));
-    result = runClaudeCli(status.command, legacyArgs, {
+    effectiveCliArgs = effectiveCliArgs.filter((value) => !claudeIsolationFlags().includes(value));
+    result = runClaudeCli(status.command, effectiveCliArgs, {
+      cwd: workspace,
+      input: prompt,
+      timeout: maxMinutes * 60 * 1000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    initialErrorText = `${result.stderr || ""} ${result.error?.message || ""}`;
+  }
+  const optionalContractRejected = result.status !== 0
+    && /(?:unknown (?:option|argument).*(?:append-system-prompt|json-schema|disallowedTools|disallowed-tools)|(?:system prompt|json schema|json-schema).*(?:invalid|failed|unknown))/i.test(initialErrorText);
+  if (optionalContractRejected && (roleSystemPromptEnabled || structuredOutputEnabled || capabilities.disallowedTools === true)) {
+    effectiveCliArgs = removeCliOptions(effectiveCliArgs, ["--append-system-prompt", "--json-schema", "--disallowedTools", "--disallowed-tools"]);
+    workerContractMode = "bounded-prompt-fallback";
+    structuredOutputMode = false;
+    result = runClaudeCli(status.command, effectiveCliArgs, {
       cwd: workspace,
       input: prompt,
       timeout: maxMinutes * 60 * 1000,
@@ -6172,7 +6935,8 @@ function runClaudeJobWorker(args = {}) {
 
   const resultPath = path.join(jobDir, "result.md");
   if (!fs.existsSync(resultPath) || fs.readFileSync(resultPath, "utf8").trim() === "") {
-    fs.writeFileSync(resultPath, compactResultBullets(parsedOutput.resultText || stderr || "<Claude Code produced no output>", boundedResultBulletLimit(args, 8), resultCharacterLimit(args, 8)), "utf8");
+    const structuredResult = compactClaudeStructuredOutput(parsedOutput.structuredOutput, boundedResultBulletLimit(args, 8));
+    fs.writeFileSync(resultPath, compactResultBullets(structuredResult || parsedOutput.resultText || stderr || "<Claude Code produced no output>", boundedResultBulletLimit(args, 8), resultCharacterLimit(args, 8)), "utf8");
   }
   const compactClaudeResult = compactResultArtifact(resultPath, args, 8);
 
@@ -6209,6 +6973,10 @@ function runClaudeJobWorker(args = {}) {
     reportedCostUsdEquivalent: parsedOutput.reportedCostUsdEquivalent,
     promptChars: prompt.length,
     resultChars: compactClaudeResult.length,
+    workerRole: workerRole.role,
+    sessionId: parsedOutput.sessionId,
+    numTurns: parsedOutput.numTurns,
+    structuredOutput: structuredOutputMode && Boolean(parsedOutput.structuredOutput),
   });
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
@@ -6219,6 +6987,10 @@ function runClaudeJobWorker(args = {}) {
     observedModel: parsedOutput.observedModel,
     observedModels: parsedOutput.observedModels,
     claudeIsolationMode: isolationMode,
+    claudeWorkerRole: workerRole.role,
+    claudeWorkerContract: workerContractMode,
+    claudeStructuredOutput: structuredOutputMode && Boolean(parsedOutput.structuredOutput),
+    claudeSessionId: parsedOutput.sessionId,
     failureCategory,
     descendantCleanup,
     warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
@@ -7224,6 +7996,7 @@ function buildSubmissionGuide() {
 }
 
 function runSelfTest() {
+  process.env.AI_MOBILE_SELF_TEST = "1";
   const passed = [];
   const assert = (condition, name) => {
     if (!condition) throw new Error(`Self-test failed: ${name}`);
@@ -7241,6 +8014,13 @@ function runSelfTest() {
   assert(claudeRoster.some((model) => model.id === "haiku"), "Claude Haiku remains available even when CLI help omits its alias");
   const claudeEfforts = parseClaudeEffortLevels("--effort <level> Effort level for the current session (low, medium, high, xhigh, max)");
   assert(claudeEfforts.join(",") === "low,medium,high,xhigh,max", "Claude reasoning effort levels are discovered from the current CLI schema");
+  const claudeCapabilities = parseClaudeCliCapabilities("--agent <agent> --plugin-dir <path> --json-schema <schema> --disallowedTools <tools> --safe-mode --no-session-persistence", process.platform === "win32" ? "claude.exe" : "claude");
+  assert(claudeCapabilities.agent && claudeCapabilities.pluginDir && claudeCapabilities.jsonSchema && claudeCapabilities.exactArguments, "Claude CLI worker features are detected from help output instead of hard-coded versions");
+  assert(parseClaudeCliCapabilities("--disallowed-tools <tools>", "claude").disallowedToolsFlag === "--disallowed-tools", "Claude dispatch preserves the deny-tools flag spelling exposed by the installed CLI");
+  assert(claudeWorkerRole({ mode: "patch", permissionMode: "acceptEdits", workItemKinds: ["implementation"] }).role === "writer", "Claude implementation receives the bounded writer role");
+  assert(claudeWorkerRole({ mode: "review", permissionMode: "plan", workItemKinds: ["verification-testing"] }).role === "verifier", "Claude focused checks receive the verifier role");
+  const structuredClaude = parseClaudeJsonOutput(JSON.stringify({ session_id: "session-test", num_turns: 3, structured_output: { status: "completed", summary: ["Verified the bounded change."], changedFiles: [], tests: ["Focused test passed."], blocker: "" }, usage: { output_tokens: 12 } }));
+  assert(structuredClaude.sessionId === "session-test" && structuredClaude.numTurns === 3 && /Verified the bounded change/.test(structuredClaude.resultText), "Claude structured output becomes compact lifecycle evidence");
   const claudeUsage = parseClaudeUsage([
     "Current session: 2% used - resets Jul 11, 8:50am (Australia/Perth)",
     "Current week (all models): 13% used - resets Jul 12, 12pm (Australia/Perth)",
@@ -7297,7 +8077,7 @@ function runSelfTest() {
   const unknownAuth = { checked: true, loggedIn: true, subscriptionType: "" };
   const apiCredentialAuth = { checked: true, loggedIn: true, authMethod: "apiKey", apiProvider: "firstParty", subscriptionType: "pro" };
   assert(claudeBudgetFor(defaultControls, 4, subscriptionAuth, {}) === null, "claude.ai subscription auth without an API key omits the per-worker USD cap and relies on measured quota windows");
-  assert(claudeBudgetFor(defaultControls, 4, subscriptionAuth, { ANTHROPIC_API_KEY: "sk-test" }) === 0.75, "an active ANTHROPIC_API_KEY forces the conservative automatic USD cap even with a subscription");
+  assert(claudeBudgetFor(defaultControls, 4, subscriptionAuth, { ANTHROPIC_API_KEY: pluginRoot }) === 0.75, "an active ANTHROPIC_API_KEY forces the conservative automatic USD cap even with a subscription");
   assert(claudeBudgetFor(defaultControls, 4, unknownAuth, {}) === 0.75, "unknown billing keeps the conservative automatic USD cap");
   assert(claudeBudgetFor(defaultControls, 4, apiCredentialAuth, {}) === 0.75, "non-claude.ai authentication cannot be mistaken for included subscription billing");
   assert(claudeBudgetFor({ ...defaultControls, maxClaudeBudgetUsd: 0.5 }, 4, subscriptionAuth, {}) === 0.5, "an explicit user USD cap is preserved even under subscription auth");
@@ -7321,6 +8101,7 @@ function runSelfTest() {
   };
   assert(runContractChanges(contractManifest, contractArgs).length === 0, "identical active goal contracts remain idempotent");
   assert(runContractChanges(contractManifest, { ...contractArgs, constraints: ["Do not access email."] }).includes("constraints"), "same-goal safety changes force a bounded replan");
+  assert(runContractChanges(contractManifest, { ...contractArgs, hostCodexAvailable: true }).includes("routingPolicy"), "native Codex host availability is part of the idempotent routing contract");
   const carriedContract = carryForwardSameGoalContract(contractArgs, contractArgs, { ...contractManifest, constraints: [...contractManifest.constraints, "Do not access email."] });
   assert(carriedContract.constraints.some((item) => item === "Do not access email.") && carriedContract.workItems.length === contractManifest.workItems.length, "same-goal continuation preserves terminal-run constraints and work graph");
   const capsuleFixture = buildContextCapsule({
@@ -7367,6 +8148,15 @@ function runSelfTest() {
   assert(gatedAgy.length > 0 && gatedAgy.every((candidate) => candidate.dispatchable === false && candidate.state === "authorization-required"), "Antigravity CLI cannot auto-dispatch when an OAuth popup was not explicitly authorized");
   const enabledAgy = buildResourceCandidates({ allowAntigravityCli: true }, fakeContext).filter((candidate) => candidate.platform === "antigravity");
   assert(enabledAgy.some((candidate) => candidate.dispatchable === true), "explicit Antigravity CLI authorization enables its model roster");
+  const baselineRoutingContext = {
+    ...fakeContext,
+    claudeUsage: {
+      ...claudeUsage,
+      windows: (claudeUsage.windows || []).map((window) => window.scope === "fable"
+        ? { ...window, resetAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+        : window),
+    },
+  };
   const orchestrationDecision = buildResourceOrchestrationDecision({
     goal: "Implement and verify a cross-platform resource orchestrator plugin",
     mode: "patch",
@@ -7375,8 +8165,9 @@ function runSelfTest() {
       { id: "implement", objective: "Implement the orchestration control loop", kind: "implementation-architecture", complexity: "high", readOnly: false },
       { id: "verify", objective: "Independently verify failure handling", kind: "testing-review", complexity: "medium", readOnly: true, dependsOn: ["implement"] },
     ],
-  }, fakeContext);
-  assert(orchestrationDecision.workItems.find((item) => item.id === "implement")?.assignment === "claude:sonnet", "high-value implementation selects Claude Sonnet as the single writer");
+  }, baselineRoutingContext);
+  const implementationAssignment = orchestrationDecision.workItems.find((item) => item.id === "implement")?.assignment;
+  assert(implementationAssignment === "claude:sonnet", `high-value implementation selects Claude Sonnet as the single writer (got ${implementationAssignment || "none"})`);
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.assignment.startsWith("antigravity:"), "independent verification selects a different available team");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.alternates.includes("claude:sonnet"), "failover pool keeps a cross-platform alternate even when one provider has many models");
   const exactClaudeCandidate = buildResourceCandidates({}, {
@@ -7388,13 +8179,13 @@ function runSelfTest() {
     goal: "Draft a routine project review",
     mode: "review",
     workItems: [{ id: "routine", objective: "Review the current implementation", kind: "review", complexity: "medium", readOnly: true }],
-  }, fakeContext);
+  }, baselineRoutingContext);
   assert(routineDecision.workItems[0]?.assignment !== "claude:fable", "routine work never selects premium Claude Fable");
   const criticalDecision = buildResourceOrchestrationDecision({
     goal: "Resolve a production incident safely",
     mode: "patch",
     workItems: [{ id: "incident", objective: "Resolve a production incident with adversarial verification", kind: "incident-debugging", complexity: "critical", readOnly: false }],
-  }, fakeContext);
+  }, baselineRoutingContext);
   assert(criticalDecision.workItems[0]?.assignment === "claude:sonnet", "critical work keeps the strongest healthy general coding model instead of spending Fable by default");
   const resetOpportunityContext = {
     ...fakeContext,
@@ -7468,12 +8259,206 @@ function runSelfTest() {
   assert(consequentialDecision.workItems[0]?.assignment === "codex:current" && consequentialDecision.workItems[0]?.externallyConsequential === true, "externally consequential operations remain owned by the current Codex session");
   const directReviewDecision = buildResourceOrchestrationDecision({
     goal: "Perform one controlled live operation and verify it",
+    managerOnly: false,
     workItems: [
       { id: "live-operation", objective: "Perform one controlled live operation", kind: "operation", complexity: "high", readOnly: false, externallyConsequential: true },
       { id: "cycle-review", objective: "Review the terminal evidence", kind: "review", complexity: "low", readOnly: true, dependsOn: ["live-operation"] },
     ],
   }, fakeContext);
   assert(directReviewDecision.workItems.find((item) => item.id === "cycle-review")?.assignment === "codex:current", "redundant low-complexity review of direct operational evidence stays with Codex");
+  const managerOnlyReviewDecision = buildResourceOrchestrationDecision({
+    goal: "Manage one controlled live operation and report its evidence",
+    managerOnly: true,
+    workItems: [
+      { id: "live-operation", objective: "Perform one controlled live operation", kind: "operation", complexity: "high", readOnly: false, externallyConsequential: true },
+      { id: "cycle-review", objective: "Review the terminal evidence", kind: "review", complexity: "low", readOnly: true, dependsOn: ["live-operation"] },
+    ],
+  }, fakeContext);
+  assert(managerOnlyReviewDecision.workItems.find((item) => item.id === "live-operation")?.assignment === "codex:current", "manager-only mode keeps the non-delegable live operation at the user boundary");
+  assert(managerOnlyReviewDecision.workItems.find((item) => item.id === "cycle-review")?.assignment !== "codex:current", "manager-only mode delegates terminal evidence review instead of consuming the control-room chat");
+  const unavailableManagerDecision = buildResourceOrchestrationDecision({
+    goal: "Review a project while every worker is unavailable",
+    managerOnly: true,
+    mode: "review",
+    workItems: [{ id: "review", objective: "Review the current project", kind: "review", complexity: "medium", readOnly: true }],
+  }, {
+    ...fakeContext,
+    claudeFound: false,
+    claudeAuth: { checked: true, loggedIn: false },
+    claudeModels: [],
+    agyFound: false,
+    agyModels: [],
+    recommendedAvailable: [],
+  });
+  assert(unavailableManagerDecision.workItems[0]?.assignment === "resource:unavailable", "manager-only mode blocks when no worker is available instead of silently making current Codex execute the task");
+  const privateRoutingProfile = {
+    codexModelAllowPattern: "^gpt-5\\.6-(sol|terra|luna)$",
+    claudeModelAllowPattern: "^(?!.*haiku).*$",
+    claudePreferredModelPattern: "sonnet",
+    antigravityPreferredTaskPattern: "browser|file|read|discovery|research|review|docs|summary|scout",
+    adaptiveRouting: true,
+  };
+  assert(DEFAULT_PROFILE.claudePreferredModelPattern === "(?!)" && DEFAULT_PROFILE.antigravityPreferredTaskPattern === "(?!)", "public routing defaults remain provider-neutral instead of publishing one user's preferences");
+  const normalizedPrivateProfile = normalizeProfile(privateRoutingProfile);
+  assert(normalizedPrivateProfile.codexModelAllowPattern === privateRoutingProfile.codexModelAllowPattern && normalizedPrivateProfile.claudeModelAllowPattern === privateRoutingProfile.claudeModelAllowPattern, "private model policies survive local profile normalization");
+  const hostRoutingContext = {
+    ...fakeContext,
+    codexCatalog: {
+      models: [
+        { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+        { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+        { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max"] },
+        { id: "gpt-5.5", displayName: "GPT-5.5", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] },
+      ],
+    },
+    codexTelemetry: { found: true, fresh: true, state: "healthy", evidence: "test", effectiveRemainingPercent: 75, windows: [] },
+    claudeFound: false,
+    claudeAuth: { checked: true, loggedIn: false },
+    claudeModels: [],
+    agyFound: false,
+    agyModels: [],
+    recommendedAvailable: [],
+  };
+  const nativeCodexDecision = buildResourceOrchestrationDecision({
+    goal: "Implement and test a bounded project change",
+    managerOnly: true,
+    hostCodexAvailable: true,
+    localProfile: privateRoutingProfile,
+    workItems: [{ id: "native-implementation", objective: "Implement and test the bounded patch", kind: "implementation-testing", complexity: "high", readOnly: false, expectedFiles: ["scripts/example.js"] }],
+  }, hostRoutingContext);
+  assert(nativeCodexDecision.workItems[0]?.assignment === "codex-host:gpt-5.6-terra", `manager-only routing uses a separate Terra native Codex worker for balanced implementation (got ${nativeCodexDecision.workItems[0]?.assignment || "none"})`);
+  assert(!nativeCodexDecision.candidates.some((candidate) => candidate.id === "codex-host:gpt-5.5"), "private Codex allow policy excludes models outside Sol, Terra, and Luna");
+  const reserveContext = {
+    ...hostRoutingContext,
+    codexRemainingPercent: 15,
+    codexBudget: { state: "critical", text: "15% remaining" },
+    codexTelemetry: { ...hostRoutingContext.codexTelemetry, effectiveRemainingPercent: 15, state: "critical" },
+  };
+  const reserveDecision = buildResourceOrchestrationDecision({
+    goal: "Protect the manager while continuing bounded project work",
+    managerOnly: true,
+    hostCodexAvailable: true,
+    codexManagerReservePercent: 15,
+    localProfile: privateRoutingProfile,
+    workItems: [{ id: "reserved-implementation", objective: "Implement the bounded patch", kind: "implementation", complexity: "high", readOnly: false, expectedFiles: ["scripts/example.js"] }],
+  }, reserveContext);
+  assert(reserveDecision.candidates.filter((candidate) => candidate.dispatchMode === "host-subagent").every((candidate) => candidate.state === "manager-reserve" && candidate.dispatchable === false), "native Codex dispatch stops before consuming the manager reserve");
+  assert(capacityCheckpointDelayMinutes({ ...normalizedRunControls({}), resources: reserveDecision.candidates }) === 5, "capacity reviews accelerate to five minutes when the Codex manager reserve is active");
+  const runwayText = projectManagerRunwayLines(normalizedRunControls({ codexManagerReservePercent: 18, maxConcurrentCodexWorkers: 1 }), reserveContext, reserveDecision.candidates).join("\n");
+  assert(runwayText.includes("CodexManagerReserve: 18%") && runwayText.includes("NativeCodexConcurrency: 1") && runwayText.includes("QuotaResetContinuity: durable run state persists"), "project-manager plans expose manager reserve, native concurrency, and reset continuity");
+  const filteredClaude = buildResourceCandidates({ localProfile: privateRoutingProfile }, fakeContext).filter((candidate) => candidate.platform === "claude");
+  assert(!filteredClaude.some((candidate) => /haiku/i.test(candidate.id)) && filteredClaude.some((candidate) => /sonnet/i.test(candidate.id)), "private Claude policy excludes Haiku while retaining Sonnet");
+  const terraResource = nativeCodexDecision.candidates.find((candidate) => candidate.id === "codex-host:gpt-5.6-terra");
+  const hostRunBase = {
+    version: 2,
+    runId: "host-lifecycle-test",
+    workspace: pluginRoot,
+    goal: "Test native Codex lifecycle",
+    contextCapsulePath: path.join(pluginRoot, ".antigravity-bridge", "orchestrator", "project-capsule.json"),
+    managerOnly: true,
+    resources: nativeCodexDecision.candidates,
+    decisions: [],
+    jobs: [],
+    workItems: [],
+  };
+  const preparedHostItem = prepareHostAssignedItem(hostRunBase, {
+    ...normalizeWorkItem({ id: "native-implementation", objective: "Implement and test the bounded patch", kind: "implementation-testing", complexity: "high", readOnly: false, expectedFiles: ["scripts/example.js"] }, 0, "high"),
+    assignment: terraResource.id,
+    assignedModel: terraResource.model,
+  }, terraResource);
+  const hostLifecycleManifest = { ...hostRunBase, workItems: [preparedHostItem], jobs: ensureHostDispatchReservations([preparedHostItem], []), state: "ready-for-codex" };
+  let wrongHostTokenRejected = false;
+  try {
+    applyHostWorkerEvents(hostLifecycleManifest, { hostWorkerEvents: [{ event: "started", runId: hostLifecycleManifest.runId, workItemId: preparedHostItem.id, attemptId: preparedHostItem.hostAttempt.attemptId, dispatchToken: "wrong", agentId: "agent-1" }] });
+  } catch (error) {
+    wrongHostTokenRejected = /token does not match/i.test(String(error?.message || ""));
+  }
+  assert(wrongHostTokenRejected, "native Codex host events reject a mismatched dispatch token");
+  const hostReservedEvent = { event: "reserved", runId: hostLifecycleManifest.runId, workItemId: preparedHostItem.id, attemptId: preparedHostItem.hostAttempt.attemptId, dispatchToken: preparedHostItem.hostAttempt.dispatchToken };
+  let unreservedStartRejected = false;
+  try {
+    applyHostWorkerEvents(hostLifecycleManifest, { hostWorkerEvents: [{ ...hostReservedEvent, event: "started", agentId: "agent-unreserved" }] });
+  } catch (error) {
+    unreservedStartRejected = /must be reserved/i.test(String(error?.message || ""));
+  }
+  assert(unreservedStartRejected, "native host spawn cannot start before the manager acknowledges its reservation");
+  const hostReserved = applyHostWorkerEvents(hostLifecycleManifest, { hostWorkerEvents: [hostReservedEvent] });
+  const reservedActionText = formatTeamRunSnapshot(pluginRoot, hostReserved, 0);
+  assert(hostReserved.workItems[0]?.state === "host-reserved" && reservedActionText.includes("multi_agent_v1__spawn_agent"), "pre-spawn reservation is durable and continues to expose the exact spawn action");
+  assert(syncWorkItemsFromJobs(hostReserved).workItems[0]?.state === "host-reserved", "host refresh preserves a reserved spawn action without reading status.json");
+  const hostStartedEvent = { event: "started", runId: hostLifecycleManifest.runId, workItemId: preparedHostItem.id, attemptId: preparedHostItem.hostAttempt.attemptId, dispatchToken: preparedHostItem.hostAttempt.dispatchToken, agentId: "agent-1", nickname: "Terra worker" };
+  const hostStarted = applyHostWorkerEvents(hostReserved, { hostWorkerEvents: [hostStartedEvent] });
+  assert(hostStarted.workItems[0]?.state === "host-running" && hostStarted.jobs[0]?.transport === "host-subagent", "native Codex start acknowledgement enters the durable host-running state");
+  assert(!formatTeamRunSnapshot(pluginRoot, hostStarted, 0).includes("HostCodexActions:"), "started native workers no longer expose a spawn action");
+  assert(syncWorkItemsFromJobs(hostStarted).workItems[0]?.state === "host-running", "filesystem refresh preserves acknowledged native Codex workers without requiring status.json");
+  const hostStartedAgain = applyHostWorkerEvents(hostStarted, { hostWorkerEvents: [hostStartedEvent] });
+  assert(hostStartedAgain.jobs.length === 1 && hostStartedAgain.jobs[0]?.agentId === "agent-1", "duplicate native Codex start acknowledgement is idempotent");
+  const hostCompleted = applyHostWorkerEvents(hostStarted, { hostWorkerEvents: [{ ...hostStartedEvent, event: "completed", summary: "Implemented the bounded native Codex test patch and verified its behavior.", changedFiles: ["scripts/example.js"], testSummary: "Focused test passed.", observedModel: "gpt-5.6-terra" }] });
+  assert(hostCompleted.workItems[0]?.state === "completed" && hostCompleted.jobs[0]?.state === "completed" && hostCompleted.workItems[0]?.hostEvidence?.testSummary, "native Codex completion requires and records compact writer evidence");
+  const secondPreparedHostItem = prepareHostAssignedItem({ ...hostRunBase, runId: "host-cancel-test" }, { ...preparedHostItem, hostAttempt: null, hostAction: null }, terraResource);
+  const cancelBase = { ...hostRunBase, runId: "host-cancel-test", workItems: [secondPreparedHostItem], jobs: ensureHostDispatchReservations([secondPreparedHostItem], []) };
+  const cancelStartedEvent = { event: "started", runId: cancelBase.runId, workItemId: secondPreparedHostItem.id, attemptId: secondPreparedHostItem.hostAttempt.attemptId, dispatchToken: secondPreparedHostItem.hostAttempt.dispatchToken, agentId: "agent-2" };
+  const cancelReserved = applyHostWorkerEvents(cancelBase, { hostWorkerEvents: [{ ...cancelStartedEvent, event: "reserved", agentId: undefined }] });
+  const cancelStarted = applyHostWorkerEvents(cancelReserved, { hostWorkerEvents: [cancelStartedEvent] });
+  const cancellationPending = terminateOrchestrationRun(pluginRoot, cancelStarted, "User changed the goal.", "user-steering");
+  assert(cancellationPending.termination?.cancellationUnconfirmed === 1 && cancellationPending.workItems[0]?.state === "host-cancel-required", "native Codex cancellation must be acknowledged before replacement");
+  const cancellationConfirmed = applyHostWorkerEvents(cancellationPending, { hostWorkerEvents: [{ ...cancelStartedEvent, event: "cancelled", summary: "Host agent closure confirmed." }] });
+  assert(cancellationConfirmed.termination?.cancellationUnconfirmed === 0, "confirmed native Codex cancellation clears the replacement blocker");
+  const hostCheckpoint = applyCapacityCheckpointCandidates(hostStarted, nativeCodexDecision.candidates, { localProfile: privateRoutingProfile }).manifest;
+  assert(hostCheckpoint.workItems[0]?.state === "host-running" && hostCheckpoint.workItems[0]?.hostAgent?.agentId === "agent-1", "capacity refresh never interrupts or reroutes a running native Codex worker");
+
+  assert(normalizeManagerOnly({}).managerOnly === true && normalizeManagerOnly({ managerOnly: undefined }).managerOnly === true, "every orchestration entrypoint defaults managerOnly to true when the caller omits it");
+  assert(normalizeManagerOnly({ managerOnly: false }).managerOnly === false, "an explicit managerOnly=false is preserved instead of being forced back to manager-only");
+
+  const reservationHostItem = prepareHostAssignedItem({ ...hostRunBase, runId: "host-reservation-test" }, { ...preparedHostItem, hostAttempt: null, hostAction: null }, terraResource);
+  const reservedManifest = { ...hostRunBase, runId: "host-reservation-test", workItems: [reservationHostItem], jobs: ensureHostDispatchReservations([reservationHostItem], []) };
+  assert(reservedManifest.jobs.length === 1 && reservedManifest.jobs[0]?.state === "queued" && reservedManifest.jobs[0]?.jobId === reservationHostItem.hostAttempt.attemptId, "a token-bound dispatching reservation is recorded before the host agent is ever spawned");
+  const acknowledgedReservation = applyHostWorkerEvents(reservedManifest, { hostWorkerEvents: [{ event: "reserved", runId: reservedManifest.runId, workItemId: reservationHostItem.id, attemptId: reservationHostItem.hostAttempt.attemptId, dispatchToken: reservationHostItem.hostAttempt.dispatchToken }] });
+  const terminatedBeforeAck = terminateOrchestrationRun(pluginRoot, acknowledgedReservation, "User changed the goal before the native worker acknowledged start.", "user-steering");
+  assert(terminatedBeforeAck.workItems[0]?.state === "host-cancel-required", "termination targets an acknowledged pre-spawn reservation instead of missing it as blocked");
+  const reservationBoundEvent = { event: "started", runId: reservedManifest.runId, workItemId: reservationHostItem.id, attemptId: reservationHostItem.hostAttempt.attemptId, dispatchToken: reservationHostItem.hostAttempt.dispatchToken, agentId: "agent-3" };
+  const startedAfterCancellation = applyHostWorkerEvents(terminatedBeforeAck, { hostWorkerEvents: [{ ...reservationBoundEvent, agentId: "agent-raced" }] });
+  assert(startedAfterCancellation.workItems[0]?.state === "host-cancel-required" && startedAfterCancellation.workItems[0]?.hostAgent?.agentId === "agent-raced", "a spawned-but-unacknowledged worker is bound for cancellation instead of escaping replacement safety");
+  const cancelledBeforeStart = applyHostWorkerEvents(terminatedBeforeAck, { hostWorkerEvents: [{ event: "cancelled", runId: reservedManifest.runId, workItemId: reservationHostItem.id, attemptId: reservationHostItem.hostAttempt.attemptId, dispatchToken: reservationHostItem.hostAttempt.dispatchToken, summary: "Spawn was skipped after cancellation." }] });
+  assert(cancelledBeforeStart.termination?.cancellationUnconfirmed === 0, "cancellation before host start clears the reservation safety gate");
+  const reservationBound = applyHostWorkerEvents(acknowledgedReservation, { hostWorkerEvents: [reservationBoundEvent] });
+  assert(reservationBound.jobs.length === 1 && reservationBound.jobs[0]?.state === "running" && reservationBound.jobs[0]?.jobId === reservationHostItem.hostAttempt.attemptId, "the started event binds the existing reservation in place instead of creating a second job entry");
+
+  const secondWritableHostItem = prepareHostAssignedItem(
+    { ...hostRunBase, runId: "host-writer-serialization-test" },
+    { ...normalizeWorkItem({ id: "native-implementation-2", objective: "Implement a second bounded patch", kind: "implementation-testing", complexity: "high", readOnly: false, expectedFiles: ["scripts/example2.js"] }, 1, "high"), assignment: terraResource.id, assignedModel: terraResource.model },
+    terraResource,
+  );
+  const firstWritableHostItem = prepareHostAssignedItem({ ...hostRunBase, runId: "host-writer-serialization-test" }, { ...preparedHostItem, hostAttempt: null, hostAction: null }, terraResource);
+  const dualWriterWorkItems = [firstWritableHostItem, secondWritableHostItem];
+  const dualWriterSnapshot = {
+    ...hostRunBase,
+    runId: "host-writer-serialization-test",
+    workItems: dualWriterWorkItems,
+    jobs: ensureHostDispatchReservations(dualWriterWorkItems, []),
+    state: "ready-for-codex",
+    counts: { total: 2, completed: 0, running: 2, failed: 0 },
+  };
+  const firstWriterReserved = applyHostWorkerEvents(dualWriterSnapshot, { hostWorkerEvents: [{ event: "reserved", runId: dualWriterSnapshot.runId, workItemId: firstWritableHostItem.id, attemptId: firstWritableHostItem.hostAttempt.attemptId, dispatchToken: firstWritableHostItem.hostAttempt.dispatchToken }] });
+  const dualWriterText = formatTeamRunSnapshot(pluginRoot, firstWriterReserved, 0);
+  const emittedSpawnInstructions = (dualWriterText.match(/multi_agent_v1__spawn_agent/g) || []).length;
+  assert(emittedSpawnInstructions === 1, "only one writable host writer action is emitted at a time even when two writable items are dispatch-ready");
+  const parallelReadItems = ["native-read-1", "native-read-2"].map((id, index) => prepareHostAssignedItem(
+    { ...hostRunBase, runId: "host-capacity-serialization-test" },
+    { ...normalizeWorkItem({ id, objective: `Review bounded area ${index + 1}`, kind: "review", complexity: "medium", readOnly: true, expectedFiles: [`scripts/read-${index + 1}.js`] }, index, "medium"), assignment: terraResource.id, assignedModel: terraResource.model },
+    terraResource,
+  ));
+  const parallelReadSnapshot = {
+    ...hostRunBase,
+    runId: "host-capacity-serialization-test",
+    maxConcurrentCodexWorkers: 1,
+    workItems: parallelReadItems,
+    jobs: ensureHostDispatchReservations(parallelReadItems, []),
+    state: "ready-for-codex",
+    counts: { total: 2, completed: 0, running: 2, failed: 0 },
+  };
+  assert((formatTeamRunSnapshot(pluginRoot, parallelReadSnapshot, 0).match(/one reserved hostWorkerEvent/g) || []).length === 1, "native Codex read-only fan-out respects the shared-pool concurrency limit");
+
   const protectedSessionDecision = buildResourceOrchestrationDecision({
     goal: "Verify the current portal session before a controlled operation",
     workItems: [
@@ -7540,6 +8525,17 @@ function runSelfTest() {
       { id: "patch", state: "failed", dependsOn: ["live"], assignment: "claude:sonnet", readOnly: false },
     ],
   };
+  let managerTakeoverRejected = false;
+  try {
+    applyProjectManagerUpdates({
+      ...evidenceManifest,
+      managerOnly: true,
+      workItems: [{ id: "patch", state: "failed", dependsOn: [], assignment: "claude:sonnet", readOnly: false }],
+    }, { takeoverCodexItems: ["patch"] });
+  } catch (error) {
+    managerTakeoverRejected = /manager-only mode refuses/i.test(String(error?.message || ""));
+  }
+  assert(managerTakeoverRejected, "manager-only mode rejects silent current-Codex takeover of failed worker work");
   let missingEvidenceRejected = false;
   try {
     applyProjectManagerUpdates(evidenceManifest, { completedCodexItems: ["live"] });
@@ -7589,7 +8585,12 @@ function runSelfTest() {
   assert(runDeadlineExpired({ deadlineAt: "2000-01-01T00:00:00.000Z" }), "expired run deadlines are detected deterministically");
   assert(!runDeadlineExpired({ deadlineAt: "" }), "continuous projects have no implicit wall-clock deadline");
   assert(capacityCheckpointDue({ version: 2, state: "running", capacityCheckpointMinutes: 20, nextCapacityCheckpointAt: "2000-01-01T00:00:00.000Z" }), "rolling capacity checkpoints become due without terminating the project");
-  assert(shouldRunOrchestrationSupervisor({ version: 2, state: "running" }) && !shouldRunOrchestrationSupervisor({ version: 2, state: "ready-for-codex" }), "low-RAM supervisor runs only while external orchestration can advance autonomously");
+  assert(
+    shouldRunOrchestrationSupervisor({ version: 2, state: "running", workItems: [{ state: "pending", assignment: "claude:sonnet" }], jobs: [] })
+      && !shouldRunOrchestrationSupervisor({ version: 2, state: "running", workItems: [{ state: "host-running", assignment: "codex-host:gpt-5.6-luna" }], jobs: [{ transport: "host-subagent", state: "running" }] })
+      && !shouldRunOrchestrationSupervisor({ version: 2, state: "ready-for-codex" }),
+    "low-RAM supervisor runs only while external CLI orchestration can advance autonomously",
+  );
   assert(isActiveOrchestrationRun({ version: 2, state: "ready-for-codex" }) && !isActiveOrchestrationRun({ version: 2, state: "blocked" }), "ready-for-codex remains active until final verification or termination");
   const parsedClaude = parseClaudeJsonOutput(JSON.stringify({ result: "ok", duration_ms: 12, usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { "claude-sonnet-5": {} } }));
   assert(parsedClaude.resultText === "ok" && parsedClaude.observedModel === "claude-sonnet-5", "Claude JSON output yields compact result and per-run model telemetry");
@@ -7625,6 +8626,56 @@ function runSelfTest() {
   try {
     const init = spawnSync("git", ["init", "--quiet", workspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
     assert(init.status === 0, "temporary git workspace initializes");
+    const renameTarget = path.join(workspace, "atomic-rename.json");
+    const originalRenameSync = fs.renameSync;
+    let renameAttempts = 0;
+    fs.renameSync = (source, target) => {
+      renameAttempts += 1;
+      if (renameAttempts === 1) {
+        const error = new Error("transient Windows file handle");
+        error.code = "EPERM";
+        throw error;
+      }
+      return originalRenameSync(source, target);
+    };
+    try {
+      writeJsonFile(renameTarget, { retained: true });
+    } finally {
+      fs.renameSync = originalRenameSync;
+    }
+    assert(renameAttempts === 2 && readJsonFile(renameTarget, null)?.retained === true, "atomic JSON writes retry a transient Windows rename collision without weakening replacement atomicity");
+
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    const profileRoot = path.join(workspace, "profile");
+    try {
+      process.env.LOCALAPPDATA = profileRoot;
+      writeProfile({ address: "Existing address", role: "initial role" });
+      const preservedProfile = writeProfile({ role: "updated role" });
+      assert(preservedProfile.address === "Existing address", "profile updates preserve an omitted Address value");
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+    }
+
+    const hostFailoverItem = prepareHostAssignedItem(
+      { ...hostRunBase, runId: "host-failover-test", workspace },
+      { ...preparedHostItem, hostAttempt: null, hostAction: null, alternates: ["codex-host:gpt-5.6-luna"] },
+      terraResource,
+    );
+    const hostFailoverBase = {
+      ...hostRunBase,
+      runId: "host-failover-test",
+      workspace,
+      workItems: [hostFailoverItem],
+      jobs: ensureHostDispatchReservations([hostFailoverItem], []),
+      state: "ready-for-codex",
+    };
+    const hostFailoverReserved = applyHostWorkerEvents(hostFailoverBase, { hostWorkerEvents: [{ event: "reserved", runId: hostFailoverBase.runId, workItemId: hostFailoverItem.id, attemptId: hostFailoverItem.hostAttempt.attemptId, dispatchToken: hostFailoverItem.hostAttempt.dispatchToken }] });
+    const hostFailoverStarted = applyHostWorkerEvents(hostFailoverReserved, { hostWorkerEvents: [{ event: "started", runId: hostFailoverBase.runId, workItemId: hostFailoverItem.id, attemptId: hostFailoverItem.hostAttempt.attemptId, dispatchToken: hostFailoverItem.hostAttempt.dispatchToken, agentId: "agent-failover" }] });
+    const hostFailed = applyHostWorkerEvents(hostFailoverStarted, { hostWorkerEvents: [{ event: "failed", runId: hostFailoverBase.runId, workItemId: hostFailoverItem.id, attemptId: hostFailoverItem.hostAttempt.attemptId, dispatchToken: hostFailoverItem.hostAttempt.dispatchToken, summary: "Native worker failed before completing the bounded patch.", failureCategory: "timeout" }] });
+    const hostFailover = advanceOrchestrationRun(workspace, hostFailed, true);
+    assert(hostFailover.workItems[0]?.assignment === "codex-host:gpt-5.6-luna" && hostFailover.workItems[0]?.state === "host-dispatch-required", "native host failure participates in bounded failover with a fresh reservation");
+
     const unconfirmedStop = terminateOrchestrationRun(workspace, {
       version: 2,
       runId: "unconfirmed-stop-test",
@@ -7939,7 +8990,11 @@ async function handleRequest(message) {
               updateStyle: values.updateStyle,
               role: values.role,
               codexModelAllowPattern: values.codexModelAllowPattern,
+              claudeModelAllowPattern: values.claudeModelAllowPattern,
+              claudePreferredModelPattern: values.claudePreferredModelPattern,
+              antigravityPreferredTaskPattern: values.antigravityPreferredTaskPattern,
               modelPolicyReviewAfter: values.modelPolicyReviewAfter,
+              adaptiveRouting: values.adaptiveRouting,
               cliFirst: values.cliFirst,
               uiFallbackOnly: values.uiFallbackOnly,
             })

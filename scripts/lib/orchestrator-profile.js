@@ -5,13 +5,17 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   communicationStyle: "professional",
   address: "",
   updateStyle: "concise-executive",
   role: "technical project manager",
   codexModelAllowPattern: "^gpt-",
+  claudeModelAllowPattern: ".*",
+  claudePreferredModelPattern: "(?!)",
+  antigravityPreferredTaskPattern: "(?!)",
   modelPolicyReviewAfter: "",
+  adaptiveRouting: true,
   cliFirst: true,
   uiFallbackOnly: true,
 });
@@ -24,13 +28,13 @@ function cleanText(value, max) {
   return String(value || "").trim().replace(/[\r\n\t]+/g, " ").slice(0, max);
 }
 
-function safePattern(value) {
-  const pattern = cleanText(value, 200) || DEFAULT_PROFILE.codexModelAllowPattern;
+function safePattern(value, fallback = DEFAULT_PROFILE.codexModelAllowPattern) {
+  const pattern = cleanText(value, 200) || fallback;
   try {
     new RegExp(pattern, "i");
     return pattern;
   } catch {
-    return DEFAULT_PROFILE.codexModelAllowPattern;
+    return fallback;
   }
 }
 
@@ -39,15 +43,19 @@ function normalizeProfile(value = {}) {
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     communicationStyle: style,
     address: cleanText(value.address, 80),
     updateStyle: ["concise-executive", "technical", "minimal"].includes(String(value.updateStyle || "").toLowerCase())
       ? String(value.updateStyle).toLowerCase()
       : DEFAULT_PROFILE.updateStyle,
     role: cleanText(value.role, 120) || DEFAULT_PROFILE.role,
-    codexModelAllowPattern: safePattern(value.codexModelAllowPattern),
+    codexModelAllowPattern: safePattern(value.codexModelAllowPattern, DEFAULT_PROFILE.codexModelAllowPattern),
+    claudeModelAllowPattern: safePattern(value.claudeModelAllowPattern, DEFAULT_PROFILE.claudeModelAllowPattern),
+    claudePreferredModelPattern: safePattern(value.claudePreferredModelPattern, DEFAULT_PROFILE.claudePreferredModelPattern),
+    antigravityPreferredTaskPattern: safePattern(value.antigravityPreferredTaskPattern, DEFAULT_PROFILE.antigravityPreferredTaskPattern),
     modelPolicyReviewAfter: cleanText(value.modelPolicyReviewAfter, 40),
+    adaptiveRouting: value.adaptiveRouting !== false,
     cliFirst: value.cliFirst !== false,
     uiFallbackOnly: value.uiFallbackOnly !== false,
   };

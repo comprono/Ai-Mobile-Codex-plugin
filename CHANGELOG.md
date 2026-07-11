@@ -1,10 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 - 2026-07-12
 
+- Protected the parent manager from shared Codex exhaustion with a configurable 15% reserve, default one-worker native Codex concurrency, capacity-headroom scoring, five-minute near-reserve checkpoints, durable external handoff, and same-run resume after a Codex reset.
+- Added a validated lightweight Claude Code worker plugin with scout, reviewer, verifier, and writer roles; isolated bridge jobs feature-detect equivalent system-prompt and structured-output support, prefer the native Windows executable for exact arguments, and fall back without replaying a model call when optional CLI features are unavailable.
+- Fixed expired Claude reset timestamps being treated as immediate premium-capacity opportunities and serialized all manifest refresh writes through the workspace lock while retaining bounded Windows atomic-rename retries.
+- Recovered manager-only/native Codex execution: all normal orchestration entrypoints default manager-only, native workers now use a token-bound pre-spawn reservation before `started` binds the returned agent id, reserved actions remain visible until spawn, and cancellation races cannot bypass replacement safety.
+- Serialized writable host actions with other workspace writers, included host lanes in refresh/failover/count/cancellation handling without `status.json`, retried transient Windows atomic-rename collisions, and preserved an omitted local profile address on PowerShell updates.
+- Clarified that direct manual provider jobs retain a 30-minute default while orchestrated leases are adaptive, and that takeovers are collaborative-mode only.
+- Made the Codex control-room chat manager-only by default: it plans, inventories capacity, dispatches, steers, reviews compact evidence, asks for user-boundary decisions, and reports without scanning project files, running diagnostics/tests, editing source, or duplicating worker execution.
+- Promoted native Codex agents into executable project-manager lanes. Sol/Terra/Luna and future catalog models are selected from current host schemas, supported effort levels, measured shared Codex capacity, private policy, and observed outcomes.
+- Added token-bound native host lifecycle events for start, completion, failure, and cancellation, including durable agent ids, one-writer protection, evidence-gated writer completion, idempotent acknowledgements, and replacement refusal while host cancellation is unconfirmed.
+- Expanded the private local orchestrator profile with Codex/Claude allow patterns, Claude preference patterns, Antigravity task preferences, and adaptive project affinity; public defaults remain provider-neutral.
 - Made Claude budgeting subscription-aware: claude.ai Pro/Max/Team/Enterprise auth without `ANTHROPIC_API_KEY` no longer passes `--max-budget-usd` and relies on measured 5-hour/weekly/model quota windows plus output-token and worker-lease guards; API-key/PAYG/unknown billing keeps a conservative automatic USD cap, `maxClaudeBudgetUsd=0` selects the auth-aware automatic policy, an explicit user cap is preserved, and the chosen policy is exposed in plan/status output without storing account identifiers.
 - Replaced the default project deadline with continuous objective duration: work remains resumable until verified, genuinely blocked, or explicitly stopped; an optional explicit deadline remains available.
-- Added rolling 20-minute capacity checkpoints that refresh models, quota/reset windows, cooldowns, and pending assignments without interrupting running workers.
+- Added rolling 20-minute capacity checkpoints, accelerating to five minutes near the Codex manager reserve, that refresh models, quota/reset windows, cooldowns, and pending assignments without interrupting running workers.
 - Added a detached low-RAM, zero-model-token supervisor that advances sequential external stages and checkpoints, then exits when Codex input or a terminal decision is required.
 - Replaced the global six-minute worker cap with complexity-adaptive 10-90 minute safety leases; direct Claude, Antigravity, and Cursor jobs default to 30 minutes.
 - Added immediate user steering: new goals, stop requests, and safety constraints cancel incompatible active workers, persist the reason, and block unfinished items fail closed.
@@ -13,10 +23,10 @@
 - Added default protected-state constraints for browser profiles, cookies, saved credentials, accounts, email/SMS authentication, CAPTCHA, and OAuth authorization flows.
 - Kept live session, login, account, cookie, profile, credential, OAuth, email/SMS, and CAPTCHA checks with current Codex while preserving delegation for bounded source-code review.
 - Made Antigravity CLI dispatch explicitly opt-in because an expired local token can launch an interactive browser authorization flow.
-- Added evidence-inferred writer file boundaries and Codex takeover when an external writer does not have a safe narrow scope.
+- Added evidence-inferred writer file boundaries; manager-only mode requests bounded discovery and blocks when a safe narrow scope is unavailable instead of silently taking over implementation.
 - Sequenced complex default implementation after discovery so verified evidence can establish that writer boundary.
 - Required discovery handoffs that unlock a writer to return exact workspace-relative file targets in backticks for deterministic boundary enforcement.
-- Collapsed redundant low-complexity reviews of current-Codex operations instead of launching another provider and delaying closeout.
+- Delegated low-complexity evidence review in manager-only mode while retaining parent ownership only for non-delegable user-boundary operations.
 - Compacted project-manager status output to the newest relevant jobs, continuous-duration state, rolling capacity horizon/checkpoint, active constraints, and termination evidence.
 - Added evidence-backed Codex completion, explicit takeover of failed worker items, downstream dependency-result handoff, and final project verification before a run can report `completed`.
 - Failed final verification now records an explicit blocked state, and a cooling-down resource reroutes to a healthy pre-vetted alternate before dispatch.
@@ -27,7 +37,7 @@
 - Added execution-class routing that keeps real submissions, sends, deploys, purchases, destructive actions, and other external effects under the current Codex session's authorization and live-state checks.
 - Isolated Claude jobs with safe-mode, non-persistent sessions by default and corrected dominant-model telemetry so background Haiku calls do not masquerade as the requested Sonnet/Opus/Fable worker.
 - Changed worker Git artifacts to attribute only paths changed during the worker run; pre-dirty paths are detected without copying the user's full existing diff into the worker patch.
-- Added `project-manager-plan`, which coordinates native Codex workers and external CLI workers through a dependency-aware action manifest while the current Codex session remains PM, active contributor, integrator, and verifier.
+- Added `project-manager-plan`, which coordinates native Codex workers and external CLI workers through a dependency-aware action manifest while the current Codex chat remains the manager and reporter.
 - Added privacy-bounded `codex-usage` telemetry for current five-hour/weekly agentic-use windows and numeric session totals; transcript fields, paths, and thread ids are discarded and undocumented schema changes fail closed.
 - Added transcript-free context capsules with bounded work-item budgets, workspace-only file fingerprints, stable hashes, lifecycle gates, and durable continuity under `.antigravity-bridge/orchestrator/`.
 - Added dynamic native Codex model/effort discovery with a private local allow-pattern and review date, including supported Sol/Terra/Luna effort selection without invoking `codex.exe`.
@@ -44,7 +54,7 @@
 - Added complexity-sized worker result budgets (5/6/8/10 bullets), bounded prompt/readback sizes, and prompt/result character telemetry for measurable token efficiency.
 - Added five-hour platform reliability routing so repeated recent failures move broad work to a proven alternative instead of cycling through more models on the same failing platform.
 - Reduced aggregate Codex readback while preserving detailed failed-lane evidence through `read-job`.
-- Reframed AI Mobile from a fixed lane scheduler into a goal-driven resource orchestrator with Codex as coach, critic, integrator, and final verifier.
+- Reframed AI Mobile from a fixed lane scheduler into a goal-driven resource orchestrator with the parent Codex chat as manager, critic, user-boundary owner, and reporter.
 - Added passive `resource-inventory` discovery for Codex caller state, Claude auth/observed models, Antigravity CLI model roster/live quota evidence, Cursor headless availability, cooldowns, and evidence freshness.
 - Added `orchestrate-project` with structured work items, capability/quality/capacity scoring, dependency-aware dispatch, one-writer safety, independent read-only review, and a compatibility path through `run-team-task`.
 - Added one bounded failover for quota, rate-limit, timeout, outage, auth, model-unavailable, and worker failures; project outcome/cooldown history now persists under `.antigravity-bridge/orchestrator/`.

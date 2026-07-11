@@ -19,6 +19,10 @@ Do not turn unknown into healthy.
 - The five-hour and seven-day windows currently govern shared Codex agentic usage; do not claim model-specific buckets unless the source explicitly provides one.
 - Select effort from that model's supported list. Low work uses low; normal work uses the model default; high work uses high; xhigh/max/ultra require material complexity or risk. Never spend maximum effort just because it exists.
 - Local policy may restrict the catalog to a current family such as Sol/Terra/Luna. The policy has a review date so model changes do not require code changes.
+- Treat the parent Codex chat and native Codex workers as different roles. The parent is manager-only; selected native workers execute bounded items through the host spawn tool and report with token-bound lifecycle evidence.
+- Native dispatch is two-phase: reserve through manager status before spawning, then bind the returned agent id on `started`. A reserved action remains visible until it starts, and a cancellation race stays blocked until it is acknowledged.
+- Capacity evidence is shared across Codex models unless the observed source explicitly identifies a model-specific bucket. Never invent separate Sol, Terra, Luna, or effort-level limits.
+- Protect a default 15% manager reserve in the shared Codex window. Penalize native workers as headroom shrinks, stop new host dispatch at the reserve, and default to one simultaneous native worker so the control room retains steering and failover capacity.
 
 ## Claude Code
 
@@ -27,6 +31,7 @@ Do not turn unknown into healthy.
 - Apply shared session/all-model windows to every model, plus any model-specific row only to that model.
 - A separate Fable row means a dedicated Fable window for that account at that time. Do not assume another model has a separate limit without a row.
 - Favor a fast bounded model for small work, Sonnet-class capacity for substantial coding, and premium models only when quality/risk or a healthy dedicated near-reset opportunity justifies them. Keep critical Claude work at `high` by default; use `xhigh` or `max` only when explicitly justified and supported because maximum effort can spend substantially more tokens.
+- Feature-detect CLI flags rather than version-gating them. Use the native Claude executable on Windows for exact arguments, isolated non-persistent workers, bounded role prompts, structured output when supported, and compact lifecycle telemetry. The bundled Claude role plugin is optional for direct Claude sessions; safe-mode bridge workers receive equivalent explicit contracts.
 
 ## Antigravity
 
@@ -42,3 +47,9 @@ Do not turn unknown into healthy.
 ## Five-Hour Plan
 
 For each candidate compute capability fit, quality floor, available capacity, reset within horizon, speed, cost/efficiency, project continuity, recent success/failure, file ownership, and independence. Recompute at a stage boundary, provider failure, reset, or stale-evidence threshold; do not poll continuously.
+
+Apply private local policy before scoring. Public defaults remain model-neutral; local allow/preference patterns and verified project outcomes can favor particular Codex, Claude, or Antigravity roles without exposing those preferences in the repository.
+
+Manual provider jobs default to 30 minutes. Orchestrated workers use the adaptive 10-90 minute lease policy unless the user supplies a ceiling.
+
+When Codex approaches its reserve, move remaining dependency-ready work to durable external jobs before the manager window is exhausted. The zero-model-token supervisor can continue those jobs from `.antigravity-bridge`; after reset, resume the same run instead of rebuilding its context.
