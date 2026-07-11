@@ -28,6 +28,11 @@ param(
   [string] $WorkItemsFile = "",
   [string] $CompletedCodexItems = "",
   [string] $FailedCodexItems = "",
+  [string] $TakeoverCodexItems = "",
+  [string] $CodexEvidenceJson = "",
+  [object] $ProjectVerified = $false,
+  [object] $ProjectVerificationFailed = $false,
+  [string] $ProjectVerificationSummary = "",
   [string] $ModelPreference = "auto",
   [string] $AgyModel = "",
   [string] $AgyProject = "",
@@ -1320,6 +1325,17 @@ function Invoke-BridgeJobCommand {
   $submitValue = ConvertTo-BooleanValue -Value $Submit -Default $true
   $completedCodexItemValues = @($CompletedCodexItems -split "[,;|]" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
   $failedCodexItemValues = @($FailedCodexItems -split "[,;|]" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $takeoverCodexItemValues = @($TakeoverCodexItems -split "[,;|]" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $codexEvidenceValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($CodexEvidenceJson)) {
+    try {
+      $codexEvidenceValues = @(ConvertFrom-Json -InputObject $CodexEvidenceJson | ForEach-Object { $_ })
+    } catch {
+      throw "CodexEvidenceJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
+  $projectVerifiedValue = ConvertTo-BooleanValue -Value $ProjectVerified -Default $false
+  $projectVerificationFailedValue = ConvertTo-BooleanValue -Value $ProjectVerificationFailed -Default $false
   $payload = [PSCustomObject]@{
     goal = $Goal
     workspace = $Workspace
@@ -1335,6 +1351,12 @@ function Invoke-BridgeJobCommand {
     waitSeconds = $WaitSeconds
     completedCodexItems = $completedCodexItemValues
     failedCodexItems = $failedCodexItemValues
+    takeoverCodexItems = $takeoverCodexItemValues
+    codexEvidence = $codexEvidenceValues
+    codexModel = $CodexModel
+    projectVerified = $projectVerifiedValue
+    projectVerificationFailed = $projectVerificationFailedValue
+    projectVerificationSummary = $ProjectVerificationSummary
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-bridge-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))

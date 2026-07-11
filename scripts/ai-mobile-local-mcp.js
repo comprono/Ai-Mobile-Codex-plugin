@@ -278,6 +278,26 @@ const tools = [
         waitSeconds: { type: "number", description: "Optional bounded wait for worker progress.", default: 0 },
         completedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that this chat completed and verified, allowing dependent CLI work to start." },
         failedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that failed or were blocked, preventing unsafe dependent dispatch." },
+        takeoverCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Failed, blocked, or pending worker item ids that the current Codex session will explicitly take over." },
+        codexEvidence: {
+          type: "array",
+          maxItems: 12,
+          description: "Required compact evidence for each completed Codex item.",
+          items: {
+            type: "object",
+            properties: {
+              workItemId: { type: "string" },
+              summary: { type: "string", description: "Concise verified result; never a transcript or full log." },
+              artifactRefs: { type: "array", items: { type: "string" }, maxItems: 12 },
+            },
+            required: ["workItemId", "summary"],
+            additionalProperties: false,
+          },
+        },
+        codexModel: { type: "string", description: "Current Codex model label used when taking over a worker item." },
+        projectVerified: { type: "boolean", description: "Mark this finite orchestration cycle complete only after every work item completed and final project verification passed.", default: false },
+        projectVerificationFailed: { type: "boolean", description: "Record a failed final verification after all work items finish, preserving the blocker instead of permitting completion.", default: false },
+        projectVerificationSummary: { type: "string", description: "Required compact evidence when final verification is recorded as passed or failed." },
       },
       required: ["workspace"],
       additionalProperties: false,
@@ -1783,6 +1803,7 @@ function buildResourceCandidates(args = {}, context = {}) {
     : [{ id: "sonnet", displayName: context.claudeObservedModel || "Claude Sonnet (local alias)", evidence: "detected-cli" }];
   for (const model of claudeModels) {
     const modelId = String(model.id || "sonnet").toLowerCase();
+    const resolvedModelId = String(model.resolvedId || "").trim();
     const id = `claude:${modelId}`;
     const claudeOutcome = outcomes[id] || {};
     const measured = claudeQuotaForModel(context.claudeUsage, modelId);
@@ -1792,7 +1813,8 @@ function buildResourceCandidates(args = {}, context = {}) {
       id,
       platform: "claude",
       team: "Claude Code CLI",
-      model: modelId,
+      model: resolvedModelId || modelId,
+      modelAlias: modelId,
       displayName: model.displayName || `Claude ${modelId}`,
       dispatchable: true,
       state: claudeAvailability.state,
@@ -2378,6 +2400,21 @@ function normalizeWorkItem(item, index, fallbackComplexity) {
   };
 }
 
+function injectLiveOperationDependencies(items) {
+  const operations = items
+    .filter((item) => item.externallyConsequential && item.executionClass === "operation")
+    .sort((a, b) => b.priority - a.priority);
+  if (!operations.length) return items;
+  return items.map((item) => {
+    if (item.externallyConsequential || item.dependsOn.length) return item;
+    const liveDependent = /\b(live|current|runtime|throughput|candidate|submission|dashboard|health|operator|bottleneck|unattended|runner|watchdog)\b/i
+      .test(`${item.kind} ${item.objective}`);
+    if (!liveDependent) return item;
+    const operation = operations.find((candidate) => !(candidate.dependsOn || []).includes(item.id));
+    return operation ? { ...item, dependsOn: [operation.id], dependencyPolicy: "live-operation-evidence" } : item;
+  });
+}
+
 function buildGoalWorkGraph(args = {}) {
   const goal = String(args.goal || "").trim();
   const legacySplit = inferTaskSplit(goal, args.taskSplit || "");
@@ -2444,7 +2481,8 @@ function buildGoalWorkGraph(args = {}) {
     unique.push({ ...item, id });
   }
   const validIds = new Set(unique.map((item) => item.id));
-  return unique.map((item) => ({ ...item, dependsOn: item.dependsOn.filter((id) => validIds.has(id) && id !== item.id) }));
+  const validGraph = unique.map((item) => ({ ...item, dependsOn: item.dependsOn.filter((id) => validIds.has(id) && id !== item.id) }));
+  return injectLiveOperationDependencies(validGraph);
 }
 
 function requiredQuality(complexity) {
@@ -2702,6 +2740,19 @@ function candidateFromManifest(manifest, resourceId) {
   return (manifest.resources || []).find((candidate) => candidate.id === resourceId) || null;
 }
 
+function availableAlternateForItem(manifest, item) {
+  for (const resourceId of item.alternates || []) {
+    const candidate = candidateFromManifest(manifest, resourceId);
+    if (candidate?.dispatchable && candidate.state === "available") return candidate;
+  }
+  return null;
+}
+
+function hasAvailableDispatchRoute(manifest, item) {
+  const assigned = candidateFromManifest(manifest, item.assignment);
+  return Boolean((assigned?.dispatchable && assigned.state === "available") || availableAlternateForItem(manifest, item));
+}
+
 function workItemBrief(items) {
   return items.map((item) => {
     const files = item.expectedFiles?.length ? `; file boundary: ${item.expectedFiles.join(", ")}` : "";
@@ -2709,6 +2760,31 @@ function workItemBrief(items) {
     const verification = item.verification?.length ? `; verify: ${item.verification.join(" | ")}` : "";
     return `- ${item.id} [${item.kind}, ${item.complexity}, readOnly=${item.readOnly}]: ${item.objective}${files}${acceptance}${verification}`;
   }).join("\n");
+}
+
+function dependencyEvidenceForItems(manifest, items) {
+  const dependencyIds = [...new Set(items.flatMap((item) => item.dependsOn || []))];
+  const workItems = new Map((manifest.workItems || []).map((item) => [item.id, item]));
+  const lines = [];
+  for (const dependencyId of dependencyIds) {
+    const dependency = workItems.get(dependencyId);
+    if (!dependency || dependency.state !== "completed") continue;
+    if (dependency.codexEvidence?.summary) {
+      const refs = (dependency.codexEvidence.artifactRefs || []).length
+        ? `; refs=${dependency.codexEvidence.artifactRefs.join(", ")}`
+        : "";
+      lines.push(`- ${dependencyId} [Codex verified]: ${truncateText(dependency.codexEvidence.summary, 900)}${refs}`);
+      continue;
+    }
+    const completedJob = [...(manifest.jobs || [])].reverse().find((job) => job.state === "completed" && (job.workItemIds || job.assignedTasks || []).includes(dependencyId));
+    if (completedJob?.jobId) {
+      const result = summarizeFile(path.join(jobDirFor(manifest.workspace, completedJob.jobId), "result.md"), 1000)
+        .trim()
+        .replace(/\s*\n\s*/g, " ");
+      if (result) lines.push(`- ${dependencyId} [${completedJob.resourceId || completedJob.worker}; ${completedJob.observedModel || completedJob.model || "model unknown"}]: ${truncateText(redactArtifactContent(result), 1000)}`);
+    }
+  }
+  return truncateText(lines.join("\n"), 2800);
 }
 
 function resultBulletLimitForComplexity(complexityRank) {
@@ -2735,6 +2811,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const complexityRank = Math.max(...items.map((item) => ({ low: 1, medium: 2, high: 3, critical: 4 }[item.complexity] || 2)));
   const maxResultBullets = resultBulletLimitForComplexity(complexityRank);
   const contextCharacterLimit = contextCharacterLimitForComplexity(complexityRank);
+  const dependencyEvidence = dependencyEvidenceForItems(manifest, items);
   const goal = [
     manifest.goal,
     "",
@@ -2742,13 +2819,17 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
     `AssignedResource: ${resource.team} / ${resource.displayName}`,
     "Assigned work items:",
     workItemBrief(items),
+    dependencyEvidence ? "" : null,
+    dependencyEvidence ? "Verified dependency evidence:" : null,
+    dependencyEvidence || null,
     "",
     "Coordinate against the common goal, stay inside these work items, and produce the required compact artifacts. Do not duplicate another worker's file ownership.",
-  ].join("\n");
+    "Runtime truth rule: git status, tracked deletions, ignored files, and source layout do not prove whether a live process or runtime state exists. Use verified dependency evidence or an explicitly allowed current health check; otherwise report runtime state as unknown.",
+  ].filter((line) => line !== null).join("\n");
   const nextStep = [
     `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
     readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
-    `State assumptions and blockers explicitly. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria and verification checks.`,
+    `State assumptions and blockers explicitly. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria, verified dependency evidence, and verification checks.`,
   ].join(" ");
   const expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
   let action = "";
@@ -2855,6 +2936,8 @@ function failoverAllowed(category) {
 function deriveOrchestrationState(manifest) {
   const items = manifest.workItems || [];
   if (!items.length) return "blocked";
+  if (manifest.finalVerification?.passed === true && items.every((item) => item.state === "completed")) return "completed";
+  if (manifest.finalVerification?.passed === false) return "blocked";
   if (items.some((item) => ["running", "pending", "codex-pending"].includes(item.state))) return "running";
   if (items.every((item) => ["completed", "codex"].includes(item.state))) return "ready-for-codex";
   if (items.some((item) => item.state === "blocked")) return "blocked";
@@ -2866,6 +2949,9 @@ function syncWorkItemsFromJobs(manifest) {
   if (Number(manifest.version || 1) < 2 || !Array.isArray(manifest.workItems)) return manifest;
   const jobs = manifest.jobs || [];
   const workItems = manifest.workItems.map((item) => {
+    // Historical worker attempts must not overwrite an explicit current-Codex
+    // takeover or its evidence-backed completion.
+    if (item.assignment === "codex:current" || item.codexEvidence?.summary) return item;
     const matching = jobs.filter((job) => (job.workItemIds || job.assignedTasks || []).includes(item.id));
     const latest = matching[matching.length - 1];
     if (!latest) return item;
@@ -2967,11 +3053,19 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
 
   let currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
   manifest.workItems = manifest.workItems.map((item) => {
-    if (item.state !== "blocked" || !String(item.blocker || "").startsWith("Dependency ")) return item;
-    const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex", "codex-pending"].includes(currentById.get(id)?.state));
-    if (!dependenciesRecoveringOrComplete) return item;
-    changed = true;
-    return { ...item, state: "pending", blocker: "" };
+    if (item.state !== "blocked") return item;
+    const blocker = String(item.blocker || "");
+    if (blocker.startsWith("Dependency ")) {
+      const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex", "codex-pending"].includes(currentById.get(id)?.state));
+      if (!dependenciesRecoveringOrComplete) return item;
+      changed = true;
+      return { ...item, state: "pending", blocker: "" };
+    }
+    if (blocker.startsWith("Assigned resource ") && hasAvailableDispatchRoute(manifest, item)) {
+      changed = true;
+      return { ...item, state: "pending", blocker: "" };
+    }
+    return item;
   });
   currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
   manifest.workItems = manifest.workItems.map((item) => {
@@ -3009,9 +3103,34 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
   for (const [resourceId, items] of groups.entries()) {
     const resource = candidateFromManifest(manifest, resourceId);
     if (!resource || !resource.dispatchable || resource.state !== "available") {
-      manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
-        ? { ...item, state: "blocked", blocker: `Assigned resource ${resourceId} is not dispatchable.` }
-        : item);
+      const reroutes = new Map();
+      for (const item of items) {
+        const alternate = availableAlternateForItem(manifest, item);
+        if (!alternate) continue;
+        reroutes.set(item.id, alternate);
+        manifest = appendOrchestrationDecision(manifest, {
+          type: "pre-dispatch-reroute",
+          workItemId: item.id,
+          from: resourceId,
+          to: alternate.id,
+          reason: "assigned resource unavailable before launch",
+        });
+      }
+      manifest.workItems = manifest.workItems.map((item) => {
+        if (!items.some((candidate) => candidate.id === item.id)) return item;
+        const alternate = reroutes.get(item.id);
+        if (!alternate) return { ...item, state: "blocked", blocker: `Assigned resource ${resourceId} is not dispatchable and no healthy alternate is available.` };
+        return {
+          ...item,
+          state: "pending",
+          assignment: alternate.id,
+          assignedModel: alternate.model,
+          alternates: (item.alternates || []).filter((id) => id !== alternate.id && id !== resourceId),
+          blocker: "",
+          failureCategory: "",
+          decisionReason: `Rerouted before launch because ${resourceId} was unavailable.`,
+        };
+      });
       changed = true;
       continue;
     }
@@ -3080,13 +3199,16 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null) {
     const repair = repairStaleRunningJob(workspace, job.jobId, jobDir, readJsonFile(statusPath, {}));
     const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     const telemetryFailureCategory = telemetry?.success === false ? String(telemetry.failureCategory || "worker-failure") : "";
+    const effectiveState = repair.status.state || "unknown";
     return {
       ...job,
-      state: repair.status.state || "unknown",
+      state: effectiveState,
       currentStep: repair.status.currentStep || "",
       blocker: repair.status.blocker || "",
       warning: repair.status.warning || "",
-      failureCategory: telemetryFailureCategory || repair.status.failureCategory || failureCategoryFromText(`${repair.status.currentStep || ""} ${repair.status.blocker || ""}`),
+      failureCategory: ["failed", "cancelled"].includes(effectiveState)
+        ? telemetryFailureCategory || repair.status.failureCategory || failureCategoryFromText(`${repair.status.currentStep || ""} ${repair.status.blocker || ""}`)
+        : "",
       observedModel: String(telemetry?.observedModel || repair.status.observedModel || job.observedModel || ""),
       workerPid: repair.status.workerPid || job.workerPid || null,
       jobUpdatedAt: repair.status.updatedAt || "",
@@ -3127,12 +3249,16 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
   const orchestrated = Number(snapshot.version || 1) >= 2;
   const lines = [
     orchestrated ? "AiMobileResourceOrchestrationRun:" : "AiMobileTeamRun:",
+    orchestrated ? `RunId: ${snapshot.runId || "unknown"}` : null,
     `State: ${snapshot.state}`,
+    orchestrated ? `CompletionClaimAllowed: ${snapshot.state === "completed"}` : null,
+    orchestrated ? `RequiredUserStatus: AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
+    orchestrated && snapshot.state !== "completed" ? "RequiredClaimBoundary: do not say done, successful, actively managed, or that AI Mobile remains active." : null,
     `Workspace: ${workspace}`,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
     orchestrated ? "WorkGraph:" : null,
-    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
     ...(orchestrated && (snapshot.workItems || []).some((item) => item.state === "codex")
       ? [
           "CodexOwnedActions:",
@@ -3140,6 +3266,17 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
             .filter((item) => item.state === "codex")
             .map((item) => `- ${item.id}: ${truncateText(item.objective || "Complete the Codex-owned integration action.", 360)}${item.externallyConsequential ? " Authorization and live safety checks remain mandatory." : ""}`),
         ]
+      : []),
+    ...(orchestrated && (snapshot.workItems || []).some((item) => item.codexEvidence?.summary)
+      ? [
+          "CodexEvidence:",
+          ...(snapshot.workItems || [])
+            .filter((item) => item.codexEvidence?.summary)
+            .map((item) => `- ${item.id}: ${truncateText(item.codexEvidence.summary, 500)}`),
+        ]
+      : []),
+    ...(orchestrated && typeof snapshot.finalVerification?.passed === "boolean"
+      ? ["FinalVerification:", `- passed=${snapshot.finalVerification.passed}; ${truncateText(snapshot.finalVerification.summary, 700)}`]
       : []),
     "WorkerResults:",
   ].filter(Boolean);
@@ -3150,24 +3287,28 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     const supersededBySuccess = ["failed", "cancelled"].includes(job.state)
       && snapshot.jobs.slice(index + 1).some((later) => later.state === "completed"
         && (later.workItemIds || later.assignedTasks || []).some((id) => workItemIds.includes(id)));
+    const supersededByCodex = ["failed", "cancelled"].includes(job.state)
+      && workItemIds.some((id) => (snapshot.workItems || []).some((item) => item.id === id && item.assignment === "codex:current" && item.state === "completed"));
     const result = summarizeFile(path.join(jobDir, "result.md"), 1200).trim();
     const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 500).trim();
     const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 600).trim();
     const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
     lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
-    if (job.blocker) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
-    if (job.warning && !supersededBySuccess) lines.push(`   Warning: ${truncateText(job.warning, 300)}`);
+    if (job.blocker && !supersededByCodex) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
+    if (job.warning && !supersededBySuccess && !supersededByCodex) lines.push(`   Warning: ${truncateText(job.warning, 300)}`);
     if (telemetry) lines.push(`   Telemetry: provider=${telemetry.provider || "unknown"}; observedModel=${telemetry.observedModel || "unknown"}; durationMs=${telemetry.durationMs ?? "unknown"}; inputTokens=${telemetry.inputTokens ?? "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
     if (supersededBySuccess) lines.push("   Recovered: a later failover completed this work item; use read-job only if the failed attempt needs diagnosis.");
-    if (result && !supersededBySuccess) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
-    if (changed && !/^NONE$/i.test(changed) && !supersededBySuccess) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
-    if (tests && !supersededBySuccess) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
+    if (supersededByCodex) lines.push("   Recovered: the current Codex session explicitly took over and completed this work item with recorded evidence.");
+    if (result && !supersededBySuccess && !supersededByCodex) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
+    if (changed && !/^NONE$/i.test(changed) && !supersededBySuccess && !supersededByCodex) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
+    if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact worker artifacts, run targeted final verification, and only then claim the goal complete.");
-  else if (snapshot.state === "completed") lines.push("Next: Codex should perform targeted integration verification; all worker jobs completed successfully.");
-  else if (snapshot.state === "running") lines.push(`Next: call read-team-run for ${workspace}; completion is not yet claimed.`);
+  if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker, then run a new bounded cycle or re-verify this completed work graph; completion is not allowed.");
+  else if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
+  else if (snapshot.state === "completed") lines.push("Next: this finite orchestration cycle is verified complete. Do not describe it as a persistent manager or scheduler unless a separate durable automation is actually running.");
+  else if (snapshot.state === "running") lines.push(`Next: call project-manager-status for ${workspace}; completion is not yet allowed.`);
   else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
   return lines.join("\n");
 }
@@ -3278,28 +3419,115 @@ async function runProjectManager(args = {}) {
   }
 }
 
-async function projectManagerStatus(args = {}) {
-  const workspace = safeWorkspacePath(args.workspace);
+function normalizedCodexEvidence(args = {}) {
+  const evidence = new Map();
+  for (const entry of Array.isArray(args.codexEvidence) ? args.codexEvidence : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const workItemId = normalizeTaskLane(entry.workItemId);
+    const summary = truncateText(redactArtifactContent(String(entry.summary || "").trim()), 1200);
+    if (!workItemId || !summary) continue;
+    evidence.set(workItemId, {
+      summary,
+      artifactRefs: (Array.isArray(entry.artifactRefs) ? entry.artifactRefs : [])
+        .map((value) => truncateText(redactArtifactContent(String(value || "").trim()), 300))
+        .filter(Boolean)
+        .slice(0, 12),
+      recordedAt: utcStamp(),
+    });
+  }
+  return evidence;
+}
+
+function applyProjectManagerUpdates(manifest, args = {}) {
   const completed = new Set((args.completedCodexItems || []).map(normalizeTaskLane).filter(Boolean));
   const failed = new Set((args.failedCodexItems || []).map(normalizeTaskLane).filter(Boolean));
+  const takeover = new Set((args.takeoverCodexItems || []).map(normalizeTaskLane).filter(Boolean));
+  const evidence = normalizedCodexEvidence(args);
+  let next = { ...manifest, workItems: [...(manifest.workItems || [])] };
+  const knownIds = new Set(next.workItems.map((item) => item.id));
+  for (const id of [...completed, ...failed, ...takeover]) {
+    if (!knownIds.has(id)) throw new Error(`Unknown project-manager work item: ${id}`);
+  }
+
+  for (const id of takeover) {
+    const target = next.workItems.find((item) => item.id === id);
+    if (target.state === "running") throw new Error(`Work item ${id} is still running. Cancel its active worker before Codex takeover.`);
+    if (target.state === "completed") continue;
+    const byId = new Map(next.workItems.map((item) => [item.id, item]));
+    const dependenciesComplete = (target.dependsOn || []).every((dependencyId) => byId.get(dependencyId)?.state === "completed");
+    const previousAssignment = target.assignment;
+    next.workItems = next.workItems.map((item) => item.id === id
+      ? {
+          ...item,
+          assignment: "codex:current",
+          assignedModel: String(args.codexModel || next.resources?.find((resource) => resource.id === "codex:current")?.model || "current Codex session"),
+          state: dependenciesComplete ? "codex" : "codex-pending",
+          blocker: "",
+          failureCategory: "",
+          alternates: [],
+          activeJobId: "",
+          decisionReason: `Explicit current-Codex takeover from ${previousAssignment || "unassigned"}.`,
+        }
+      : item);
+    if (!target.readOnly) next.primaryWriterId = "codex:current";
+    next = appendOrchestrationDecision(next, { type: "codex-takeover", workItemId: id, from: previousAssignment || "unassigned", to: "codex:current" });
+  }
+
+  for (const id of completed) {
+    const target = next.workItems.find((item) => item.id === id);
+    if (target.state !== "codex") throw new Error(`Work item ${id} is not ready for Codex completion. Wait for dependencies or take it over first.`);
+    const itemEvidence = evidence.get(id);
+    if (!itemEvidence || itemEvidence.summary.length < 12) {
+      throw new Error(`Work item ${id} requires compact codexEvidence before it can be completed.`);
+    }
+    next.workItems = next.workItems.map((item) => item.id === id
+      ? { ...item, state: "completed", blocker: "", failureCategory: "", codexEvidence: itemEvidence }
+      : item);
+  }
+
+  for (const id of failed) {
+    const target = next.workItems.find((item) => item.id === id);
+    if (target.state !== "codex") throw new Error(`Work item ${id} is not an active Codex-owned action.`);
+    next.workItems = next.workItems.map((item) => item.id === id
+      ? { ...item, state: "blocked", blocker: "Current Codex could not complete this owned action." }
+      : item);
+  }
+
   if (completed.size || failed.size) {
+    next = appendOrchestrationDecision(next, {
+      type: "codex-action-update",
+      completed: [...completed],
+      failed: [...failed],
+    });
+  }
+
+  if (args.projectVerified === true && args.projectVerificationFailed === true) {
+    throw new Error("projectVerified and projectVerificationFailed cannot both be true.");
+  }
+  if (args.projectVerified === true || args.projectVerificationFailed === true) {
+    const incomplete = next.workItems.filter((item) => item.state !== "completed").map((item) => item.id);
+    if (incomplete.length) throw new Error(`Project verification cannot finish while work items are incomplete: ${incomplete.join(", ")}`);
+    const summary = truncateText(redactArtifactContent(String(args.projectVerificationSummary || "").trim()), 1600);
+    if (summary.length < 20) throw new Error("projectVerificationSummary is required for a final verification result.");
+    const passed = args.projectVerified === true;
+    next.finalVerification = { passed, summary, verifiedAt: utcStamp() };
+    next = appendOrchestrationDecision(next, { type: "project-verification", passed });
+  }
+
+  next.state = deriveOrchestrationState(next);
+  return next;
+}
+
+async function projectManagerStatus(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const hasUpdates = ["completedCodexItems", "failedCodexItems", "takeoverCodexItems", "codexEvidence"]
+    .some((key) => Array.isArray(args[key]) && args[key].length)
+    || args.projectVerified === true
+    || args.projectVerificationFailed === true;
+  if (hasUpdates) {
     withFileLock(lastTeamRunJsonPath(workspace), () => {
       const manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
-      const workItems = (manifest.workItems || []).map((item) => {
-        if (item.state !== "codex") return item;
-        if (completed.has(item.id)) return { ...item, state: "completed", blocker: "", failureCategory: "" };
-        if (failed.has(item.id)) return { ...item, state: "blocked", blocker: "Current Codex could not complete this owned action." };
-        return item;
-      });
-      const acknowledged = [...completed, ...failed].filter((id) => (manifest.workItems || []).some((item) => item.id === id && item.state === "codex"));
-      const next = acknowledged.length
-        ? appendOrchestrationDecision({ ...manifest, workItems }, {
-            type: "codex-action-update",
-            completed: [...completed].filter((id) => acknowledged.includes(id)),
-            failed: [...failed].filter((id) => acknowledged.includes(id)),
-          })
-        : { ...manifest, workItems };
-      writeTeamRunManifest(workspace, next);
+      writeTeamRunManifest(workspace, applyProjectManagerUpdates(manifest, args));
     });
   }
   return readTeamRun({ workspace, waitSeconds: args.waitSeconds });
@@ -4204,6 +4432,7 @@ function claudeObservedModelMatches(requested, observed) {
   const requestedText = normalizeClaudeDispatchModel(requested).toLowerCase();
   const observedText = String(observed || "").toLowerCase();
   if (!observedText) return true;
+  if (requestedText.startsWith("claude-")) return observedText === requestedText;
   const family = claudeModelFamily(requestedText);
   return family ? observedText.includes(family) : observedText.includes(requestedText);
 }
@@ -6306,6 +6535,11 @@ function runSelfTest() {
   assert(orchestrationDecision.workItems.find((item) => item.id === "implement")?.assignment === "claude:sonnet", "high-value implementation selects Claude Sonnet as the single writer");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.assignment.startsWith("antigravity:"), "independent verification selects a different available team");
   assert(orchestrationDecision.workItems.find((item) => item.id === "verify")?.alternates.includes("claude:sonnet"), "failover pool keeps a cross-platform alternate even when one provider has many models");
+  const exactClaudeCandidate = buildResourceCandidates({}, {
+    ...fakeContext,
+    claudeModels: [{ id: "haiku", resolvedId: "claude-haiku-4-5-20251001", displayName: "Claude Haiku", evidence: "observed-alias-resolution" }],
+  }).find((candidate) => candidate.id === "claude:haiku");
+  assert(exactClaudeCandidate?.model === "claude-haiku-4-5-20251001" && exactClaudeCandidate.modelAlias === "haiku", "Claude workers dispatch the verified exact model id while retaining the quota alias");
   const routineDecision = buildResourceOrchestrationDecision({
     goal: "Draft a routine project review",
     mode: "review",
@@ -6394,6 +6628,65 @@ function runSelfTest() {
       && consequentialDefault.workItems.find((item) => item.id === "independent-verification")?.readOnly === true,
     "a consequential goal delegates preflight and verification but gates the real operation to Codex",
   );
+  const liveEvidenceGraph = buildGoalWorkGraph({
+    goal: "Manage live job submissions",
+    workItems: [
+      { id: "live-control", objective: "Verify live runner health and control real submissions", kind: "operation", externallyConsequential: true, readOnly: false },
+      { id: "runtime-analysis", objective: "Inspect current runtime bottlenecks", kind: "analysis", readOnly: true },
+    ],
+  });
+  assert(liveEvidenceGraph.find((item) => item.id === "runtime-analysis")?.dependsOn.includes("live-control"), "live-state analysis is automatically gated on verified operational evidence");
+  const dispatchAlternate = availableAlternateForItem({
+    resources: [
+      { id: "claude:haiku", dispatchable: true, state: "cooldown" },
+      { id: "claude:sonnet", dispatchable: true, state: "available" },
+    ],
+  }, { alternates: ["claude:sonnet"] });
+  assert(dispatchAlternate?.id === "claude:sonnet", "an unavailable assigned resource can reroute to a healthy pre-vetted alternate before dispatch");
+  assert(hasAvailableDispatchRoute({
+    resources: [
+      { id: "claude:haiku", dispatchable: true, state: "cooldown" },
+      { id: "claude:sonnet", dispatchable: true, state: "available" },
+    ],
+  }, { assignment: "claude:haiku", alternates: ["claude:sonnet"] }), "a resource-blocked work item can resume when an alternate becomes available");
+  const evidenceManifest = {
+    version: 2,
+    runId: "evidence-test",
+    resources: [{ id: "codex:current", model: "gpt-test" }],
+    decisions: [],
+    jobs: [],
+    workItems: [
+      { id: "live", state: "codex", dependsOn: [], assignment: "codex:current", readOnly: false, externallyConsequential: true },
+      { id: "patch", state: "failed", dependsOn: ["live"], assignment: "claude:sonnet", readOnly: false },
+    ],
+  };
+  let missingEvidenceRejected = false;
+  try {
+    applyProjectManagerUpdates(evidenceManifest, { completedCodexItems: ["live"] });
+  } catch {
+    missingEvidenceRejected = true;
+  }
+  assert(missingEvidenceRejected, "Codex cannot complete an owned action without compact verification evidence");
+  const liveCompleted = applyProjectManagerUpdates(evidenceManifest, {
+    completedCodexItems: ["live"],
+    codexEvidence: [{ workItemId: "live", summary: "Runner and dashboard health were verified from the current status API.", artifactRefs: ["status.json"] }],
+  });
+  const codexTakeover = applyProjectManagerUpdates(liveCompleted, { takeoverCodexItems: ["patch"], codexModel: "gpt-test" });
+  assert(codexTakeover.workItems.find((item) => item.id === "patch")?.state === "codex" && codexTakeover.workItems.find((item) => item.id === "patch")?.assignment === "codex:current", "Codex takeover is explicit and represented in the work graph");
+  const patchCompleted = applyProjectManagerUpdates(codexTakeover, {
+    completedCodexItems: ["patch"],
+    codexEvidence: [{ workItemId: "patch", summary: "Bounded patch was applied and four focused tests passed." }],
+  });
+  const takeoverRefresh = syncWorkItemsFromJobs({
+    ...patchCompleted,
+    jobs: [{ jobId: "old-cancelled-worker", state: "cancelled", workItemIds: ["patch"], assignedTasks: ["patch"] }],
+  });
+  assert(takeoverRefresh.workItems.find((item) => item.id === "patch")?.state === "completed", "a stale worker failure cannot regress an evidence-backed Codex takeover");
+  const projectCompleted = applyProjectManagerUpdates(patchCompleted, { projectVerified: true, projectVerificationSummary: "All work items and focused integration checks passed." });
+  assert(projectCompleted.state === "completed" && deriveOrchestrationState(projectCompleted) === "completed", "only an evidence-backed final verification permits a completed project-manager cycle");
+  const projectBlocked = applyProjectManagerUpdates(patchCompleted, { projectVerificationFailed: true, projectVerificationSummary: "Focused checks passed, but the live authorization gate remains unresolved." });
+  assert(projectBlocked.state === "blocked" && projectBlocked.finalVerification?.passed === false, "failed final verification records the blocker and forbids a completion claim");
+  assert(dependencyEvidenceForItems({ ...projectCompleted, workspace: pluginRoot }, [{ dependsOn: ["live"] }]).includes("Runner and dashboard health"), "verified Codex dependency evidence is passed to downstream workers");
   assert([1, 2, 3, 4].map(resultBulletLimitForComplexity).join(",") === "5,6,8,10", "result bullet budgets scale with work-item complexity");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex-pending" }] }) === "running", "dependency-gated Codex actions keep the project run active until they become ready");
@@ -6410,6 +6703,7 @@ function runSelfTest() {
   }));
   assert(mixedClaude.observedModel === "claude-sonnet-5" && mixedClaude.observedModels.length === 2, "Claude telemetry selects the dominant requested model instead of a background helper model");
   assert(claudeObservedModelMatches("sonnet", mixedClaude.observedModel) && !claudeObservedModelMatches("fable", mixedClaude.observedModel), "Claude model-family verification rejects a dominant model mismatch");
+  assert(!claudeObservedModelMatches("claude-sonnet-4-6", "claude-sonnet-5"), "an exact Claude dispatch id must match the observed version exactly");
   assert(claudeIsolationFlags().join(",") === "--safe-mode,--no-session-persistence", "Claude workers default to isolated low-context execution flags");
   const flattenedGraph = buildGoalWorkGraph({ goal: "review", workItems: [[{ id: "one", objective: "first" }, { id: "two", objective: "second" }]] });
   assert(flattenedGraph.length === 2, "nested PowerShell work-item arrays are normalized defensively");
@@ -6499,7 +6793,9 @@ function runSelfTest() {
       jobs: [{ jobId: created.jobId, laneId: "self-test", worker: "self-test", assignedTasks: ["testing"], model: "none", state: "running" }],
     };
     writeTeamRunManifest(workspace, manifest);
-    assert(refreshTeamRunManifest(workspace).state === "completed", "aggregate team state reaches completed only after job completion");
+    const completedRefresh = refreshTeamRunManifest(workspace);
+    assert(completedRefresh.state === "completed", "aggregate team state reaches completed only after job completion");
+    assert(completedRefresh.jobs[0]?.failureCategory === "", "completed worker attempts never retain a synthetic failure category");
     writeTeamRunManifest(workspace, { ...manifest, jobs: [] });
     assert(refreshTeamRunManifest(workspace).state === "blocked", "team with no startable jobs reports blocked");
 

@@ -14,6 +14,8 @@
 - Readback: `read-job` or aggregate team state.
 - Keep bounded runtime and prompt/result artifacts.
 - Default to safe-mode, non-persistent sessions. Record the dominant model plus the bounded model mix so helper-model calls do not masquerade as the requested worker model.
+- Prefer an exact model id learned from real CLI telemetry over a moving alias. Keep the alias only for quota-window applicability and policy.
+- Never infer live runtime state from source control. Consume recorded dependency evidence or report the state as unknown.
 
 ## Antigravity CLI
 

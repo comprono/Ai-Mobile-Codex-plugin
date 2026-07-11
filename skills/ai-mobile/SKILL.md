@@ -15,10 +15,10 @@ For a nontrivial project goal:
 2. Look for the normalized direct MCP tool `mcp__ai_mobile_local__run_project_manager`. Do not declare AI Mobile unavailable until exposed tool names have been searched for the `mcp__ai_mobile_local__` prefix.
 3. Call `run-project-manager` once with `goal`, `workspace`, `horizonHours=5`, `start=true`, and a dependency-aware `workItems` graph only when the goal genuinely needs one. Keep `includePlan=false` unless debugging routing.
 4. Do not read `project-manager-plan.json`, reconstruct submit commands, or manually call provider workers after a successful run call. The orchestrator dispatches eligible CLI work and returns `CodexOwnedActions` directly.
-5. While workers run, complete only the returned Codex-owned critical path: authorization, live-state checks, architecture decisions, integration, or another non-duplicated item.
-6. Use `project-manager-status` for compact continuation. After completing a Codex-owned item, pass its id in `completedCodexItems`; pass blocked ids in `failedCodexItems` so dependent work cannot start incorrectly.
-7. Read compact results once. Accept objective-specific evidence, request one bounded correction, or let the orchestrator perform its single provider-diverse failover.
-8. Merge once, run focused final verification, and report evidence-backed completion. Worker completion is not project completion.
+5. While workers run, complete only the returned Codex-owned critical path: authorization, live-state checks, architecture decisions, integration, or another non-duplicated item. Any worker that needs live/current/runtime truth must depend on that verified Codex action.
+6. Use `project-manager-status` for compact continuation. Every `completedCodexItems` id must have a matching `codexEvidence` entry containing a concise verified summary and optional artifact refs. Pass blocked ids in `failedCodexItems`.
+7. Read compact results once. Accept objective-specific evidence, request one bounded correction, or let the orchestrator perform its single provider-diverse failover. If Codex must replace a bad/cancelled worker, first pass that id in `takeoverCodexItems`; never make an unrecorded local fallback.
+8. Merge once and run focused final verification. After all work items are complete, call `project-manager-status` with either `projectVerified=true` or `projectVerificationFailed=true` and a concrete `projectVerificationSummary`. A failed gate must become an explicit blocker, never an optimistic completion.
 
 Do not ask the user to choose models manually. Do not use every provider merely because it is installed.
 Do not preload all reference files. Open one only when its specific edge case is active.
@@ -29,6 +29,7 @@ Do not preload all reference files. Open one only when its specific edge case is
 - Native Codex action: use the host agent tool only for a clearly independent bounded action explicitly returned by a diagnostic plan. Workers never spawn workers and `codex.exe` is never launched as a worker.
 - Current Codex action: perform returned `CodexOwnedActions` directly with targeted reads and commands.
 - Real submissions, sends, deploys, purchases, destructive changes, and other externally consequential operations always remain current-Codex actions with authorization and live safety checks. External workers may analyze or verify them but may not perform them.
+- Git status, tracked deletions, ignored files, and source layout are not runtime-liveness evidence. Workers must use recorded dependency evidence or an explicitly allowed current health check.
 - Antigravity desktop UI is reserved for visible project/chat state or verified CLI gaps. Startup remains passive.
 
 The bridge may start external CLI jobs, but an MCP server cannot invoke host-native Codex agent tools. The active skill must execute those host actions itself.
@@ -67,6 +68,16 @@ Detailed contract: [context-capsules.md](references/context-capsules.md).
 Use `define -> plan -> execute -> verify -> review -> ship`. Worker completion is never project completion. Stop for user input on unresolved ambiguity, irreversible risk, missing authorization, or verification failure.
 
 Detailed operating procedure and anti-rationalization checks: [project-manager.md](references/project-manager.md).
+
+## Truthful Closeout
+
+Before answering the user, call `project-manager-status` once and treat its `State` as authoritative.
+
+- Start with `AI Mobile run <RunId>: <State>`.
+- Report the models/resources that actually ran, the Codex-owned action, and the compact evidence.
+- If `CompletionClaimAllowed: false`, do not say done, successful, actively managed, or that the management goal remains active. State the failed/blocked item and the next recovery action.
+- A `completed` run means one finite orchestration cycle passed final verification. It is not a persistent manager, scheduler, or future improvement loop unless a separate durable automation was actually created and verified.
+- Distinguish the target application's own watchdog/runner from AI Mobile's run state.
 
 ## CLI And UI
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added evidence-backed Codex completion, explicit takeover of failed worker items, downstream dependency-result handoff, and final project verification before a run can report `completed`.
+- Failed final verification now records an explicit blocked state, and a cooling-down resource reroutes to a healthy pre-vetted alternate before dispatch.
+- Added live-state dependency injection so runtime analysis cannot race ahead of the current Codex control check or infer liveness from Git deletions.
+- Claude workers now dispatch exact observed model ids when available, preventing an alias mismatch from wasting a Haiku lane on Sonnet.
+- Added authoritative run ids and `CompletionClaimAllowed` output so blocked orchestration cannot be hidden behind a success-style final response or confused with an application's own watchdog.
 - Added `run-project-manager` and `project-manager-status` as the direct, idempotent execution/continuation path, removing manual plan JSON reads and provider command reconstruction from normal use.
 - Added execution-class routing that keeps real submissions, sends, deploys, purchases, destructive actions, and other external effects under the current Codex session's authorization and live-state checks.
 - Isolated Claude jobs with safe-mode, non-persistent sessions by default and corrected dominant-model telemetry so background Haiku calls do not masquerade as the requested Sonnet/Opus/Fable worker.

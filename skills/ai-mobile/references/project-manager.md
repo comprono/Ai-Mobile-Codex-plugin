@@ -20,7 +20,10 @@
 - Do not add a paraphrasing meta-router. Pass the capsule and source artifacts directly; merge once.
 - Launch later stages only after dependencies complete.
 - Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
-- Mark completed or blocked current-Codex items through `project-manager-status` so dependent CLI work advances without guessing.
+- Mark completed or blocked current-Codex items through `project-manager-status`; completion requires a matching compact evidence entry so dependent CLI work advances from verified state.
+- A worker that requires live/current runtime truth depends on the Codex live-control item and receives its evidence. Git status is not runtime evidence.
+- When Codex replaces a failed or cancelled worker, use `takeoverCodexItems` before editing and then record completion evidence. Unrecorded fallback work is not part of the run.
+- Record final verification as passed or failed. A failed live or acceptance gate remains an explicit blocker and forbids a completion claim.
 - Keep externally consequential operations with the current Codex session even when external workers are healthier or cheaper.
 
 ## Result Gate
@@ -39,6 +42,8 @@ When a result is close but incomplete, send one narrow correction. When failure 
 | "More agents will be faster" | Fan out only genuinely independent work |
 | "The cached model list is probably current" | Use fresh catalog/quota evidence or preserve unknown |
 | "The CLI failed once, so open every UI" | Classify the failure; use UI only for required visible state or unsupported CLI behavior |
+| "Codex fixed it after the worker failed" | Record a Codex takeover and evidence before claiming the item complete |
+| "The app watchdog is active, so AI Mobile is still managing" | Report the app watchdog and finite AI Mobile run as separate states |
 
 ## User Escalation
 

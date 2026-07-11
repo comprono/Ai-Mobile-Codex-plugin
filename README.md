@@ -126,6 +126,8 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Use `run-project-manager` as the one-call default. It is idempotent for an active workspace run and avoids manual plan JSON reads or provider command reconstruction.
 - The current Codex session is project manager, goal owner, critic, active narrow contributor, integrator, and final verifier. Native and external workers receive bounded work items and compact artifact contracts.
 - Real submissions, sends, deploys, purchases, destructive actions, and other external effects remain current-Codex actions with authorization and live-state checks. CLI workers may analyze, patch, or verify them but cannot silently execute them.
+- Current-runtime analysis is automatically sequenced after the relevant live Codex control action. Downstream workers receive compact dependency results and verified Codex evidence instead of rediscovering state from scratch.
+- Codex-owned work cannot be marked complete without `codexEvidence`. A cancelled or invalid worker must be formally reassigned with `takeoverCodexItems` before Codex edits its scope.
 - Selection uses capability fit, required quality, capacity/freshness, speed/cost, independence, and project continuity. It is not a fixed UI/backend/testing map.
 - Project affinity is learned only from successful worker outcomes. Timeouts and failed work lower reliability instead of making that resource more likely for the same task kind.
 - Repeated recent failures without a platform success move broad work to a proven alternative for the five-hour horizon; micro tasks remain eligible for cheap bounded workers.
@@ -134,6 +136,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
 - Use Claude Code for local code, review, patch, and test lanes when UI context is not required.
 - Claude workers use isolated `--safe-mode` and non-persistent sessions by default, with a compatibility fallback for older CLIs. Dominant per-model usage determines the observed model, so background helper-model calls do not corrupt Sonnet/Opus/Fable routing.
+- Claude aliases are resolved to exact observed model ids for dispatch when available, preventing a Haiku lane from silently consuming Sonnet capacity.
 - Claude CLI aliases are inventoried passively: Haiku handles small bounded work, Sonnet is the substantial implementation default, and Opus/Fable are premium options. Fable is used only when explicitly requested or when high-value work can use a healthy dedicated Fable window near reset, so it is not spent on ordinary tasks.
 - Apply every Claude quota window that matches the model. Shared five-hour and all-model weekly windows apply to all aliases; a Fable, Sonnet, Opus, or other model-specific weekly row applies only when `/usage` actually exposes it.
 - Treat "Claude/Sonnet/Opus in an Antigravity chat" as an Antigravity model choice, not Claude Code CLI.
@@ -146,6 +149,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
 - Treat `State: ready-for-codex` as an integration gate, not completion. Codex must verify before reporting the user goal complete.
+- Treat `CompletionClaimAllowed` as authoritative. Only a fully completed work graph plus recorded passing final project verification permits a success claim; a failed gate is recorded as `blocked` with its evidence. One completed cycle is not an ongoing AI Mobile scheduler.
 - If a worker exits after finalizing telemetry but before its terminal status write, recover the real success/failure category from telemetry and compact artifacts instead of reporting a generic process-gone failure.
 - `cancel-job` stops the recorded local worker process tree before marking the job cancelled.
 - If DevTools says `Transport closed`, call `devtools-health` once; do not keep retrying `list_pages`.
