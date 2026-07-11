@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "context-capsule", "project-manager-plan", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "context-capsule", "project-manager-plan", "run-project-manager", "project-manager-status", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -26,6 +26,8 @@ param(
   [string] $ModelPolicyReviewAfter = "",
   [string] $WorkItemsJson = "",
   [string] $WorkItemsFile = "",
+  [string] $CompletedCodexItems = "",
+  [string] $FailedCodexItems = "",
   [string] $ModelPreference = "auto",
   [string] $AgyModel = "",
   [string] $AgyProject = "",
@@ -1194,7 +1196,7 @@ function Invoke-TeamCommand {
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-team-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
     [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
-    $isOrchestratorRun = @("run-team-task-cli", "orchestrate-project-cli") -contains $CliCommand
+    $isOrchestratorRun = @("run-team-task-cli", "orchestrate-project-cli", "run-project-manager-cli") -contains $CliCommand
     if ($isOrchestratorRun -and $startValue) {
       $lastTeamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
       $previousWrite = if (Test-Path -LiteralPath $lastTeamRunPath) {
@@ -1316,6 +1318,8 @@ function Invoke-BridgeJobCommand {
   }
 
   $submitValue = ConvertTo-BooleanValue -Value $Submit -Default $true
+  $completedCodexItemValues = @($CompletedCodexItems -split "[,;|]" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $failedCodexItemValues = @($FailedCodexItems -split "[,;|]" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
   $payload = [PSCustomObject]@{
     goal = $Goal
     workspace = $Workspace
@@ -1329,6 +1333,8 @@ function Invoke-BridgeJobCommand {
     reason = $Reason
     limit = $Limit
     waitSeconds = $WaitSeconds
+    completedCodexItems = $completedCodexItemValues
+    failedCodexItems = $failedCodexItemValues
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-bridge-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
@@ -1343,7 +1349,7 @@ function Invoke-BridgeJobCommand {
     }
     if ($hasOutput) {
       $output | Write-Output
-    } elseif ($CliCommand -eq "read-team-run-cli" -and -not [string]::IsNullOrWhiteSpace($Workspace)) {
+    } elseif ((@("read-team-run-cli", "project-manager-status-cli") -contains $CliCommand) -and -not [string]::IsNullOrWhiteSpace($Workspace)) {
       $teamRunPath = Join-Path $Workspace ".antigravity-bridge\last-team-run.md"
       if (Test-Path -LiteralPath $teamRunPath) {
         Get-Content -LiteralPath $teamRunPath
@@ -1628,6 +1634,14 @@ switch ($Command) {
 
   "project-manager-plan" {
     Invoke-TeamCommand -CliCommand "project-manager-plan-cli"
+  }
+
+  "run-project-manager" {
+    Invoke-TeamCommand -CliCommand "run-project-manager-cli"
+  }
+
+  "project-manager-status" {
+    Invoke-BridgeJobCommand -CliCommand "project-manager-status-cli"
   }
 
   "orchestrator-profile" {

@@ -12,29 +12,30 @@ Use one Codex chat as the project control room. The current Codex session is the
 For a nontrivial project goal:
 
 1. Understand the outcome, constraints, risk, current state, acceptance criteria, and focused verification.
-2. Check whether a native host agent tool such as `multi_agent_v1__spawn_agent` is exposed. Never probe or launch `codex.exe`.
-3. Call `ai-mobile-local.project-manager-plan` with `goal`, `workspace`, a dependency-aware `workItems` graph when useful, `horizonHours=5`, and `hostCodexAvailable=true` only when the native host tool is callable.
-4. Read the generated `project-manager-plan.json` once. It contains exact bounded prompts and one transcript-free context-capsule path.
-5. Launch only dependency-ready actions. Parallelize distinct independent work; keep one writer per workspace.
-6. While workers run, the current Codex session handles the narrow critical path: decisions, integration preparation, risk gates, or another non-duplicated item.
-7. Read compact results once. Accept objective-specific evidence, request one bounded correction, or fail over the failed item once to a provider-diverse alternate.
-8. Launch dependent stages only after their gates pass. Merge once, run focused final verification, and report evidence-backed completion.
+2. Look for the normalized direct MCP tool `mcp__ai_mobile_local__run_project_manager`. Do not declare AI Mobile unavailable until exposed tool names have been searched for the `mcp__ai_mobile_local__` prefix.
+3. Call `run-project-manager` once with `goal`, `workspace`, `horizonHours=5`, `start=true`, and a dependency-aware `workItems` graph only when the goal genuinely needs one. Keep `includePlan=false` unless debugging routing.
+4. Do not read `project-manager-plan.json`, reconstruct submit commands, or manually call provider workers after a successful run call. The orchestrator dispatches eligible CLI work and returns `CodexOwnedActions` directly.
+5. While workers run, complete only the returned Codex-owned critical path: authorization, live-state checks, architecture decisions, integration, or another non-duplicated item.
+6. Use `project-manager-status` for compact continuation. After completing a Codex-owned item, pass its id in `completedCodexItems`; pass blocked ids in `failedCodexItems` so dependent work cannot start incorrectly.
+7. Read compact results once. Accept objective-specific evidence, request one bounded correction, or let the orchestrator perform its single provider-diverse failover.
+8. Merge once, run focused final verification, and report evidence-backed completion. Worker completion is not project completion.
 
 Do not ask the user to choose models manually. Do not use every provider merely because it is installed.
+Do not preload all reference files. Open one only when its specific edge case is active.
 
 ## Execution Contract
 
-- Native Codex action: call the host agent tool using the exact `model` and `reasoningEffort` in the plan. Workers never spawn workers.
-- Claude action: call `submit-claude-job` with the stored prompt and model.
-- Antigravity action: prefer `submit-agy-job`; use desktop chat/model tools only when visible project or conversation state is part of the task.
-- Cursor action: use only when `cursor-status` reports a true headless agent. The `cursor` launcher is UI, not a headless worker.
-- Current Codex action: perform it directly in this chat with targeted reads and commands.
+- Normal path: `run-project-manager` owns Claude, Antigravity, and optional headless Cursor dispatch. Do not duplicate those calls.
+- Native Codex action: use the host agent tool only for a clearly independent bounded action explicitly returned by a diagnostic plan. Workers never spawn workers and `codex.exe` is never launched as a worker.
+- Current Codex action: perform returned `CodexOwnedActions` directly with targeted reads and commands.
+- Real submissions, sends, deploys, purchases, destructive changes, and other externally consequential operations always remain current-Codex actions with authorization and live safety checks. External workers may analyze or verify them but may not perform them.
+- Antigravity desktop UI is reserved for visible project/chat state or verified CLI gaps. Startup remains passive.
 
 The bridge may start external CLI jobs, but an MCP server cannot invoke host-native Codex agent tools. The active skill must execute those host actions itself.
 
 ## Capacity Rules
 
-- `project-manager-plan` and `resource-inventory` discover installed CLIs, model catalogs, quotas, resets, cooldowns, and recent outcomes before assignment.
+- `run-project-manager` discovers installed CLIs, model catalogs, quotas, resets, cooldowns, and recent outcomes before assignment. `project-manager-plan` is a plan-only diagnostic.
 - `codex-usage` reads only bounded local `token_count` metadata. It discards prompts, responses, paths, and thread ids. This is Codex agentic-usage evidence, not a complete ChatGPT product-limit API.
 - Preserve unknown or stale capacity as unknown/stale. Never invent token allowances, reset times, or model availability.
 - Apply every quota window that governs a model and route using the most restrictive remaining window.
@@ -79,10 +80,10 @@ Call `orchestrator-profile` when a local communication or model policy is needed
 
 ## Fallback
 
-If `ai-mobile-local` is not exposed in the current session, use:
+If no `mcp__ai_mobile_local__*` tool is exposed after an actual tool-name search, use:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<goal>" -Workspace "<path>" -HorizonHours 5
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
 ```
 
-Tool discovery failure is a route change, not permission to guess.
+Continue with `project-manager-status`, not manual JSON or provider-command reconstruction. Tool discovery failure is a route change, not permission to guess.

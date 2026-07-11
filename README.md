@@ -90,9 +90,11 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
 
 # Goal-driven orchestration
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-status -Workspace "<path>" -WaitSeconds 30
+
+# Plan-only routing diagnostic
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<goal>" -Workspace "<path>" -HorizonHours 5
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-project -Goal "<goal>" -Workspace "<path>" -WaitSeconds 30
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
 
 # Compatibility planning/execution commands
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestration-plan -Goal "<goal>" -Workspace "<path>"
@@ -116,12 +118,14 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 - `ai-mobile-local`: capacity metadata, context capsules, project-manager plans, passive resource inventory, durable jobs, bounded failover, model switching, worker submission, job readback, and privacy scan.
 - `ai-mobile-devtools`: Chromium DevTools bridge for live Antigravity UI inspection and interaction.
 
-Important local tools include `project-manager-plan`, `context-capsule`, `codex-usage`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
+Important local tools include `run-project-manager`, `project-manager-status`, `project-manager-plan`, `context-capsule`, `codex-usage`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
 
 ## Operating Rules
 
 - Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity.
+- Use `run-project-manager` as the one-call default. It is idempotent for an active workspace run and avoids manual plan JSON reads or provider command reconstruction.
 - The current Codex session is project manager, goal owner, critic, active narrow contributor, integrator, and final verifier. Native and external workers receive bounded work items and compact artifact contracts.
+- Real submissions, sends, deploys, purchases, destructive actions, and other external effects remain current-Codex actions with authorization and live-state checks. CLI workers may analyze, patch, or verify them but cannot silently execute them.
 - Selection uses capability fit, required quality, capacity/freshness, speed/cost, independence, and project continuity. It is not a fixed UI/backend/testing map.
 - Project affinity is learned only from successful worker outcomes. Timeouts and failed work lower reliability instead of making that resource more likely for the same task kind.
 - Repeated recent failures without a platform success move broad work to a proven alternative for the five-hour horizon; micro tasks remain eligible for cheap bounded workers.
@@ -129,6 +133,7 @@ Important local tools include `project-manager-plan`, `context-capsule`, `codex-
 - Use Antigravity CLI before desktop UI when visible project/chat state is not required.
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
 - Use Claude Code for local code, review, patch, and test lanes when UI context is not required.
+- Claude workers use isolated `--safe-mode` and non-persistent sessions by default, with a compatibility fallback for older CLIs. Dominant per-model usage determines the observed model, so background helper-model calls do not corrupt Sonnet/Opus/Fable routing.
 - Claude CLI aliases are inventoried passively: Haiku handles small bounded work, Sonnet is the substantial implementation default, and Opus/Fable are premium options. Fable is used only when explicitly requested or when high-value work can use a healthy dedicated Fable window near reset, so it is not spent on ordinary tasks.
 - Apply every Claude quota window that matches the model. Shared five-hour and all-model weekly windows apply to all aliases; a Fable, Sonnet, Opus, or other model-specific weekly row applies only when `/usage` actually exposes it.
 - Treat "Claude/Sonnet/Opus in an Antigravity chat" as an Antigravity model choice, not Claude Code CLI.
@@ -136,6 +141,7 @@ Important local tools include `project-manager-plan`, `context-capsule`, `codex-
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
 - Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
 - Keep worker prompts bounded and results complexity-sized. Do not stream worker narration or repeatedly read successful job artifacts into Codex.
+- Worker change artifacts include only paths changed during that worker run. A path already dirty before launch is detected but its full pre-existing diff is never attributed to the worker.
 - Give each nontrivial work item concise acceptance criteria and focused verification checks. Load only the relevant context, keep one writer per workspace, and merge independent reports once in Codex.
 - Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.

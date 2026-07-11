@@ -4,7 +4,7 @@
 
 - Dispatch boundary: the host's native agent tool.
 - Never invoke a locked or nested `codex.exe` process.
-- Pass exact catalog model and supported effort from `project-manager-plan.json`.
+- Pass an exact catalog model and supported effort only when the active skill explicitly returns a bounded native-host action. Never read a plan file merely to reconstruct routine dispatch.
 - Receive the worker result directly in the control chat and integrate it once.
 
 ## Claude Code
@@ -13,6 +13,7 @@
 - Dispatch: `submit-claude-job`.
 - Readback: `read-job` or aggregate team state.
 - Keep bounded runtime and prompt/result artifacts.
+- Default to safe-mode, non-persistent sessions. Record the dominant model plus the bounded model mix so helper-model calls do not masquerade as the requested worker model.
 
 ## Antigravity CLI
 

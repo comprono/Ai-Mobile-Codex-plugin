@@ -214,7 +214,7 @@ const tools = [
   },
   {
     name: "project-manager-plan",
-    description: "Preferred planning call. Build a future-proof, capacity-aware execution plan across native Codex Sol/Terra/Luna workers, Claude Code, Antigravity CLI, and optional Cursor, backed by one compact context capsule.",
+    description: "Plan-only diagnostic. Build a capacity-aware execution plan without dispatching work. Use run-project-manager for normal project execution.",
     inputSchema: {
       type: "object",
       properties: {
@@ -235,6 +235,51 @@ const tools = [
         refreshInventory: { type: "boolean", description: "Force fresh provider probes.", default: false },
       },
       required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "run-project-manager",
+    description: "Default AI Mobile call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, keep externally consequential actions with the current Codex session, and return one compact operating result. Reuses an active run instead of duplicating it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Complete project outcome." },
+        workspace: { type: "string", description: "Local project workspace shared by the team." },
+        workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Optional dependency-aware work graph." },
+        taskSplit: { type: "string", description: "Legacy compatibility hint. Prefer workItems for nontrivial goals." },
+        horizonHours: { type: "number", description: "Capacity/reset planning horizon.", default: 5 },
+        codexModel: { type: "string", description: "Caller-visible current Codex model label.", default: "current Codex session" },
+        codexBudgetState: { type: "string", description: "Caller-visible Codex capacity state.", default: "unknown" },
+        codexRemainingPercent: { type: "number", description: "Optional caller-visible Codex remaining percentage." },
+        codexResetAt: { type: "string", description: "Optional caller-visible Codex reset time." },
+        estimatedCodexInputTokens: { type: "number", description: "Rough direct-work cost used only as a routing signal.", default: 5000 },
+        mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
+        agyModel: { type: "string", description: "Optional Antigravity model override.", default: "auto" },
+        claudeModel: { type: "string", description: "Optional Claude Code model override.", default: "auto" },
+        allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside automatic policy.", default: false },
+        includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
+        start: { type: "boolean", description: "Dispatch selected workers. False returns a dry plan.", default: true },
+        waitSeconds: { type: "number", description: "Short bounded wait before returning resumable status.", default: 5 },
+        refreshInventory: { type: "boolean", description: "Force fresh provider probes before assignment.", default: false },
+        includePlan: { type: "boolean", description: "Include detailed decisions. Keep false for token-efficient operation.", default: false },
+      },
+      required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "project-manager-status",
+    description: "Compact continuation call for the latest AI Mobile project-manager run. Waits briefly when requested, advances dependency-ready CLI work, repairs stale jobs, and returns only integration-relevant artifacts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string", description: "Workspace containing the active or latest AI Mobile run." },
+        waitSeconds: { type: "number", description: "Optional bounded wait for worker progress.", default: 0 },
+        completedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that this chat completed and verified, allowing dependent CLI work to start." },
+        failedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that failed or were blocked, preventing unsafe dependent dispatch." },
+      },
+      required: ["workspace"],
       additionalProperties: false,
     },
   },
@@ -298,6 +343,8 @@ const tools = [
               dependsOn: { type: "array", items: { type: "string" }, description: "Ids that must complete before this item can be finalized." },
               expectedFiles: { type: "array", items: { type: "string" }, description: "Optional file ownership boundary." },
               readOnly: { type: "boolean", description: "True for scouts/reviewers; false for implementation.", default: true },
+              executionClass: { type: "string", enum: ["analysis", "code", "operation", "integration"], description: "Work class used to keep real-world operations under Codex control." },
+              externallyConsequential: { type: "boolean", description: "True for real submissions, sends, deploys, purchases, destructive actions, or other external effects.", default: false },
               preferredPlatform: { type: "string", description: "Optional caller preference: codex, claude, antigravity, or cursor." },
               acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 4, description: "Specific conditions that must be true before this item is accepted." },
               verification: { type: "array", items: { type: "string" }, maxItems: 4, description: "Focused checks for this item; do not run unrelated suites." },
@@ -1258,7 +1305,11 @@ function enrichClaudeModelRoster(models = [], claudeCache = {}) {
   return models.map((model) => {
     const alias = String(model.id || "").toLowerCase();
     const observedMatch = observed.toLowerCase().includes(`-${alias}-`) || observed.toLowerCase().endsWith(`-${alias}`) ? observed : "";
-    const resolvedId = String(resolutions[alias] || model.resolvedId || observedMatch || "");
+    const cachedResolution = String(resolutions[alias] || "");
+    const validCachedResolution = cachedResolution.toLowerCase().includes(`-${alias}-`) || cachedResolution.toLowerCase().endsWith(`-${alias}`)
+      ? cachedResolution
+      : "";
+    const resolvedId = String(validCachedResolution || model.resolvedId || observedMatch || "");
     return {
       ...model,
       resolvedId,
@@ -2047,7 +2098,7 @@ async function buildProjectManagerPlan(args = {}) {
     platformReliability: platformReliabilitySummary(context.workspaceState?.outcomes || {}, "codex", args.horizonHours || 5),
   }));
   const candidates = [...external, ...host];
-  const writable = workItems.filter((item) => !item.readOnly).sort((a, b) => b.priority - a.priority);
+  const writable = workItems.filter((item) => !item.readOnly && !item.externallyConsequential).sort((a, b) => b.priority - a.priority);
   const primaryWriterId = writable.length
     ? candidates
       .map((candidate) => ({ candidate, score: projectManagerResourceScore(candidate, writable[0], args) }))
@@ -2060,7 +2111,7 @@ async function buildProjectManagerPlan(args = {}) {
   const stagePlatformCounts = new Map();
   const actions = workItems.map((item) => {
     const stage = topologicalStage(item, byId, memo);
-    const ranked = candidates
+    const ranked = item.externallyConsequential ? [] : candidates
       .map((candidate) => {
         let score = projectManagerResourceScore(candidate, item, args, primaryWriterId);
         if (item.readOnly && Number.isFinite(score)) {
@@ -2272,10 +2323,38 @@ function capabilitiesForWorkItem(kind, objective) {
   return [...capabilities];
 }
 
+function isExternallyConsequential(value) {
+  const text = String(value || "").toLowerCase().replace(/\s+/g, " ");
+  if (!text) return false;
+  return [
+    /\b(?:apply|submi(?:t|ssion))\w*\b.{0,48}\b(?:job|application|form|claim|request|order)\b/,
+    /\b(?:job|application|form|claim|request|order)\b.{0,48}\b(?:apply|submi(?:t|ssion))\w*\b/,
+    /\b(?:start|continue|perform|run|make)\w*\b.{0,64}\b(?:real|live|actual|controlled)\b.{0,32}\bjob (?:applications?|submissions?)\b/,
+    /\b(?:send|email|message|post|publish|deploy|release)\w*\b.{0,48}\b(?:real|live|production|public|customer|client|recipient|github|site)\b/,
+    /\b(?:real|live|production|public)\b.{0,48}\b(?:send|email|message|post|publish|deploy|release|delete|cancel|start|stop|restart)\w*\b/,
+    /\b(?:purchase|buy|charge|pay|refund|transfer)\w*\b/,
+    /\b(?:delete|cancel)\w*\b.{0,48}\b(?:account|subscription|data|record|production|live)\b/,
+  ].some((pattern) => pattern.test(text));
+}
+
+function normalizeExecutionClass(value, readOnly, externallyConsequential, kind) {
+  const requested = String(value || "").trim().toLowerCase();
+  if (externallyConsequential) return "operation";
+  if (["analysis", "code", "operation", "integration"].includes(requested)) return requested;
+  if (/integrat|merge|ship|release/.test(String(kind || ""))) return "integration";
+  return readOnly ? "analysis" : "code";
+}
+
 function normalizeWorkItem(item, index, fallbackComplexity) {
   const kind = normalizeTaskLane(item.kind || "general") || "general";
   const objective = String(item.objective || "").trim();
-  const inferredReadOnly = !/(implementation|implement|patch|fix|debug|migration|refactor)/.test(kind);
+  const inferredReadOnly = !/(implementation|implement|patch|fix|debug|migration|refactor|operation|execute|submission)/.test(kind);
+  const requestedReadOnly = typeof item.readOnly === "boolean" ? item.readOnly : inferredReadOnly;
+  const externallyConsequential = item.externallyConsequential === true
+    || (!requestedReadOnly && isExternallyConsequential(`${kind} ${objective}`));
+  const readOnly = externallyConsequential
+    ? false
+    : requestedReadOnly;
   return {
     id: normalizeTaskLane(item.id || `work-${index + 1}`) || `work-${index + 1}`,
     objective: objective || `Complete work item ${index + 1}`,
@@ -2287,7 +2366,9 @@ function normalizeWorkItem(item, index, fallbackComplexity) {
     ])],
     dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.map(normalizeTaskLane).filter(Boolean) : [],
     expectedFiles: Array.isArray(item.expectedFiles) ? item.expectedFiles.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 20) : [],
-    readOnly: typeof item.readOnly === "boolean" ? item.readOnly : inferredReadOnly,
+    readOnly,
+    executionClass: normalizeExecutionClass(item.executionClass, readOnly, externallyConsequential, kind),
+    externallyConsequential,
     preferredPlatform: normalizeTaskLane(item.preferredPlatform || ""),
     acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
     verification: Array.isArray(item.verification) ? item.verification.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
@@ -2319,7 +2400,8 @@ function buildGoalWorkGraph(args = {}) {
 
   if (!rawItems.length) {
     const reviewOnly = String(args.mode || "patch").toLowerCase() === "review";
-    if (fallbackComplexity !== "low") {
+    const consequentialGoal = !reviewOnly && isExternallyConsequential(goal);
+    if (fallbackComplexity !== "low" || consequentialGoal) {
       rawItems.push({
         id: "goal-context",
         objective: `Inspect the project and identify the smallest high-leverage path to: ${goal}`,
@@ -2335,6 +2417,7 @@ function buildGoalWorkGraph(args = {}) {
       kind: reviewOnly ? "review" : "implementation-debugging",
       complexity: fallbackComplexity,
       readOnly: reviewOnly,
+      dependsOn: consequentialGoal ? ["goal-context"] : [],
       priority: 95,
     });
     if (!reviewOnly) {
@@ -2480,7 +2563,7 @@ function resourceCapacityReason(candidate, item, args = {}) {
 function buildResourceOrchestrationDecision(args = {}, context = {}) {
   const candidates = buildResourceCandidates(args, context);
   const workItems = buildGoalWorkGraph(args);
-  const writable = workItems.filter((item) => !item.readOnly).sort((a, b) => b.priority - a.priority);
+  const writable = workItems.filter((item) => !item.readOnly && !item.externallyConsequential).sort((a, b) => b.priority - a.priority);
   let primaryWriterId = "";
   if (writable.length) {
     primaryWriterId = rankResourcesForWorkItem(candidates, writable[0], args)[0]?.candidate.id || "";
@@ -2488,6 +2571,24 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
 
   const decisions = [];
   const assignedItems = workItems.map((item) => {
+    if (item.externallyConsequential) {
+      const reason = "externally consequential operation; the current Codex session retains authorization, live-state checks, and execution ownership";
+      decisions.push({
+        workItemId: item.id,
+        resourceId: "codex:current",
+        model: context.codexModel,
+        score: null,
+        reason,
+        alternates: [],
+      });
+      return {
+        ...item,
+        assignment: "codex:current",
+        assignedModel: context.codexModel,
+        alternates: [],
+        decisionReason: reason,
+      };
+    }
     const ranked = rankResourcesForWorkItem(candidates, item, args, primaryWriterId);
     let selected = ranked[0];
     if (!item.readOnly && primaryWriterId) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
@@ -2569,8 +2670,8 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     "5. Codex critiques worker output, requests a narrow correction when needed, integrates the accepted result, and performs final verification.",
     "6. Persist only compact decision/outcome evidence so the next run benefits from project continuity.",
     "",
-    "NextCall:",
-    "Use orchestrate-project with this goal/work graph. Existing run-team-task callers are routed through the same orchestrator.",
+    "Execution:",
+    "Use run-project-manager for normal dispatch and project-manager-status for continuation. Do not reconstruct provider commands from this plan.",
   ].filter(Boolean).join("\n");
 }
 
@@ -2754,7 +2855,7 @@ function failoverAllowed(category) {
 function deriveOrchestrationState(manifest) {
   const items = manifest.workItems || [];
   if (!items.length) return "blocked";
-  if (items.some((item) => ["running", "pending"].includes(item.state))) return "running";
+  if (items.some((item) => ["running", "pending", "codex-pending"].includes(item.state))) return "running";
   if (items.every((item) => ["completed", "codex"].includes(item.state))) return "ready-for-codex";
   if (items.some((item) => item.state === "blocked")) return "blocked";
   if (items.some((item) => item.state === "completed")) return "partial";
@@ -2867,7 +2968,7 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
   let currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
   manifest.workItems = manifest.workItems.map((item) => {
     if (item.state !== "blocked" || !String(item.blocker || "").startsWith("Dependency ")) return item;
-    const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex"].includes(currentById.get(id)?.state));
+    const dependenciesRecoveringOrComplete = item.dependsOn.every((id) => ["pending", "running", "completed", "codex", "codex-pending"].includes(currentById.get(id)?.state));
     if (!dependenciesRecoveringOrComplete) return item;
     changed = true;
     return { ...item, state: "pending", blocker: "" };
@@ -2879,6 +2980,21 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     if (!failedDependency) return item;
     changed = true;
     return { ...item, state: "blocked", blocker: `Dependency ${failedDependency} did not complete.` };
+  });
+
+  currentById = new Map(manifest.workItems.map((item) => [item.id, item]));
+  manifest.workItems = manifest.workItems.map((item) => {
+    if (item.state !== "codex-pending") return item;
+    const failedDependency = item.dependsOn.find((id) => ["failed", "blocked"].includes(currentById.get(id)?.state));
+    if (failedDependency) {
+      changed = true;
+      return { ...item, state: "blocked", blocker: `Dependency ${failedDependency} did not complete.` };
+    }
+    if (item.dependsOn.every((id) => currentById.get(id)?.state === "completed")) {
+      changed = true;
+      return { ...item, state: "codex", blocker: "" };
+    }
+    return item;
   });
 
   const ready = manifest.workItems
@@ -3016,7 +3132,15 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
     orchestrated ? "WorkGraph:" : null,
-    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    ...(orchestrated && (snapshot.workItems || []).some((item) => item.state === "codex")
+      ? [
+          "CodexOwnedActions:",
+          ...(snapshot.workItems || [])
+            .filter((item) => item.state === "codex")
+            .map((item) => `- ${item.id}: ${truncateText(item.objective || "Complete the Codex-owned integration action.", 360)}${item.externallyConsequential ? " Authorization and live safety checks remain mandatory." : ""}`),
+        ]
+      : []),
     "WorkerResults:",
   ].filter(Boolean);
 
@@ -3078,7 +3202,9 @@ async function orchestrateProject(args = {}) {
   const runId = `orc-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
   const workItems = decision.workItems.map((item) => ({
     ...item,
-    state: item.assignment === "codex:current" ? "codex" : "pending",
+    state: item.assignment === "codex:current"
+      ? (item.dependsOn.length ? "codex-pending" : "codex")
+      : "pending",
   }));
   const manifest = {
     version: 2,
@@ -3127,6 +3253,56 @@ async function orchestrateProject(args = {}) {
   const finalOutput = args.includePlan === true ? `${plan}\n\n${output}` : output;
   writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${finalOutput}\n`);
   return finalOutput;
+}
+
+async function runProjectManager(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const effectiveArgs = {
+    ...args,
+    workspace,
+    waitSeconds: args.waitSeconds === undefined ? 5 : args.waitSeconds,
+    includePlan: args.includePlan === true,
+  };
+  try {
+    return await orchestrateProject(effectiveArgs);
+  } catch (error) {
+    if (!/already has active orchestration run/i.test(String(error?.message || ""))) throw error;
+    const status = await readTeamRun({ workspace, waitSeconds: effectiveArgs.waitSeconds });
+    return [
+      "RunProjectManagerResult:",
+      "ReusedActiveRun: true",
+      "Reason: this workspace already has an active run; duplicate dispatch was refused.",
+      "",
+      status,
+    ].join("\n");
+  }
+}
+
+async function projectManagerStatus(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const completed = new Set((args.completedCodexItems || []).map(normalizeTaskLane).filter(Boolean));
+  const failed = new Set((args.failedCodexItems || []).map(normalizeTaskLane).filter(Boolean));
+  if (completed.size || failed.size) {
+    withFileLock(lastTeamRunJsonPath(workspace), () => {
+      const manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+      const workItems = (manifest.workItems || []).map((item) => {
+        if (item.state !== "codex") return item;
+        if (completed.has(item.id)) return { ...item, state: "completed", blocker: "", failureCategory: "" };
+        if (failed.has(item.id)) return { ...item, state: "blocked", blocker: "Current Codex could not complete this owned action." };
+        return item;
+      });
+      const acknowledged = [...completed, ...failed].filter((id) => (manifest.workItems || []).some((item) => item.id === id && item.state === "codex"));
+      const next = acknowledged.length
+        ? appendOrchestrationDecision({ ...manifest, workItems }, {
+            type: "codex-action-update",
+            completed: [...completed].filter((id) => acknowledged.includes(id)),
+            failed: [...failed].filter((id) => acknowledged.includes(id)),
+          })
+        : { ...manifest, workItems };
+      writeTeamRunManifest(workspace, next);
+    });
+  }
+  return readTeamRun({ workspace, waitSeconds: args.waitSeconds });
 }
 
 async function runTeamTask(args = {}) {
@@ -3406,10 +3582,12 @@ function createJob(args = {}) {
     if (!fs.existsSync(target)) fs.writeFileSync(target, "", "utf8");
   }
   const gitBaseline = collectGitState(workspace);
+  const baselinePaths = pathsFromGitStatus(gitBaseline.status);
   writeJsonFile(path.join(jobDir, "git-baseline.json"), {
     available: gitBaseline.available,
     status: gitBaseline.status,
     diffHash: crypto.createHash("sha256").update(gitBaseline.diff).digest("hex"),
+    pathFingerprints: collectPathFingerprints(workspace, baselinePaths),
   });
   return { workspace, jobId, jobDir, status, request };
 }
@@ -3844,6 +4022,15 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
     resourceId,
     requestedModel: String(telemetry.requestedModel || ""),
     observedModel: String(telemetry.observedModel || ""),
+    observedModels: Array.isArray(telemetry.observedModels)
+      ? telemetry.observedModels.slice(0, 8).map((row) => ({
+          model: String(row?.model || ""),
+          costUsdEquivalent: Number.isFinite(Number(row?.costUsdEquivalent)) ? Number(row.costUsdEquivalent) : null,
+          inputTokens: Number.isFinite(Number(row?.inputTokens)) ? Number(row.inputTokens) : null,
+          cacheReadInputTokens: Number.isFinite(Number(row?.cacheReadInputTokens)) ? Number(row.cacheReadInputTokens) : null,
+          outputTokens: Number.isFinite(Number(row?.outputTokens)) ? Number(row.outputTokens) : null,
+        })).filter((row) => row.model)
+      : [],
     success,
     failureCategory,
     durationMs: Number.isFinite(Number(telemetry.durationMs)) ? Number(telemetry.durationMs) : null,
@@ -3900,7 +4087,7 @@ function recordWorkerTelemetry(workspace, jobDir, args = {}, telemetry = {}) {
       observedModel: safeTelemetry.observedModel,
       lastOutcomeAt: now,
     };
-    if (alias) {
+    if (alias && success && safeTelemetry.observedModel.toLowerCase().includes(alias)) {
       claudePatch.aliasResolutions = {
         ...(currentCache.claude?.aliasResolutions || {}),
         [alias]: safeTelemetry.observedModel,
@@ -3932,12 +4119,26 @@ function parseClaudeJsonOutput(stdout) {
     }
   }
   if (!parsed || typeof parsed !== "object") return { parsed: null, resultText: text };
-  const observedModels = Object.keys(parsed.modelUsage || {});
+  const observedModels = Object.entries(parsed.modelUsage || {}).map(([model, rawUsage]) => {
+    const modelUsage = rawUsage && typeof rawUsage === "object" ? rawUsage : {};
+    const inputTokens = Number(modelUsage.input_tokens ?? modelUsage.inputTokens);
+    const cacheReadInputTokens = Number(modelUsage.cache_read_input_tokens ?? modelUsage.cacheReadInputTokens);
+    const outputTokens = Number(modelUsage.output_tokens ?? modelUsage.outputTokens);
+    const costUsdEquivalent = Number(modelUsage.cost_usd ?? modelUsage.costUSD ?? modelUsage.costUsd ?? modelUsage.cost);
+    const tokenVolume = [inputTokens, cacheReadInputTokens, outputTokens]
+      .filter(Number.isFinite)
+      .reduce((sum, value) => sum + value, 0);
+    const dominance = Number.isFinite(costUsdEquivalent) && costUsdEquivalent > 0
+      ? costUsdEquivalent * 1e12
+      : tokenVolume;
+    return { model, costUsdEquivalent, inputTokens, cacheReadInputTokens, outputTokens, dominance };
+  }).sort((a, b) => b.dominance - a.dominance || a.model.localeCompare(b.model));
   const usage = parsed.usage || {};
   return {
     parsed,
     resultText: String(parsed.result || parsed.message || "").trim(),
-    observedModel: observedModels[0] || "",
+    observedModel: observedModels[0]?.model || "",
+    observedModels: observedModels.map(({ dominance, ...row }) => row),
     durationMs: Number(parsed.duration_ms ?? parsed.durationMs),
     inputTokens: Number(usage.input_tokens ?? usage.inputTokens),
     cacheCreationInputTokens: Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens),
@@ -3948,27 +4149,96 @@ function parseClaudeJsonOutput(stdout) {
   };
 }
 
+function pathFingerprint(workspace, relativePath) {
+  const normalized = String(relativePath || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  const root = path.resolve(workspace);
+  const target = path.resolve(root, normalized);
+  if (!normalized || (target !== root && !target.startsWith(`${root}${path.sep}`))) return { exists: false, unsafe: true };
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch {
+    return { exists: false };
+  }
+  if (!stat.isFile()) return { exists: true, type: stat.isDirectory() ? "directory" : "other", size: stat.size };
+  const hash = crypto.createHash("sha256");
+  hash.update(String(stat.size));
+  const maxFullBytes = 2 * 1024 * 1024;
+  if (stat.size <= maxFullBytes) {
+    hash.update(fs.readFileSync(target));
+  } else {
+    const chunkSize = 64 * 1024;
+    const handle = fs.openSync(target, "r");
+    try {
+      const first = Buffer.alloc(Math.min(chunkSize, stat.size));
+      fs.readSync(handle, first, 0, first.length, 0);
+      hash.update(first);
+      const last = Buffer.alloc(Math.min(chunkSize, stat.size));
+      fs.readSync(handle, last, 0, last.length, Math.max(0, stat.size - last.length));
+      hash.update(last);
+    } finally {
+      fs.closeSync(handle);
+    }
+  }
+  return { exists: true, type: "file", size: stat.size, hash: hash.digest("hex") };
+}
+
+function collectPathFingerprints(workspace, relativePaths) {
+  const result = {};
+  for (const relativePath of [...new Set(relativePaths || [])].slice(0, 500)) {
+    result[relativePath] = pathFingerprint(workspace, relativePath);
+  }
+  return result;
+}
+
+function fingerprintChanged(before, after) {
+  return JSON.stringify(before || { exists: false }) !== JSON.stringify(after || { exists: false });
+}
+
+function claudeModelFamily(value) {
+  const text = String(value || "").toLowerCase();
+  return ["haiku", "sonnet", "opus", "fable"].find((family) => text.includes(family)) || "";
+}
+
+function claudeObservedModelMatches(requested, observed) {
+  const requestedText = normalizeClaudeDispatchModel(requested).toLowerCase();
+  const observedText = String(observed || "").toLowerCase();
+  if (!observedText) return true;
+  const family = claudeModelFamily(requestedText);
+  return family ? observedText.includes(family) : observedText.includes(requestedText);
+}
+
 function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
   const current = collectGitState(workspace);
   const baseline = readJsonFile(path.join(jobDir, "git-baseline.json"), null);
   const currentHash = crypto.createHash("sha256").update(current.diff).digest("hex");
   const baselinePaths = new Set(pathsFromGitStatus(baseline?.status || ""));
-  const changedDuringRun = pathsFromGitStatus(current.status).filter((file) => !baselinePaths.has(file));
+  const currentPaths = new Set(pathsFromGitStatus(current.status));
+  const allPaths = [...new Set([...baselinePaths, ...currentPaths])];
+  const baselineFingerprints = baseline?.pathFingerprints || {};
+  const currentFingerprints = collectPathFingerprints(workspace, allPaths);
+  const changedDuringRun = allPaths.filter((file) => {
+    if (Object.prototype.hasOwnProperty.call(baselineFingerprints, file)) {
+      return fingerprintChanged(baselineFingerprints[file], currentFingerprints[file]);
+    }
+    return !baselinePaths.has(file) && currentPaths.has(file);
+  });
   const reviewMutationDetected = String(mode || "").toLowerCase() === "review"
     && current.available
     && baseline?.available
-    && (baseline.status !== current.status || baseline.diffHash !== currentHash);
+    && (changedDuringRun.length > 0 || baseline.status !== current.status || baseline.diffHash !== currentHash);
 
   if (String(mode || "").toLowerCase() === "review") {
     fs.writeFileSync(
       path.join(jobDir, "changed-files.txt"),
-      reviewMutationDetected ? "UNATTRIBUTED_WORKSPACE_CHANGE_DURING_REVIEW\n" : "NONE\n",
+      reviewMutationDetected ? `UNATTRIBUTED_WORKSPACE_CHANGE_DURING_REVIEW\n${changedDuringRun.join("\n")}${changedDuringRun.length ? "\n" : ""}` : "NONE\n",
       "utf8",
     );
     fs.writeFileSync(path.join(jobDir, "diff.patch"), "", "utf8");
     return { reviewMutationDetected, reviewWorkspaceChanged: reviewMutationDetected, changedDuringRun };
   }
-  writeGitArtifacts(workspace, jobDir, current);
+  const preExistingDirty = changedDuringRun.filter((file) => baselinePaths.has(file));
+  writeWorkerGitArtifacts(workspace, jobDir, changedDuringRun, preExistingDirty);
   return { reviewMutationDetected, changedDuringRun };
 }
 
@@ -4012,6 +4282,10 @@ function safeClaudeFlag(value, name) {
 function normalizeClaudeDispatchModel(value) {
   const model = String(value || "").trim();
   return !model || model.toLowerCase() === "auto" ? "sonnet" : model;
+}
+
+function claudeIsolationFlags() {
+  return ["--safe-mode", "--no-session-persistence"];
 }
 
 function runClaudeCli(command, args, options = {}) {
@@ -4679,6 +4953,60 @@ function writeGitArtifacts(workspace, jobDir, suppliedState = null) {
   fs.writeFileSync(path.join(jobDir, "diff.patch"), state.diff, "utf8");
 }
 
+function collectFocusedGitDiff(workspace, files) {
+  const boundedFiles = [...new Set(files || [])].filter(Boolean).slice(0, 100);
+  if (!boundedFiles.length) return "";
+  let tracked = spawnSync("git", ["-C", workspace, "diff", "--no-ext-diff", "HEAD", "--", ...boundedFiles], {
+    encoding: "utf8",
+    timeout: 30000,
+    maxBuffer: 3 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (tracked.status !== 0) {
+    tracked = spawnSync("git", ["-C", workspace, "diff", "--no-ext-diff", "--", ...boundedFiles], {
+      encoding: "utf8",
+      timeout: 30000,
+      maxBuffer: 3 * 1024 * 1024,
+      windowsHide: true,
+    });
+  }
+  let combined = tracked.status === 0 ? String(tracked.stdout || "") : "";
+  const untracked = spawnSync("git", ["-C", workspace, "ls-files", "--others", "--exclude-standard", "--", ...boundedFiles], {
+    encoding: "utf8",
+    timeout: 15000,
+    windowsHide: true,
+  });
+  if (untracked.status === 0) {
+    const untrackedFiles = String(untracked.stdout || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    const untrackedDiff = buildUntrackedFilesDiff(workspace, untrackedFiles);
+    if (untrackedDiff) combined = combined ? `${combined}\n${untrackedDiff}` : untrackedDiff;
+  }
+  return redactArtifactContent(truncateText(combined, 50000));
+}
+
+function writeWorkerGitArtifacts(workspace, jobDir, changedDuringRun, preExistingDirty) {
+  const changed = [...new Set(changedDuringRun || [])];
+  if (!changed.length) {
+    fs.writeFileSync(path.join(jobDir, "changed-files.txt"), "NONE\n", "utf8");
+    fs.writeFileSync(path.join(jobDir, "diff.patch"), "", "utf8");
+    return;
+  }
+  fs.writeFileSync(path.join(jobDir, "changed-files.txt"), `${changed.join("\n")}\n`, "utf8");
+  const preDirty = new Set(preExistingDirty || []);
+  const cleanAtStart = changed.filter((file) => !preDirty.has(file));
+  const parts = [];
+  if (preDirty.size) {
+    parts.push([
+      "# AI Mobile detected changes during this worker run to paths that were already dirty.",
+      "# Their exact worker-only delta is omitted to avoid attributing the user's pre-existing edits to the worker.",
+      ...[...preDirty].map((file) => `# pre-dirty: ${file}`),
+    ].join("\n"));
+  }
+  const focused = collectFocusedGitDiff(workspace, cleanAtStart);
+  if (focused) parts.push(focused);
+  fs.writeFileSync(path.join(jobDir, "diff.patch"), parts.join("\n\n"), "utf8");
+}
+
 function sensitiveArtifactPath(file) {
   const normalized = String(file || "").replace(/\\/g, "/").toLowerCase();
   const base = path.basename(normalized);
@@ -4760,6 +5088,7 @@ function runClaudeJobWorker(args = {}) {
   const prompt = buildClaudeJobPrompt(workspace, jobId, { ...args, permissionMode });
   const cliArgs = [
     "-p",
+    ...claudeIsolationFlags(),
     "--output-format",
     "json",
     "--permission-mode",
@@ -4785,15 +5114,28 @@ function runClaudeJobWorker(args = {}) {
     claudeVersion: status.version,
     claudeModel: args.model || "",
     claudePermissionMode: permissionMode,
+    claudeIsolationMode: "safe-mode",
   });
 
   const startedMs = Date.now();
-  const result = runClaudeCli(status.command, cliArgs, {
+  let result = runClaudeCli(status.command, cliArgs, {
     cwd: workspace,
     input: prompt,
     timeout: maxMinutes * 60 * 1000,
     maxBuffer: 8 * 1024 * 1024,
   });
+  let isolationMode = "safe-mode";
+  const initialErrorText = `${result.stderr || ""} ${result.error?.message || ""}`;
+  if (result.status !== 0 && /unknown (?:option|argument).*(?:safe-mode|no-session-persistence)|(?:safe-mode|no-session-persistence).*unknown (?:option|argument)/i.test(initialErrorText)) {
+    isolationMode = "legacy-cli-fallback";
+    const legacyArgs = cliArgs.filter((value) => !claudeIsolationFlags().includes(value));
+    result = runClaudeCli(status.command, legacyArgs, {
+      cwd: workspace,
+      input: prompt,
+      timeout: maxMinutes * 60 * 1000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  }
   const descendantCleanup = result.error?.code === "ETIMEDOUT" ? terminateDescendantProcesses(process.pid) : null;
 
   const stdout = String(result.stdout || "");
@@ -4812,10 +5154,13 @@ function runClaudeJobWorker(args = {}) {
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, mode);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error) || parsedOutput.isError;
+  const modelMismatch = !executionFailed && !claudeObservedModelMatches(dispatchModel, parsedOutput.observedModel);
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(summarizeFile(resultPath, 8000), args);
-  const failed = executionFailed || !boundary.ok || !quality.ok;
+  const failed = executionFailed || modelMismatch || !boundary.ok || !quality.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
+    : modelMismatch
+      ? "model-unavailable"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`)
       : !quality.ok ? "insufficient-result" : "";
@@ -4823,6 +5168,7 @@ function runClaudeJobWorker(args = {}) {
     provider: "claude",
     requestedModel: args.model || "sonnet",
     observedModel: parsedOutput.observedModel,
+    observedModels: parsedOutput.observedModels,
     success: !failed,
     failureCategory,
     durationMs: Number.isFinite(parsedOutput.durationMs) ? parsedOutput.durationMs : Date.now() - startedMs,
@@ -4841,11 +5187,15 @@ function runClaudeJobWorker(args = {}) {
     bridgeFinalized: true,
     exitCode: result.status,
     observedModel: parsedOutput.observedModel,
+    observedModels: parsedOutput.observedModels,
+    claudeIsolationMode: isolationMode,
     failureCategory,
     descendantCleanup,
     warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : modelMismatch
+        ? `Requested Claude model ${dispatchModel}, but the dominant observed model was ${parsedOutput.observedModel || "unknown"}.`
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Claude Code exited non-zero.", 1000) : "",
@@ -6031,12 +6381,36 @@ function runSelfTest() {
     workItems: [{ id: "reliability-review", objective: "Review current project health after repeated platform timeouts", kind: "verification-review", complexity: "low", readOnly: true }],
   }, reliabilityContext);
   assert(reliabilityDecision.workItems[0]?.assignment === "claude:sonnet", "repeated recent platform failures route broad work to the proven alternative");
+  const consequentialDecision = buildResourceOrchestrationDecision({
+    goal: "Start controlled real job submissions",
+    workItems: [{ id: "submit-real-jobs", objective: "Submit real job applications through the live harness", kind: "operation", complexity: "high", readOnly: false }],
+  }, fakeContext);
+  assert(consequentialDecision.workItems[0]?.assignment === "codex:current" && consequentialDecision.workItems[0]?.externallyConsequential === true, "externally consequential operations remain owned by the current Codex session");
+  const consequentialDefault = buildResourceOrchestrationDecision({ goal: "Start controlled real job submissions through the approved harness" }, fakeContext);
+  assert(
+    consequentialDefault.workItems.find((item) => item.id === "goal-context")?.readOnly === true
+      && consequentialDefault.workItems.find((item) => item.id === "goal-implementation")?.assignment === "codex:current"
+      && consequentialDefault.workItems.find((item) => item.id === "goal-implementation")?.dependsOn.includes("goal-context")
+      && consequentialDefault.workItems.find((item) => item.id === "independent-verification")?.readOnly === true,
+    "a consequential goal delegates preflight and verification but gates the real operation to Codex",
+  );
   assert([1, 2, 3, 4].map(resultBulletLimitForComplexity).join(",") === "5,6,8,10", "result bullet budgets scale with work-item complexity");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
+  assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex-pending" }] }) === "running", "dependency-gated Codex actions keep the project run active until they become ready");
   assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
   assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
   const parsedClaude = parseClaudeJsonOutput(JSON.stringify({ result: "ok", duration_ms: 12, usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { "claude-sonnet-5": {} } }));
   assert(parsedClaude.resultText === "ok" && parsedClaude.observedModel === "claude-sonnet-5", "Claude JSON output yields compact result and per-run model telemetry");
+  const mixedClaude = parseClaudeJsonOutput(JSON.stringify({
+    result: "ok",
+    modelUsage: {
+      "claude-haiku-4-5-20251001": { costUSD: 0.001, inputTokens: 1200, outputTokens: 10 },
+      "claude-sonnet-5": { costUSD: 0.63, inputTokens: 50, cacheReadInputTokens: 1100000, outputTokens: 6300 },
+    },
+  }));
+  assert(mixedClaude.observedModel === "claude-sonnet-5" && mixedClaude.observedModels.length === 2, "Claude telemetry selects the dominant requested model instead of a background helper model");
+  assert(claudeObservedModelMatches("sonnet", mixedClaude.observedModel) && !claudeObservedModelMatches("fable", mixedClaude.observedModel), "Claude model-family verification rejects a dominant model mismatch");
+  assert(claudeIsolationFlags().join(",") === "--safe-mode,--no-session-persistence", "Claude workers default to isolated low-context execution flags");
   const flattenedGraph = buildGoalWorkGraph({ goal: "review", workItems: [[{ id: "one", objective: "first" }, { id: "two", objective: "second" }]] });
   assert(flattenedGraph.length === 2, "nested PowerShell work-item arrays are normalized defensively");
   assert(sensitiveArtifactPath("config/.env.production"), "sensitive untracked artifact paths are withheld");
@@ -6068,6 +6442,21 @@ function runSelfTest() {
     fs.writeFileSync(samplePath, "after\n", "utf8");
     const changed = finalizeWorkerGitArtifacts(workspace, created.jobDir, "review");
     assert(changed.reviewMutationDetected === true, "review workspace mutation is detected");
+
+    const writerJob = createJob({ goal: "worker attribution self-test", workspace, mode: "patch", worker: "self-test" });
+    const workerOnlyPath = path.join(workspace, "worker-only.txt");
+    fs.writeFileSync(workerOnlyPath, "worker change\n", "utf8");
+    const writerOutcome = finalizeWorkerGitArtifacts(workspace, writerJob.jobDir, "patch");
+    const writerChanged = fs.readFileSync(path.join(writerJob.jobDir, "changed-files.txt"), "utf8");
+    assert(writerOutcome.changedDuringRun.length === 1 && writerOutcome.changedDuringRun[0] === "worker-only.txt" && !writerChanged.includes("sample.txt"), "writer artifacts exclude unrelated dirty files that predated the worker");
+
+    const preDirtyPath = path.join(workspace, "pre-dirty.txt");
+    fs.writeFileSync(preDirtyPath, "user state\n", "utf8");
+    const preDirtyJob = createJob({ goal: "pre-dirty attribution self-test", workspace, mode: "patch", worker: "self-test" });
+    fs.writeFileSync(preDirtyPath, "worker state\n", "utf8");
+    const preDirtyOutcome = finalizeWorkerGitArtifacts(workspace, preDirtyJob.jobDir, "patch");
+    const preDirtyDiff = fs.readFileSync(path.join(preDirtyJob.jobDir, "diff.patch"), "utf8");
+    assert(preDirtyOutcome.changedDuringRun.includes("pre-dirty.txt") && preDirtyDiff.includes("exact worker-only delta is omitted"), "changes to a pre-dirty path are detected without misattributing its full existing diff");
 
     const compactJob = createJob({ goal: "compact result self-test", workspace, mode: "review", worker: "self-test", maxResultBullets: 5 });
     fs.writeFileSync(path.join(compactJob.jobDir, "result.md"), Array.from({ length: 8 }, (_, index) => `- result ${index + 1}`).join("\n"), "utf8");
@@ -6325,6 +6714,18 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "run-project-manager") {
+        const text = await runProjectManager(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
+      if (name === "project-manager-status") {
+        const text = await projectManagerStatus(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "orchestrator-profile") {
         const values = params?.arguments || {};
         const profile = String(values.action || "get").toLowerCase() === "set"
@@ -6504,7 +6905,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -6528,6 +6929,8 @@ if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-effi
       return `AiMobileContextCapsule:\nPath: ${result.outputPath}\nHash: ${result.capsule.capsuleHash}\nReused: ${result.reused === true}\nWorkItems: ${result.capsule.workItems.length}\nTaskCapsules: ${Object.keys(result.taskCapsules || {}).length}\nTranscriptIncluded: false`;
     },
     "project-manager-plan-cli": buildProjectManagerPlan,
+    "run-project-manager-cli": runProjectManager,
+    "project-manager-status-cli": projectManagerStatus,
     "orchestrator-profile-cli": async (value) => formatOrchestratorProfile(String(value.action || "get").toLowerCase() === "set" ? writeProfile(value) : readProfile()),
     "resource-inventory-cli": getResourceInventory,
     "orchestrate-project-cli": orchestrateProject,

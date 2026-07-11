@@ -19,6 +19,9 @@
 - The current Codex session owns merge decisions and works on a non-duplicated critical-path item while workers run.
 - Do not add a paraphrasing meta-router. Pass the capsule and source artifacts directly; merge once.
 - Launch later stages only after dependencies complete.
+- Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
+- Mark completed or blocked current-Codex items through `project-manager-status` so dependent CLI work advances without guessing.
+- Keep externally consequential operations with the current Codex session even when external workers are healthier or cheaper.
 
 ## Result Gate
 
@@ -39,4 +42,4 @@ When a result is close but incomplete, send one narrow correction. When failure 
 
 ## User Escalation
 
-Stop and ask before irreversible changes, production actions, spending/billing changes, real submissions, destructive cleanup, or a choice whose ambiguity materially changes the result.
+Stop and ask before irreversible changes, production actions, spending/billing changes, real submissions, destructive cleanup, or a choice whose ambiguity materially changes the result. When authorization is already explicit, the current Codex session performs the bounded operation and records its work-item outcome; it never delegates the external effect itself.

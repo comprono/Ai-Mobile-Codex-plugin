@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `run-project-manager` and `project-manager-status` as the direct, idempotent execution/continuation path, removing manual plan JSON reads and provider command reconstruction from normal use.
+- Added execution-class routing that keeps real submissions, sends, deploys, purchases, destructive actions, and other external effects under the current Codex session's authorization and live-state checks.
+- Isolated Claude jobs with safe-mode, non-persistent sessions by default and corrected dominant-model telemetry so background Haiku calls do not masquerade as the requested Sonnet/Opus/Fable worker.
+- Changed worker Git artifacts to attribute only paths changed during the worker run; pre-dirty paths are detected without copying the user's full existing diff into the worker patch.
 - Added `project-manager-plan`, which coordinates native Codex workers and external CLI workers through a dependency-aware action manifest while the current Codex session remains PM, active contributor, integrator, and verifier.
 - Added privacy-bounded `codex-usage` telemetry for current five-hour/weekly agentic-use windows and numeric session totals; transcript fields, paths, and thread ids are discarded and undocumented schema changes fail closed.
 - Added transcript-free context capsules with bounded work-item budgets, workspace-only file fingerprints, stable hashes, lifecycle gates, and durable continuity under `.antigravity-bridge/orchestrator/`.
