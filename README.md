@@ -17,10 +17,10 @@ For a nontrivial goal, mention `@ai-mobile` in the project chat. The skill calls
 PowerShell fallback:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<complete outcome>" -Workspace "<path>" -Mode patch -HorizonHours 5
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<complete outcome>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
 ```
 
-The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan.
+The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. A normal cycle is finite: the default run deadline is 20 minutes, each external worker is capped at 6 minutes or less, and a new goal or safety constraint interrupts stale work instead of waiting behind it.
 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 
@@ -57,7 +57,7 @@ Workers write compact artifacts under:
 
 Codex reads those artifacts instead of watching full chats, logs, or source dumps. `status.json` is bridge-owned: worker-written terminal state is ignored until the bridge has finalized the result, telemetry, and execution summary. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
 
-Result budgets scale with complexity: low 5 bullets, medium 6, high 8, and critical 10. Aggregate team readback is capped independently; use `read-job` only when a failed or partial lane needs deeper evidence. Worker telemetry records prompt/result character counts, and Claude telemetry also records reported token usage.
+Result budgets scale with complexity: low 5 bullets, medium 6, high 8, and critical 10. Aggregate team readback is capped independently; use `read-job` only when a failed or partial lane needs deeper evidence. Worker telemetry records prompt/result character counts, and Claude telemetry also records reported token usage. Claude workers default to a 12,000 output-token ceiling and a per-worker provider budget; exceeding either fails closed without launching a second expensive worker.
 
 ## Install
 
@@ -66,7 +66,7 @@ git clone https://github.com/comprono/Ai-Mobile-Codex-plugin.git "$env:USERPROFI
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
 ```
 
-Restart Codex after installation so the skill and MCP tools are loaded. After that, mention `@ai-mobile` with the project goal; Codex should call `project-manager-plan`, execute dependency-ready host/external actions, and avoid asking you to choose models manually.
+Restart Codex after installation so the skill and MCP tools are loaded. After that, mention `@ai-mobile` with the project goal; Codex should call `run-project-manager`, execute dependency-ready host/external actions, and avoid asking you to choose models manually.
 
 Requirements:
 
@@ -92,6 +92,12 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 # Goal-driven orchestration
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-status -Workspace "<path>" -WaitSeconds 30
+
+# Add a new safety constraint now; active workers are interrupted by default
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-status -Workspace "<path>" -AddConstraintsJson '["Do not access email."]' -SteeringDirective "Do not access email" -InterruptRunningWorkers $true
+
+# Explicitly permit Antigravity CLI for this run (it may require browser sign-in)
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -AllowAntigravityCli $true
 
 # Plan-only routing diagnostic
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<goal>" -Workspace "<path>" -HorizonHours 5
@@ -123,7 +129,13 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 ## Operating Rules
 
 - Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity.
-- Use `run-project-manager` as the one-call default. It is idempotent for an active workspace run and avoids manual plan JSON reads or provider command reconstruction.
+- Use `run-project-manager` as the one-call default. It reuses only the same active goal and run contract; changed constraints, work graph, gates, routing authorization, or budgets trigger a bounded replacement. Same-goal constraints, gates, and work graph carry across stopped/completed runs, so earlier boundaries survive later steering without being restated.
+- `ready-for-codex` is still active until final verification or explicit termination. A changed goal stops that run first, and a replacement is refused if any old worker process cannot be confirmed stopped.
+- Complex default implementations wait for discovery evidence before writer dispatch so the orchestrator can infer a narrow file boundary instead of granting repository-wide write scope.
+- A five-hour capacity horizon is planning context, not permission for a five-hour command. Runs default to a 20-minute deadline and external workers to 6 minutes or less. Override those bounds only for a concrete reason.
+- Pass user constraints, acceptance criteria, and verification at the top level. New constraints or a changed goal cancel incompatible active workers immediately and are written into the next context capsule.
+- Browser profiles, cookies, saved credentials, account selection, email/SMS messages, and OAuth flows are protected state. Workers must stop at sign-in, CAPTCHA, email, SMS, or authorization gates unless the user explicitly authorizes that exact action.
+- Live session, login, cookie, account, profile, credential, OAuth, email/SMS, and CAPTCHA checks remain current-Codex actions. CLI workers may review bounded source code about those systems but do not inspect the user's live protected state.
 - The current Codex session is project manager, goal owner, critic, active narrow contributor, integrator, and final verifier. Native and external workers receive bounded work items and compact artifact contracts.
 - Real submissions, sends, deploys, purchases, destructive actions, and other external effects remain current-Codex actions with authorization and live-state checks. CLI workers may analyze, patch, or verify them but cannot silently execute them.
 - Current-runtime analysis is automatically sequenced after the relevant live Codex control action. Downstream workers receive compact dependency results and verified Codex evidence instead of rediscovering state from scratch.
@@ -132,7 +144,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Project affinity is learned only from successful worker outcomes. Timeouts and failed work lower reliability instead of making that resource more likely for the same task kind.
 - Repeated recent failures without a platform success move broad work to a proven alternative for the five-hour horizon; micro tasks remain eligible for cheap bounded workers.
 - Reserve Flash Low for tightly file-bounded micro tasks; prefer Flash Medium for broader repository review or project-health inspection.
-- Use Antigravity CLI before desktop UI when visible project/chat state is not required.
+- Use Antigravity CLI before desktop UI only when the run explicitly permits it. The CLI may open browser authorization when its local token is stale, so automatic routing treats it as authorization-required by default.
 - Use Antigravity desktop only for visible project/chat/model/composer workflows.
 - Use Claude Code for local code, review, patch, and test lanes when UI context is not required.
 - Claude workers use isolated `--safe-mode` and non-persistent sessions by default, with a compatibility fallback for older CLIs. Dominant per-model usage determines the observed model, so background helper-model calls do not corrupt Sonnet/Opus/Fable routing.
@@ -144,6 +156,8 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
 - Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
 - Keep worker prompts bounded and results complexity-sized. Do not stream worker narration or repeatedly read successful job artifacts into Codex.
+- External writer lanes require an explicit file boundary or a narrow boundary inferred from verified dependency evidence. If neither exists, the current Codex session takes over instead of giving a worker the whole repository.
+- Do not launch a provider worker merely to review a low-complexity operation that the current Codex session must perform and verify itself.
 - Worker change artifacts include only paths changed during that worker run. A path already dirty before launch is detected but its full pre-existing diff is never attributed to the worker.
 - Give each nontrivial work item concise acceptance criteria and focused verification checks. Load only the relevant context, keep one writer per workspace, and merge independent reports once in Codex.
 - Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
@@ -168,7 +182,7 @@ AI Mobile follows the progressive-disclosure and orchestration ideas in [Addy Os
 
 ## Safety
 
-This is a local bridge. It does not patch Antigravity internals, bypass model quotas, commit runtime tokens, or read private chats unless the user asks for that specific context.
+This is a local bridge. It does not patch Antigravity internals, bypass model quotas, commit runtime tokens, or read private chats unless the user asks for that specific context. By default it also forbids opening OAuth flows, reading email or SMS, clearing cookies, switching accounts, or changing the user's browser profile. Those actions require explicit, task-specific authorization.
 
 Before publishing:
 

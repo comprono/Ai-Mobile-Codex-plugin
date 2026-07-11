@@ -26,6 +26,9 @@ param(
   [string] $ModelPolicyReviewAfter = "",
   [string] $WorkItemsJson = "",
   [string] $WorkItemsFile = "",
+  [string] $ConstraintsJson = "",
+  [string] $AcceptanceCriteriaJson = "",
+  [string] $VerificationJson = "",
   [string] $CompletedCodexItems = "",
   [string] $FailedCodexItems = "",
   [string] $TakeoverCodexItems = "",
@@ -33,6 +36,11 @@ param(
   [object] $ProjectVerified = $false,
   [object] $ProjectVerificationFailed = $false,
   [string] $ProjectVerificationSummary = "",
+  [string] $AddConstraintsJson = "",
+  [string] $SteeringDirective = "",
+  [object] $InterruptRunningWorkers = $null,
+  [object] $StopRun = $false,
+  [string] $StopReason = "",
   [string] $ModelPreference = "auto",
   [string] $AgyModel = "",
   [string] $AgyProject = "",
@@ -45,7 +53,7 @@ param(
   [string] $ClaudeEffort = "",
   [string] $ClaudePermissionMode = "",
   [string] $ClaudeMaxBudgetUsd = "",
-  [int] $ClaudeMaxMinutes = 10,
+  [int] $ClaudeMaxMinutes = 6,
   [string] $CursorModel = "",
   [object] $CursorChat = $false,
   [object] $CursorNewWindow = $false,
@@ -61,8 +69,13 @@ param(
   [object] $HasWorkspaceWork = $true,
   [object] $IncludeCursor = $false,
   [object] $AllowPremiumModels = $false,
+  [object] $AllowAntigravityCli = $false,
   [object] $IncludePlan = $false,
   [object] $RefreshInventory = $false,
+  [int] $RunDeadlineMinutes = 20,
+  [int] $MaxWorkerMinutes = 6,
+  [int] $MaxClaudeOutputTokens = 12000,
+  [double] $MaxClaudeBudgetUsd = 0.75,
   [int] $WaitSeconds = 30,
   [int] $EstimatedCodexInputTokens = 2000
 )
@@ -1136,6 +1149,7 @@ function Invoke-TeamCommand {
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
   $allowPremiumModelsValue = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
+  $allowAntigravityCliValue = ConvertTo-BooleanValue -Value $AllowAntigravityCli -Default $false
   $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
   $refreshInventoryValue = ConvertTo-BooleanValue -Value $RefreshInventory -Default $false
   $hostCodexAvailableValue = ConvertTo-BooleanValue -Value $HostCodexAvailable -Default $false
@@ -1160,7 +1174,12 @@ function Invoke-TeamCommand {
     agyModel = $AgyModel
     claudeModel = $ClaudeModel
     allowPremiumModels = $allowPremiumModelsValue
+    allowAntigravityCli = $allowAntigravityCliValue
     includeCursor = $includeCursorValue
+    runDeadlineMinutes = $RunDeadlineMinutes
+    maxWorkerMinutes = $MaxWorkerMinutes
+    maxClaudeOutputTokens = $MaxClaudeOutputTokens
+    maxClaudeBudgetUsd = $MaxClaudeBudgetUsd
     includePlan = $includePlanValue
     refreshInventory = $refreshInventoryValue
     refresh = $refreshInventoryValue
@@ -1194,6 +1213,19 @@ function Invoke-TeamCommand {
       $payloadObject.workItems = @($parsedWorkItems | ForEach-Object { $_ })
     } catch {
       throw "Work items must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
+  foreach ($jsonList in @(
+    @{ Name = "constraints"; Value = $ConstraintsJson },
+    @{ Name = "acceptanceCriteria"; Value = $AcceptanceCriteriaJson },
+    @{ Name = "verification"; Value = $VerificationJson }
+  )) {
+    if ([string]::IsNullOrWhiteSpace([string]$jsonList.Value)) { continue }
+    try {
+      $parsed = ConvertFrom-Json -InputObject ([string]$jsonList.Value)
+      $payloadObject[$jsonList.Name] = @($parsed | ForEach-Object { [string]$_ })
+    } catch {
+      throw "$($jsonList.Name) must be a valid JSON array. $($_.Exception.Message)"
     }
   }
   $payload = [PSCustomObject]$payloadObject | ConvertTo-Json -Depth 8 -Compress
@@ -1336,6 +1368,18 @@ function Invoke-BridgeJobCommand {
   }
   $projectVerifiedValue = ConvertTo-BooleanValue -Value $ProjectVerified -Default $false
   $projectVerificationFailedValue = ConvertTo-BooleanValue -Value $ProjectVerificationFailed -Default $false
+  $addConstraintValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($AddConstraintsJson)) {
+    try {
+      $addConstraintValues = @(ConvertFrom-Json -InputObject $AddConstraintsJson | ForEach-Object { [string]$_ })
+    } catch {
+      throw "AddConstraintsJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
+  $interruptRunningWorkersValue = $null
+  if ($null -ne $InterruptRunningWorkers) {
+    $interruptRunningWorkersValue = ConvertTo-BooleanValue -Value $InterruptRunningWorkers -Default $true
+  }
   $payload = [PSCustomObject]@{
     goal = $Goal
     workspace = $Workspace
@@ -1357,6 +1401,11 @@ function Invoke-BridgeJobCommand {
     projectVerified = $projectVerifiedValue
     projectVerificationFailed = $projectVerificationFailedValue
     projectVerificationSummary = $ProjectVerificationSummary
+    addConstraints = $addConstraintValues
+    steeringDirective = $SteeringDirective
+    interruptRunningWorkers = $interruptRunningWorkersValue
+    stopRun = ConvertTo-BooleanValue -Value $StopRun -Default $false
+    stopReason = $StopReason
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-bridge-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
@@ -1409,6 +1458,7 @@ function Invoke-ClaudeBridgeCommand {
     effort = $ClaudeEffort
     permissionMode = $ClaudePermissionMode
     maxBudgetUsd = $ClaudeMaxBudgetUsd
+    maxOutputTokens = $MaxClaudeOutputTokens
     start = $startValue
     jobId = $JobId
     maxMinutes = $ClaudeMaxMinutes
@@ -1460,7 +1510,7 @@ function Invoke-AgyBridgeCommand {
     printTimeout = $AgyPrintTimeout
     start = $startValue
     jobId = $JobId
-    maxMinutes = 30
+    maxMinutes = $MaxWorkerMinutes
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-agy-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
@@ -1508,7 +1558,7 @@ function Invoke-CursorBridgeCommand {
     reuseWindow = $reuseWindowValue
     start = $startValue
     jobId = $JobId
-    maxMinutes = 30
+    maxMinutes = $MaxWorkerMinutes
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-cursor-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))

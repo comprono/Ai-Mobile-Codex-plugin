@@ -33,10 +33,12 @@ Each worker receives a derived `task-capsules/<workItemId>.json` file containing
 - ownership/file boundary;
 - capsule path;
 - acceptance and verification gates;
+- current user constraints and protected browser/account boundaries;
 - a complexity-sized result limit;
 - an explicit no-delegation rule.
+- for discovery that unlocks a writer, exact proposed workspace-relative file targets wrapped in backticks for deterministic boundary enforcement.
 
-Workers read relevant local files directly. Never paste full source trees, logs, screenshots, chats, credentials, cookies, or parent transcripts.
+Workers read relevant local files directly. Never paste full source trees, logs, screenshots, chats, credentials, cookies, email/SMS verification content, OAuth tokens, saved browser credentials, or parent transcripts.
 
 ## Freshness
 

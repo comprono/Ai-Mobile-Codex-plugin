@@ -232,6 +232,11 @@ const tools = [
         currentCodexModel: { type: "string", description: "Current caller model label when visible." },
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
+        allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
+        runDeadlineMinutes: { type: "number", description: "Hard wall-clock deadline for one finite orchestration cycle.", default: 20 },
+        maxWorkerMinutes: { type: "number", description: "Maximum runtime for any one external worker.", default: 6 },
+        maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
+        maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker, expressed as provider-reported USD equivalent.", default: 0.75 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes.", default: false },
       },
       required: ["goal", "workspace"],
@@ -240,13 +245,16 @@ const tools = [
   },
   {
     name: "run-project-manager",
-    description: "Default AI Mobile call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, keep externally consequential actions with the current Codex session, and return one compact operating result. Reuses an active run instead of duplicating it.",
+    description: "Default AI Mobile call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, keep externally consequential actions with the current Codex session, and return one compact operating result. Reuses only the same active goal instead of duplicating it.",
     inputSchema: {
       type: "object",
       properties: {
         goal: { type: "string", description: "Complete project outcome." },
         workspace: { type: "string", description: "Local project workspace shared by the team." },
         workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Optional dependency-aware work graph." },
+        constraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "User and safety constraints propagated to every worker." },
+        acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        verification: { type: "array", items: { type: "string" }, maxItems: 12 },
         taskSplit: { type: "string", description: "Legacy compatibility hint. Prefer workItems for nontrivial goals." },
         horizonHours: { type: "number", description: "Capacity/reset planning horizon.", default: 5 },
         codexModel: { type: "string", description: "Caller-visible current Codex model label.", default: "current Codex session" },
@@ -258,7 +266,12 @@ const tools = [
         agyModel: { type: "string", description: "Optional Antigravity model override.", default: "auto" },
         claudeModel: { type: "string", description: "Optional Claude Code model override.", default: "auto" },
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside automatic policy.", default: false },
+        allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
+        runDeadlineMinutes: { type: "number", description: "Hard wall-clock deadline for this finite run.", default: 20 },
+        maxWorkerMinutes: { type: "number", description: "Maximum runtime for any one external worker.", default: 6 },
+        maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
+        maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker.", default: 0.75 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns a dry plan.", default: true },
         waitSeconds: { type: "number", description: "Short bounded wait before returning resumable status.", default: 5 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes before assignment.", default: false },
@@ -298,6 +311,11 @@ const tools = [
         projectVerified: { type: "boolean", description: "Mark this finite orchestration cycle complete only after every work item completed and final project verification passed.", default: false },
         projectVerificationFailed: { type: "boolean", description: "Record a failed final verification after all work items finish, preserving the blocker instead of permitting completion.", default: false },
         projectVerificationSummary: { type: "string", description: "Required compact evidence when final verification is recorded as passed or failed." },
+        addConstraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "New user constraints to persist before any continuation work." },
+        steeringDirective: { type: "string", description: "Latest user steering instruction or safety correction." },
+        interruptRunningWorkers: { type: "boolean", description: "Cancel running external workers before applying new steering. Defaults true when constraints or a directive are supplied." },
+        stopRun: { type: "boolean", description: "Stop the finite orchestration cycle and cancel external workers.", default: false },
+        stopReason: { type: "string", description: "Required reason when stopping the run." },
       },
       required: ["workspace"],
       additionalProperties: false,
@@ -374,6 +392,9 @@ const tools = [
             additionalProperties: false,
           },
         },
+        constraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "User and safety constraints propagated to every worker." },
+        acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        verification: { type: "array", items: { type: "string" }, maxItems: 12 },
         taskSplit: { type: "string", description: "Legacy compatibility hint. Prefer workItems for nontrivial goals." },
         horizonHours: { type: "number", description: "Capacity and continuity decision horizon.", default: 5 },
         codexModel: { type: "string", description: "Caller-visible current Codex model label.", default: "current Codex session" },
@@ -385,7 +406,12 @@ const tools = [
         agyModel: { type: "string", description: "Optional Antigravity model override. Auto lets the orchestrator choose by capability and capacity.", default: "auto" },
         claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the orchestrator choose while routine work defaults to Sonnet.", default: "auto" },
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside the automatic policy. Routine work stays off premium models.", default: false },
+        allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
+        runDeadlineMinutes: { type: "number", description: "Hard wall-clock deadline for this finite run.", default: 20 },
+        maxWorkerMinutes: { type: "number", description: "Maximum runtime for any one external worker.", default: 6 },
+        maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
+        maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker.", default: 0.75 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
         waitSeconds: { type: "number", description: "Bounded wait for compact worker artifacts.", default: 30 },
         refreshInventory: { type: "boolean", description: "Force fresh CLI probes before assigning work.", default: false },
@@ -506,7 +532,7 @@ const tools = [
         sandbox: { type: "boolean", description: "Run Antigravity CLI with terminal sandbox restrictions enabled.", default: true },
         printTimeout: { type: "string", description: "Antigravity CLI print timeout, such as 5m or 30s.", default: "5m" },
         start: { type: "boolean", description: "Set false to create the job without starting Antigravity CLI.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Antigravity CLI worker may run.", default: 30 },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Antigravity CLI worker may run.", default: 6 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -537,8 +563,9 @@ const tools = [
         fallbackModel: { type: "string", description: "Optional Claude Code fallback model alias or id." },
         permissionMode: { type: "string", description: "Claude Code permission mode. Defaults to plan for review and acceptEdits otherwise." },
         maxBudgetUsd: { type: "number", description: "Optional Claude Code maximum spend for this job." },
+        maxOutputTokens: { type: "number", description: "Fail the worker result when Claude reports output above this token budget." },
         start: { type: "boolean", description: "Set false to create the job and payload without starting Claude Code.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Claude worker may run.", default: 10 },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Claude worker may run.", default: 6 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -575,7 +602,7 @@ const tools = [
         nextStep: { type: "string", description: "Specific next action.", default: "Inspect the relevant files and write compact artifacts." },
         model: { type: "string", description: "Optional Cursor agent model id or alias." },
         start: { type: "boolean", description: "Set false to create the job without starting Cursor agent.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Cursor worker may run.", default: 30 },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Cursor worker may run.", default: 6 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -1683,6 +1710,7 @@ function agyModelProfile(model) {
   let quality = 68;
   let speed = 75;
   let cost = 85;
+  let premium = false;
   if (/flash/.test(text)) {
     capabilities.add("fast-analysis");
     capabilities.add("testing");
@@ -1698,6 +1726,7 @@ function agyModelProfile(model) {
     quality = /opus/.test(text) ? 94 : /sonnet/.test(text) ? 90 : /high/.test(text) ? 87 : 83;
     speed = /opus/.test(text) ? 45 : /sonnet/.test(text) ? 58 : 65;
     cost = /opus/.test(text) ? 35 : /sonnet/.test(text) ? 50 : 60;
+    premium = /opus/.test(text);
   }
   if (/gpt-oss/.test(text)) {
     capabilities.add("implementation");
@@ -1707,7 +1736,7 @@ function agyModelProfile(model) {
     speed = 70;
     cost = 80;
   }
-  return { capabilities: [...capabilities], quality, speed, cost };
+  return { capabilities: [...capabilities], quality, speed, cost, premium };
 }
 
 function claudeModelProfile(model) {
@@ -1856,21 +1885,26 @@ function buildResourceCandidates(args = {}, context = {}) {
     const measured = liveAgyEvidence(context, model);
     const availability = candidateAvailability(context.agyFound, true, outcome, measured);
     const profile = agyModelProfile(model);
+    const autoDispatchAllowed = args.allowAntigravityCli === true
+      || (String(args.agyModel || "auto").toLowerCase() !== "auto" && String(args.agyModel || "").trim() !== "");
     candidates.push({
       id,
       platform: "antigravity",
       team: "Antigravity CLI",
       model: model.id,
       displayName: model.displayName,
-      dispatchable: true,
-      state: availability.state,
-      evidence: outcome.lastSuccessAt ? "observed-run" : measured.evidence,
+      dispatchable: autoDispatchAllowed,
+      state: autoDispatchAllowed ? availability.state : "authorization-required",
+      evidence: autoDispatchAllowed
+        ? (outcome.lastSuccessAt ? "observed-run" : measured.evidence)
+        : "explicit-cli-authorization-required",
       remainingPercent: measured.remainingPercent,
       resetAt: availability.resetAt,
       capabilities: profile.capabilities,
       quality: profile.quality,
       speed: profile.speed,
       cost: profile.cost,
+      premium: profile.premium,
       role: /flash/i.test(model.displayName) ? "fast scout, research, drafting, and low-cost validation" : "reasoning, review, and bounded implementation",
       outcome: compactOutcome(outcome),
       platformReliability: platformReliability.antigravity,
@@ -2331,6 +2365,50 @@ function normalizeComplexity(value, fallback = "medium") {
   return ["low", "medium", "high", "critical"].includes(normalized) ? normalized : fallback;
 }
 
+function boundedTextList(values, maxItems = 12, maxChars = 500) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => truncateText(redactArtifactContent(String(value || "").trim()), maxChars))
+    .filter(Boolean))].slice(0, maxItems);
+}
+
+function defaultOperationalBoundaries() {
+  return [
+    "Do not install connectors, request OAuth consent, or open authentication flows unless the user explicitly authorized that integration in this run.",
+    "Protect browser and account state: do not log out, clear cookies or storage, switch or create profiles, change the signed-in account, or read saved credentials.",
+    "Use only task-owned automation tabs. Stop at CAPTCHA, sign-in codes, emailed or SMS verification, and other human authentication gates; never access private messages to obtain codes.",
+    "Externally consequential operations remain current-Codex actions with live preflight, bounded scope, and terminal evidence.",
+  ];
+}
+
+function normalizedRunConstraints(args = {}) {
+  return boundedTextList([
+    ...defaultOperationalBoundaries(),
+    ...(Array.isArray(args.constraints) ? args.constraints : []),
+  ], 20, 600);
+}
+
+function normalizedRunControls(args = {}) {
+  const runDeadlineMinutes = Math.max(2, Math.min(120, Number(args.runDeadlineMinutes ?? 20)));
+  return {
+    runDeadlineMinutes,
+    maxWorkerMinutes: Math.max(1, Math.min(Math.min(20, runDeadlineMinutes), Number(args.maxWorkerMinutes ?? 6))),
+    maxClaudeOutputTokens: Math.max(2000, Math.min(50000, Number(args.maxClaudeOutputTokens ?? 12000))),
+    maxClaudeBudgetUsd: Math.max(0.1, Math.min(10, Number(args.maxClaudeBudgetUsd ?? 0.75))),
+  };
+}
+
+function workerMinutesFor(manifest, complexityRank, platform) {
+  const desired = platform === "antigravity"
+    ? ({ 1: 2, 2: 3, 3: 4, 4: 5 })[complexityRank]
+    : ({ 1: 2, 2: 3, 3: 5, 4: 6 })[complexityRank];
+  return Math.max(1, Math.min(Number(manifest.maxWorkerMinutes || 6), desired || 3));
+}
+
+function claudeBudgetFor(manifest, complexityRank) {
+  const desired = ({ 1: 0.2, 2: 0.35, 3: 0.55, 4: 0.75 })[complexityRank] || 0.35;
+  return Math.max(0.1, Math.min(Number(manifest.maxClaudeBudgetUsd || 0.75), desired));
+}
+
 function capabilitiesForWorkItem(kind, objective) {
   const text = `${kind || ""} ${objective || ""}`.toLowerCase();
   const capabilities = new Set(["general-reasoning"]);
@@ -2438,7 +2516,8 @@ function buildGoalWorkGraph(args = {}) {
   if (!rawItems.length) {
     const reviewOnly = String(args.mode || "patch").toLowerCase() === "review";
     const consequentialGoal = !reviewOnly && isExternallyConsequential(goal);
-    if (fallbackComplexity !== "low" || consequentialGoal) {
+    const needsGoalContext = fallbackComplexity !== "low" || consequentialGoal;
+    if (needsGoalContext) {
       rawItems.push({
         id: "goal-context",
         objective: `Inspect the project and identify the smallest high-leverage path to: ${goal}`,
@@ -2454,7 +2533,7 @@ function buildGoalWorkGraph(args = {}) {
       kind: reviewOnly ? "review" : "implementation-debugging",
       complexity: fallbackComplexity,
       readOnly: reviewOnly,
-      dependsOn: consequentialGoal ? ["goal-context"] : [],
+      dependsOn: !reviewOnly && needsGoalContext ? ["goal-context"] : [],
       priority: 95,
     });
     if (!reviewOnly) {
@@ -2542,11 +2621,15 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
     || /security|incident|production|migration|release|irreversible|adversarial/.test(`${item.kind} ${item.objective}`.toLowerCase());
   const isFable = candidate.platform === "claude" && /fable/i.test(`${candidate.model} ${candidate.displayName}`);
   const fableRequested = normalizedModelText(args.claudeModel || "").includes("fable");
+  const agyPremiumRequested = candidate.platform === "antigravity"
+    && String(args.agyModel || "auto").toLowerCase() !== "auto"
+    && normalizedModelText(`${candidate.model} ${candidate.displayName}`).includes(normalizedModelText(args.agyModel));
   if (isFable) {
     if (args.allowPremiumModels !== true && !fableRequested && !capacityOpportunity) score -= 1000;
-  } else if (candidate.platform === "claude" && candidate.premium && args.allowPremiumModels !== true && !premiumWork) {
+  } else if (candidate.premium && args.allowPremiumModels !== true && !premiumWork && !agyPremiumRequested) {
     score -= 1000;
   }
+  if (candidate.premium && candidate.remainingPercent === null && args.allowPremiumModels !== true && !agyPremiumRequested) score -= 1000;
   if (capacityOpportunity) score += 18;
   if (candidate.remainingPercent !== null && candidate.remainingPercent < 15) score -= 25;
   if (candidate.platform === "antigravity" && /flash/i.test(candidate.displayName) && item.readOnly && !["critical"].includes(item.complexity)) score += 18;
@@ -2598,9 +2681,27 @@ function resourceCapacityReason(candidate, item, args = {}) {
   return `${remaining}; ${reset}`;
 }
 
+function isRedundantOperationalReview(item, byId) {
+  if (!item.readOnly || item.complexity !== "low" || (item.expectedFiles || []).length || !(item.dependsOn || []).length) return false;
+  if (!/review|verify|verification|summary|closeout/.test(`${item.kind} ${item.objective}`.toLowerCase())) return false;
+  return item.dependsOn.every((id) => byId.get(id)?.externallyConsequential === true);
+}
+
+function requiresProtectedLiveState(item) {
+  const text = `${item.kind} ${item.objective}`.toLowerCase();
+  const protectedState = /\b(authenticated|authentication|signed[- ]?in|login|session|cookie|browser profile|account|oauth|email|sms|captcha|credential)s?\b/.test(text);
+  const stateAction = /\b(check|verify|inspect|confirm|open|access|use|switch|select|read|authenticate|login)\b/.test(text);
+  if (!protectedState || !stateAction) return false;
+  const explicitLiveState = /\b(live|current|actual|authenticated|signed[- ]?in|login state|session state)\b/.test(text);
+  const sourceReview = /\b(code|source|implementation|test|module|file|function|class)\b/.test(text)
+    || (Array.isArray(item.expectedFiles) && item.expectedFiles.length > 0);
+  return explicitLiveState || !sourceReview;
+}
+
 function buildResourceOrchestrationDecision(args = {}, context = {}) {
   const candidates = buildResourceCandidates(args, context);
   const workItems = buildGoalWorkGraph(args);
+  const workItemsById = new Map(workItems.map((item) => [item.id, item]));
   const writable = workItems.filter((item) => !item.readOnly && !item.externallyConsequential).sort((a, b) => b.priority - a.priority);
   let primaryWriterId = "";
   if (writable.length) {
@@ -2609,8 +2710,14 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
 
   const decisions = [];
   const assignedItems = workItems.map((item) => {
-    if (item.externallyConsequential) {
-      const reason = "externally consequential operation; the current Codex session retains authorization, live-state checks, and execution ownership";
+    const directOperationalReview = isRedundantOperationalReview(item, workItemsById);
+    const protectedLiveState = requiresProtectedLiveState(item);
+    if (item.externallyConsequential || directOperationalReview || protectedLiveState) {
+      const reason = directOperationalReview
+        ? "low-complexity review of current-Codex operational evidence; redundant external dispatch omitted"
+        : protectedLiveState
+          ? "protected live browser/account/authentication state; the current Codex session retains direct inspection and user-boundary ownership"
+          : "externally consequential operation; the current Codex session retains authorization, live-state checks, and execution ownership";
       decisions.push({
         workItemId: item.id,
         resourceId: "codex:current",
@@ -2676,6 +2783,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
   const goal = String(args.goal || "").trim();
   const workspace = String(args.workspace || "").trim();
   const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
+  const controls = normalizedRunControls(args);
   const decision = buildResourceOrchestrationDecision(args, context);
   const resources = new Map(decision.candidates.map((candidate) => [candidate.id, candidate]));
   const dispatchable = decision.candidates.filter((candidate) => candidate.dispatchable && candidate.state === "available");
@@ -2685,6 +2793,10 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     `Goal: ${goal || "<missing>"}`,
     `Workspace: ${workspace || "<missing>"}`,
     `HorizonHours: ${horizonHours}`,
+    `RunDeadlineMinutes: ${controls.runDeadlineMinutes}`,
+    `MaxWorkerMinutes: ${controls.maxWorkerMinutes}`,
+    `MaxClaudeOutputTokens: ${controls.maxClaudeOutputTokens}`,
+    `AntigravityCliAutoDispatch: ${args.allowAntigravityCli === true}`,
     `OperatingMode: ${dispatchable.length ? "goal-driven-team" : "codex-only-until-workers-available"}`,
     "Orchestrator: Codex owns goal interpretation, risk, feedback, integration, and final verification; workers own bounded execution.",
     "",
@@ -2787,6 +2899,39 @@ function dependencyEvidenceForItems(manifest, items) {
   return truncateText(lines.join("\n"), 2800);
 }
 
+function pathIsInside(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function inferFileBoundaryFromEvidence(workspace, evidence) {
+  const extensions = "py|js|jsx|ts|tsx|json|md|html|css|scss|ps1|sh|yml|yaml|toml|sql|go|rs|java|cs|php|rb";
+  const matches = [];
+  const regex = new RegExp("`([^`\\r\\n]+\\.(?:" + extensions + "))`", "gi");
+  for (const match of String(evidence || "").matchAll(regex)) matches.push(match[1]);
+  const result = [];
+  for (const candidate of matches) {
+    const cleaned = candidate.trim().replace(/^[./\\]+/, "").replace(/\\/g, path.sep).replace(/\//g, path.sep);
+    if (!cleaned || cleaned.includes(".antigravity-bridge")) continue;
+    const variants = [cleaned, path.join("Jobs Harness", cleaned)];
+    const resolved = variants.find((variant) => {
+      const absolute = path.resolve(workspace, variant);
+      if (!pathIsInside(workspace, absolute)) return false;
+      return fs.existsSync(absolute) || fs.existsSync(path.dirname(absolute));
+    });
+    if (resolved && !result.includes(resolved)) result.push(resolved);
+    if (result.length >= 12) break;
+  }
+  return result;
+}
+
+function downstreamWriterNeedsBoundary(manifest, completedItems) {
+  const dependencyIds = new Set((completedItems || []).map((item) => item.id));
+  return (manifest.workItems || []).some((item) => !item.readOnly
+    && !(item.expectedFiles || []).length
+    && (item.dependsOn || []).some((id) => dependencyIds.has(id)));
+}
+
 function resultBulletLimitForComplexity(complexityRank) {
   return ({ 1: 5, 2: 6, 3: 8, 4: 10 })[Math.max(1, Math.min(4, Number(complexityRank || 2)))] || 6;
 }
@@ -2812,6 +2957,10 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const maxResultBullets = resultBulletLimitForComplexity(complexityRank);
   const contextCharacterLimit = contextCharacterLimitForComplexity(complexityRank);
   const dependencyEvidence = dependencyEvidenceForItems(manifest, items);
+  const activeConstraints = boundedTextList(manifest.constraints, 20, 600);
+  const projectAcceptance = boundedTextList(manifest.acceptanceCriteria, 12, 400);
+  const projectVerification = boundedTextList(manifest.verification, 12, 400);
+  const boundaryEvidenceNeeded = readOnly && downstreamWriterNeedsBoundary(manifest, items);
   const goal = [
     manifest.goal,
     "",
@@ -2819,6 +2968,15 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
     `AssignedResource: ${resource.team} / ${resource.displayName}`,
     "Assigned work items:",
     workItemBrief(items),
+    activeConstraints.length ? "" : null,
+    activeConstraints.length ? "Non-negotiable user and safety constraints:" : null,
+    ...activeConstraints.map((constraint) => `- ${constraint}`),
+    projectAcceptance.length ? "" : null,
+    projectAcceptance.length ? "Project acceptance criteria:" : null,
+    ...projectAcceptance.map((criterion) => `- ${criterion}`),
+    projectVerification.length ? "" : null,
+    projectVerification.length ? "Focused final verification:" : null,
+    ...projectVerification.map((check) => `- ${check}`),
     dependencyEvidence ? "" : null,
     dependencyEvidence ? "Verified dependency evidence:" : null,
     dependencyEvidence || null,
@@ -2829,9 +2987,19 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const nextStep = [
     `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
     readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
-    `State assumptions and blockers explicitly. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria, verified dependency evidence, and verification checks.`,
-  ].join(" ");
-  const expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
+    boundaryEvidenceNeeded ? "Your result must name each proposed writer file as an exact workspace-relative path wrapped in backticks; these paths become the enforced write boundary." : null,
+    `State assumptions and blockers explicitly. Stop immediately if the task conflicts with an active constraint. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria, verified dependency evidence, and verification checks.`,
+  ].filter(Boolean).join(" ");
+  let expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
+  if (!readOnly && !expectedFiles.length) expectedFiles = inferFileBoundaryFromEvidence(workspace, dependencyEvidence);
+  if (!readOnly && !expectedFiles.length) {
+    return {
+      launched: false,
+      codexTakeover: true,
+      blocker: "External writer dispatch refused because no verified file boundary was available. Current Codex must scope or implement this narrow item.",
+    };
+  }
+  const maxWorkerMinutes = workerMinutesFor(manifest, complexityRank, resource.platform);
   let action = "";
   let toolName = "";
 
@@ -2849,7 +3017,9 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
         kind: items.map((item) => item.kind).join(" "),
         objective: items.map((item) => item.objective).join(" "),
       }),
-      maxMinutes: complexityRank >= 4 ? 20 : complexityRank === 3 ? 10 : complexityRank === 2 ? 5 : 3,
+      maxMinutes: maxWorkerMinutes,
+      maxBudgetUsd: claudeBudgetFor(manifest, complexityRank),
+      maxOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
@@ -2864,8 +3034,8 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       mode,
       nextStep,
       model: items[0]?.assignedModel || resource.model,
-      maxMinutes: complexityRank >= 4 ? 30 : complexityRank === 3 ? 20 : complexityRank === 2 ? 10 : 5,
-      printTimeout: complexityRank >= 3 ? "8m" : complexityRank === 2 ? "4m" : "2m",
+      maxMinutes: maxWorkerMinutes,
+      printTimeout: `${maxWorkerMinutes}m`,
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
@@ -2880,6 +3050,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       mode,
       nextStep,
       model: items[0]?.assignedModel || resource.model,
+      maxMinutes: maxWorkerMinutes,
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
@@ -2917,6 +3088,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
 
 function failureCategoryFromText(value) {
   const text = String(value || "").toLowerCase();
+  if (/budget[- ]exceeded|output budget|token budget/.test(text)) return "budget-exceeded";
   if (/review-worker-modified|review-only.*changed/.test(text)) return "policy-violation";
   if (/insufficient[- ]result|off[- ]task|result quality gate/.test(text)) return "insufficient-result";
   if (/rate.?limit|too many requests|429/.test(text)) return "rate-limit";
@@ -2936,6 +3108,7 @@ function failoverAllowed(category) {
 function deriveOrchestrationState(manifest) {
   const items = manifest.workItems || [];
   if (!items.length) return "blocked";
+  if (manifest.termination?.category) return "blocked";
   if (manifest.finalVerification?.passed === true && items.every((item) => item.state === "completed")) return "completed";
   if (manifest.finalVerification?.passed === false) return "blocked";
   if (items.some((item) => ["running", "pending", "codex-pending"].includes(item.state))) return "running";
@@ -2947,6 +3120,7 @@ function deriveOrchestrationState(manifest) {
 
 function syncWorkItemsFromJobs(manifest) {
   if (Number(manifest.version || 1) < 2 || !Array.isArray(manifest.workItems)) return manifest;
+  if (manifest.termination?.category) return manifest;
   const jobs = manifest.jobs || [];
   const workItems = manifest.workItems.map((item) => {
     // Historical worker attempts must not overwrite an explicit current-Codex
@@ -2977,6 +3151,156 @@ function appendOrchestrationDecision(manifest, entry) {
   };
 }
 
+function terminateOrchestrationRun(workspace, suppliedManifest, reason, category) {
+  const terminationReason = truncateText(redactArtifactContent(String(reason || "Orchestration stopped.").trim()), 1000);
+  const terminationCategory = normalizeTaskLane(category || "stopped") || "stopped";
+  let targetedWorkers = 0;
+  let cancelledWorkers = 0;
+  let cancellationUnconfirmed = 0;
+  const jobs = (suppliedManifest.jobs || []).map((job) => {
+    if (!["queued", "running", "unknown"].includes(job.state) || !job.jobId) return job;
+    targetedWorkers += 1;
+    try {
+      const cancellation = cancelJob({ workspace, jobId: job.jobId, reason: terminationReason });
+      if (/ProcessTreeStopped:\s*true/i.test(cancellation)) cancelledWorkers += 1;
+      else cancellationUnconfirmed += 1;
+      updateJobStatus(workspace, job.jobId, {
+        state: "cancelled",
+        currentStep: terminationCategory,
+        failureCategory: terminationCategory,
+        blocker: terminationReason,
+        completedAt: utcStamp(),
+        bridgeFinalized: true,
+      });
+    } catch {
+      // The manifest still fails closed even if an already-exited worker cannot be terminated.
+      cancellationUnconfirmed += 1;
+    }
+    return {
+      ...job,
+      state: "cancelled",
+      failureCategory: terminationCategory,
+      blocker: terminationReason,
+      currentStep: terminationCategory,
+    };
+  });
+  let manifest = {
+    ...suppliedManifest,
+    jobs,
+    workItems: (suppliedManifest.workItems || []).map((item) => item.state === "completed"
+      ? item
+      : { ...item, state: "blocked", blocker: terminationReason, failureCategory: terminationCategory, activeJobId: "" }),
+    termination: {
+      category: terminationCategory,
+      reason: terminationReason,
+      at: utcStamp(),
+      targetedWorkers,
+      cancelledWorkers,
+      cancellationUnconfirmed,
+    },
+  };
+  manifest = appendOrchestrationDecision(manifest, {
+    type: "run-termination",
+    category: terminationCategory,
+    reason: terminationReason,
+    targetedWorkers,
+    cancelledWorkers,
+    cancellationUnconfirmed,
+  });
+  manifest.state = "blocked";
+  manifest.counts = {
+    total: jobs.length,
+    completed: jobs.filter((job) => job.state === "completed").length,
+    running: 0,
+    failed: jobs.filter((job) => ["failed", "cancelled"].includes(job.state)).length,
+  };
+  return manifest;
+}
+
+function runDeadlineExpired(manifest, now = Date.now()) {
+  const deadline = Date.parse(String(manifest.deadlineAt || ""));
+  return Number.isFinite(deadline) && now >= deadline;
+}
+
+function isActiveOrchestrationRun(manifest) {
+  if (!manifest || Number(manifest.version || 1) < 2) return manifest?.state === "running";
+  return ["running", "ready-for-codex"].includes(String(manifest.state || ""));
+}
+
+function routingPolicyFromArgs(args = {}) {
+  const requestedAgyModel = String(args.agyModel || "auto").trim().toLowerCase() || "auto";
+  return {
+    allowAntigravityCli: args.allowAntigravityCli === true || requestedAgyModel !== "auto",
+    allowPremiumModels: args.allowPremiumModels === true,
+    agyModel: requestedAgyModel,
+    claudeModel: String(args.claudeModel || "auto").trim().toLowerCase() || "auto",
+    includeCursor: args.includeCursor === true,
+  };
+}
+
+function workGraphContract(items = []) {
+  return (items || []).map((item) => ({
+    id: item.id,
+    objective: item.objective,
+    kind: item.kind,
+    complexity: item.complexity,
+    requiredCapabilities: [...(item.requiredCapabilities || [])].sort(),
+    dependsOn: [...(item.dependsOn || [])].sort(),
+    expectedFiles: [...(item.expectedFiles || [])].sort(),
+    readOnly: item.readOnly === true,
+    executionClass: item.executionClass,
+    externallyConsequential: item.externallyConsequential === true,
+    acceptanceCriteria: item.acceptanceCriteria || [],
+    verification: item.verification || [],
+    priority: Number(item.priority || 0),
+  }));
+}
+
+function runContractChanges(manifest, args = {}) {
+  const controls = normalizedRunControls(args);
+  const requested = {
+    mode: String(args.mode || "patch").trim().toLowerCase(),
+    horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
+    controls,
+    constraints: normalizedRunConstraints(args),
+    acceptanceCriteria: boundedTextList(args.acceptanceCriteria, 12, 400),
+    verification: boundedTextList(args.verification, 12, 400),
+    routingPolicy: routingPolicyFromArgs(args),
+    workGraph: workGraphContract(buildGoalWorkGraph(args)),
+  };
+  const existing = {
+    mode: String(manifest.mode || "patch").trim().toLowerCase(),
+    horizonHours: Math.max(1, Math.min(12, Number(manifest.horizonHours || 5))),
+    controls: {
+      runDeadlineMinutes: Number(manifest.runDeadlineMinutes || 20),
+      maxWorkerMinutes: Number(manifest.maxWorkerMinutes || 6),
+      maxClaudeOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
+      maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd || 0.75),
+    },
+    constraints: manifest.constraints || [],
+    acceptanceCriteria: manifest.acceptanceCriteria || [],
+    verification: manifest.verification || [],
+    routingPolicy: manifest.routingPolicy || {
+      allowAntigravityCli: manifest.allowAntigravityCli === true,
+      allowPremiumModels: false,
+      agyModel: "auto",
+      claudeModel: "auto",
+      includeCursor: false,
+    },
+    workGraph: workGraphContract(manifest.workItems || []),
+  };
+  return Object.keys(requested).filter((key) => JSON.stringify(requested[key]) !== JSON.stringify(existing[key]));
+}
+
+function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
+  const next = { ...effectiveArgs };
+  next.constraints = boundedTextList([...(manifest.constraints || []), ...(Array.isArray(rawArgs.constraints) ? rawArgs.constraints : [])], 20, 600);
+  next.acceptanceCriteria = boundedTextList([...(manifest.acceptanceCriteria || []), ...(Array.isArray(rawArgs.acceptanceCriteria) ? rawArgs.acceptanceCriteria : [])], 12, 400);
+  next.verification = boundedTextList([...(manifest.verification || []), ...(Array.isArray(rawArgs.verification) ? rawArgs.verification : [])], 12, 400);
+  if ((!Array.isArray(rawArgs.workItems) || !rawArgs.workItems.length) && !String(rawArgs.taskSplit || "").trim()) next.workItems = manifest.workItems || [];
+  return next;
+}
+
 function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, launchGroup = launchOrchestrationGroup) {
   if (!lockHeld) {
     return withFileLock(lastTeamRunJsonPath(workspace), () => {
@@ -2987,6 +3311,17 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
   }
   let manifest = syncWorkItemsFromJobs(suppliedManifest);
   if (Number(manifest.version || 1) < 2) return manifest;
+  if (manifest.termination?.category) return manifest;
+  if (runDeadlineExpired(manifest)) {
+    const stopped = terminateOrchestrationRun(
+      workspace,
+      manifest,
+      `Run deadline ${manifest.deadlineAt} was reached; unfinished work was stopped instead of continuing silently.`,
+      "orchestration-deadline",
+    );
+    writeTeamRunManifest(workspace, stopped);
+    return stopped;
+  }
 
   let changed = false;
   manifest.resources = (manifest.resources || []).map((resource) => {
@@ -3140,6 +3475,28 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     const failedItemJob = [...(manifest.jobs || [])].reverse().find((job) => items.some((item) => (job.workItemIds || []).includes(item.id)) && job.state === "failed");
     const launch = launchGroup(manifest, resource, items, failedItemJob?.jobId || "");
     if (!launch.launched) {
+      if (launch.codexTakeover) {
+        manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
+          ? {
+              ...item,
+              state: "codex",
+              assignment: "codex:current",
+              assignedModel: manifest.resources?.find((candidate) => candidate.id === "codex:current")?.model || "current Codex session",
+              alternates: [],
+              blocker: "",
+              failureCategory: "",
+              decisionReason: launch.blocker,
+            }
+          : item);
+        manifest.primaryWriterId = "codex:current";
+        manifest = appendOrchestrationDecision(manifest, {
+          type: "codex-scope-takeover",
+          workItemIds: items.map((item) => item.id),
+          reason: launch.blocker,
+        });
+        changed = true;
+        continue;
+      }
       manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
         ? { ...item, state: "failed", blocker: launch.blocker || "Worker launch failed.", failureCategory: "worker-failure" }
         : item);
@@ -3255,6 +3612,8 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     orchestrated ? `RequiredUserStatus: AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
     orchestrated && snapshot.state !== "completed" ? "RequiredClaimBoundary: do not say done, successful, actively managed, or that AI Mobile remains active." : null,
     `Workspace: ${workspace}`,
+    orchestrated ? `DeadlineAt: ${snapshot.deadlineAt || "legacy-run-no-deadline"}` : null,
+    orchestrated ? `Budgets: run=${snapshot.runDeadlineMinutes || "legacy"}m; worker<=${snapshot.maxWorkerMinutes || "legacy"}m; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
     orchestrated ? "WorkGraph:" : null,
@@ -3272,8 +3631,18 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
           "CodexEvidence:",
           ...(snapshot.workItems || [])
             .filter((item) => item.codexEvidence?.summary)
-            .map((item) => `- ${item.id}: ${truncateText(item.codexEvidence.summary, 500)}`),
+            .map((item) => `- ${item.id}: ${truncateText(item.codexEvidence.summary, 300)}`),
         ]
+      : []),
+    ...(orchestrated && (snapshot.constraints || []).length
+      ? [
+          "ActiveConstraints:",
+          ...(snapshot.constraints || []).slice(0, 6).map((constraint) => `- ${truncateText(constraint, 220)}`),
+          (snapshot.constraints || []).length > 6 ? `- ... ${(snapshot.constraints || []).length - 6} more persisted constraints` : null,
+        ].filter(Boolean)
+      : []),
+    ...(orchestrated && snapshot.termination?.category
+      ? ["RunTermination:", `- ${snapshot.termination.category}: ${truncateText(snapshot.termination.reason, 500)}; workersTargeted=${snapshot.termination.targetedWorkers || 0}; workersStopped=${snapshot.termination.cancelledWorkers || 0}; stopUnconfirmed=${snapshot.termination.cancellationUnconfirmed || 0}`]
       : []),
     ...(orchestrated && typeof snapshot.finalVerification?.passed === "boolean"
       ? ["FinalVerification:", `- passed=${snapshot.finalVerification.passed}; ${truncateText(snapshot.finalVerification.summary, 700)}`]
@@ -3281,7 +3650,11 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     "WorkerResults:",
   ].filter(Boolean);
 
-  for (const [index, job] of snapshot.jobs.entries()) {
+  const allJobs = snapshot.jobs || [];
+  const visibleJobs = allJobs.slice(-4);
+  if (allJobs.length > visibleJobs.length) lines.push(`- ${allJobs.length - visibleJobs.length} older worker attempts omitted; use read-job for diagnosis.`);
+  for (const job of visibleJobs) {
+    const index = allJobs.indexOf(job);
     const jobDir = jobDirFor(workspace, job.jobId);
     const workItemIds = job.workItemIds || job.assignedTasks || [];
     const supersededBySuccess = ["failed", "cancelled"].includes(job.state)
@@ -3289,15 +3662,15 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
         && (later.workItemIds || later.assignedTasks || []).some((id) => workItemIds.includes(id)));
     const supersededByCodex = ["failed", "cancelled"].includes(job.state)
       && workItemIds.some((id) => (snapshot.workItems || []).some((item) => item.id === id && item.assignment === "codex:current" && item.state === "completed"));
-    const result = summarizeFile(path.join(jobDir, "result.md"), 1200).trim();
-    const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 500).trim();
-    const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 600).trim();
+    const result = summarizeFile(path.join(jobDir, "result.md"), 500).trim();
+    const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 250).trim();
+    const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 250).trim();
     const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
     lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
     if (job.blocker && !supersededByCodex) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
     if (job.warning && !supersededBySuccess && !supersededByCodex) lines.push(`   Warning: ${truncateText(job.warning, 300)}`);
-    if (telemetry) lines.push(`   Telemetry: provider=${telemetry.provider || "unknown"}; observedModel=${telemetry.observedModel || "unknown"}; durationMs=${telemetry.durationMs ?? "unknown"}; inputTokens=${telemetry.inputTokens ?? "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
+    if (telemetry) lines.push(`   Telemetry: model=${telemetry.observedModel || "unknown"}; durationSec=${Number.isFinite(Number(telemetry.durationMs)) ? Math.round(Number(telemetry.durationMs) / 1000) : "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
     if (supersededBySuccess) lines.push("   Recovered: a later failover completed this work item; use read-job only if the failed attempt needs diagnosis.");
     if (supersededByCodex) lines.push("   Recovered: the current Codex session explicitly took over and completed this work item with recorded evidence.");
     if (result && !supersededBySuccess && !supersededByCodex) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
@@ -3305,7 +3678,8 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker, then run a new bounded cycle or re-verify this completed work graph; completion is not allowed.");
+  if (snapshot.termination?.category) lines.push("Next: this run is stopped. Apply the latest user constraints and start a new bounded run only if the user still wants continuation.");
+  else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker, then run a new bounded cycle or re-verify this completed work graph; completion is not allowed.");
   else if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
   else if (snapshot.state === "completed") lines.push("Next: this finite orchestration cycle is verified complete. Do not describe it as a persistent manager or scheduler unless a separate durable automation is actually running.");
   else if (snapshot.state === "running") lines.push(`Next: call project-manager-status for ${workspace}; completion is not yet allowed.`);
@@ -3329,6 +3703,11 @@ async function orchestrateProject(args = {}) {
   const context = await getTeamCapacityContext({ ...args, workspace });
   const decision = buildResourceOrchestrationDecision(args, context);
   const plan = formatTeamOrchestrationPlan(args, context);
+  const controls = normalizedRunControls(args);
+  const constraints = normalizedRunConstraints(args);
+  const acceptanceCriteria = boundedTextList(args.acceptanceCriteria, 12, 400);
+  const verification = boundedTextList(args.verification, 12, 400);
+  const routingPolicy = routingPolicyFromArgs(args);
 
   if (args.start === false) {
     return [
@@ -3341,20 +3720,40 @@ async function orchestrateProject(args = {}) {
   }
 
   const runId = `orc-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
+  const createdAt = utcStamp();
   const workItems = decision.workItems.map((item) => ({
     ...item,
     state: item.assignment === "codex:current"
       ? (item.dependsOn.length ? "codex-pending" : "codex")
       : "pending",
   }));
+  const capsule = writeContextCapsule({
+    goal,
+    workspace,
+    lifecycleStage: "execute",
+    workItems,
+    constraints,
+    acceptanceCriteria,
+    verification,
+    continuitySummary: args.continuitySummary,
+    artifactRefs: args.artifactRefs,
+  });
   const manifest = {
     version: 2,
     runId,
-    createdAt: utcStamp(),
+    createdAt,
+    deadlineAt: new Date(Date.now() + controls.runDeadlineMinutes * 60000).toISOString(),
     goal,
     workspace,
     mode: String(args.mode || "patch").trim().toLowerCase(),
     horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
+    ...controls,
+    constraints,
+    acceptanceCriteria,
+    verification,
+    routingPolicy,
+    contextCapsulePath: capsule.outputPath,
+    allowAntigravityCli: routingPolicy.allowAntigravityCli,
     capacityProbe: context.capacityProbe,
     codexRole: "goal owner, resource orchestrator, critic, integration owner, and final verifier",
     primaryWriterId: decision.primaryWriterId,
@@ -3368,7 +3767,7 @@ async function orchestrateProject(args = {}) {
     const existingManifestPath = lastTeamRunJsonPath(workspace);
     if (fs.existsSync(existingManifestPath)) {
       const existing = refreshTeamRunManifest(workspace, readJsonFile(existingManifestPath, null));
-      if (existing.state === "running") {
+      if (isActiveOrchestrationRun(existing)) {
         throw new Error(`Workspace already has active orchestration run ${existing.runId || "<legacy>"}. Use read-team-run or cancel its running jobs before starting another run.`);
       }
     }
@@ -3398,24 +3797,83 @@ async function orchestrateProject(args = {}) {
 
 async function runProjectManager(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
-  const effectiveArgs = {
+  let effectiveArgs = {
     ...args,
     workspace,
     waitSeconds: args.waitSeconds === undefined ? 5 : args.waitSeconds,
     includePlan: args.includePlan === true,
   };
+  const prior = readJsonFile(lastTeamRunJsonPath(workspace), null);
+  if (prior && String(prior.goal || "").trim() === String(effectiveArgs.goal || "").trim()) {
+    effectiveArgs = carryForwardSameGoalContract(effectiveArgs, args, prior);
+  }
   try {
     return await orchestrateProject(effectiveArgs);
   } catch (error) {
     if (!/already has active orchestration run/i.test(String(error?.message || ""))) throw error;
+    const existing = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+    const goalChanged = String(existing.goal || "").trim() !== String(effectiveArgs.goal || "").trim();
+    const expired = runDeadlineExpired(existing);
+    if (!goalChanged) {
+      effectiveArgs = carryForwardSameGoalContract(effectiveArgs, args, existing);
+    }
+    const contractChanges = goalChanged ? [] : runContractChanges(existing, effectiveArgs);
+    const contractChanged = contractChanges.length > 0;
+    if (goalChanged || expired || contractChanged) {
+      const replacementReason = goalChanged
+        ? "the user goal changed"
+        : expired
+          ? "the previous run deadline expired"
+          : `the active run contract changed (${contractChanges.join(", ")})`;
+      let stoppedManifest = null;
+      withFileLock(lastTeamRunJsonPath(workspace), () => {
+        const latest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), existing));
+        const stopped = terminateOrchestrationRun(
+          workspace,
+          latest,
+          goalChanged
+            ? `User supplied a different project goal; run ${latest.runId || "<legacy>"} was stopped before replanning.`
+            : expired
+              ? `Run ${latest.runId || "<legacy>"} reached its deadline and was replaced by a fresh bounded cycle.`
+              : `Run contract changed (${contractChanges.join(", ")}); run ${latest.runId || "<legacy>"} was stopped before replanning.`,
+          expired ? "orchestration-deadline" : "user-steering",
+        );
+        writeTeamRunManifest(workspace, stopped);
+        stoppedManifest = stopped;
+      });
+      if (Number(stoppedManifest?.termination?.cancellationUnconfirmed || 0) > 0) {
+        const refusedReplacement = [
+          "RunProjectManagerResult:",
+          `ReplacedRunId: ${existing.runId || "<legacy>"}`,
+          "ReplacementStarted: false",
+          "Reason: at least one previous worker process could not be confirmed stopped; a new run was refused to prevent overlapping work.",
+          "",
+          formatTeamRunSnapshot(workspace, stoppedManifest, 0),
+        ].join("\n");
+        writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${refusedReplacement}\n`);
+        return refusedReplacement;
+      }
+      const replacement = await orchestrateProject(effectiveArgs);
+      const replacementResult = [
+        "RunProjectManagerResult:",
+        `ReplacedRunId: ${existing.runId || "<legacy>"}`,
+        `Reason: ${replacementReason}, so stale workers were stopped before a new bounded run started.`,
+        "",
+        replacement,
+      ].join("\n");
+      writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${replacementResult}\n`);
+      return replacementResult;
+    }
     const status = await readTeamRun({ workspace, waitSeconds: effectiveArgs.waitSeconds });
-    return [
+    const reusedResult = [
       "RunProjectManagerResult:",
       "ReusedActiveRun: true",
-      "Reason: this workspace already has an active run; duplicate dispatch was refused.",
+      "Reason: this workspace already has the same active goal and run contract; duplicate dispatch was refused.",
       "",
       status,
     ].join("\n");
+    writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${reusedResult}\n`);
+    return reusedResult;
   }
 }
 
@@ -3520,14 +3978,50 @@ function applyProjectManagerUpdates(manifest, args = {}) {
 
 async function projectManagerStatus(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
+  const addConstraints = boundedTextList(args.addConstraints, 20, 600);
+  const steeringDirective = truncateText(redactArtifactContent(String(args.steeringDirective || "").trim()), 1000);
+  const hasSteering = addConstraints.length > 0 || Boolean(steeringDirective) || args.stopRun === true;
+  if (args.stopRun === true && !String(args.stopReason || steeringDirective).trim()) {
+    throw new Error("stopReason or steeringDirective is required when stopRun=true.");
+  }
   const hasUpdates = ["completedCodexItems", "failedCodexItems", "takeoverCodexItems", "codexEvidence"]
     .some((key) => Array.isArray(args[key]) && args[key].length)
     || args.projectVerified === true
-    || args.projectVerificationFailed === true;
+    || args.projectVerificationFailed === true
+    || hasSteering;
   if (hasUpdates) {
     withFileLock(lastTeamRunJsonPath(workspace), () => {
-      const manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
-      writeTeamRunManifest(workspace, applyProjectManagerUpdates(manifest, args));
+      let manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+      if (hasSteering) {
+        manifest = {
+          ...manifest,
+          constraints: boundedTextList([...(manifest.constraints || []), ...addConstraints], 20, 600),
+        };
+        manifest = appendOrchestrationDecision(manifest, {
+          type: "user-steering",
+          directive: steeringDirective || String(args.stopReason || "Constraints updated."),
+          addedConstraints: addConstraints,
+        });
+        const interrupt = args.stopRun === true
+          || args.interruptRunningWorkers !== false;
+        if (interrupt) {
+          const reason = String(args.stopReason || steeringDirective || `User constraints changed: ${addConstraints.join(" | ")}`);
+          manifest = terminateOrchestrationRun(workspace, manifest, reason, "user-steering");
+        } else {
+          const capsule = writeContextCapsule({
+            goal: manifest.goal,
+            workspace,
+            lifecycleStage: "execute",
+            workItems: manifest.workItems,
+            constraints: manifest.constraints,
+            acceptanceCriteria: manifest.acceptanceCriteria,
+            verification: manifest.verification,
+          });
+          manifest.contextCapsulePath = capsule.outputPath;
+        }
+      }
+      if (!manifest.termination?.category) manifest = applyProjectManagerUpdates(manifest, args);
+      writeTeamRunManifest(workspace, manifest);
     });
   }
   return readTeamRun({ workspace, waitSeconds: args.waitSeconds });
@@ -4059,13 +4553,21 @@ function cancelJob(args = {}) {
   const statusPath = path.join(jobDir, "status.json");
   const status = readJsonFile(statusPath, { jobId });
   const termination = terminateProcessTree(status.workerPid, status.workerCommandMarker || status.jobId);
+  const reason = String(args.reason || "Cancelled by Codex.").trim();
+  const classified = failureCategoryFromText(reason);
+  const failureCategory = classified === "worker-failure" ? "cancelled" : classified;
   status.state = "cancelled";
   status.updatedAt = utcStamp();
-  status.currentStep = "cancelled";
+  status.completedAt = utcStamp();
+  status.currentStep = failureCategory === "cancelled" ? "cancelled" : `cancelled-${failureCategory}`;
   status.bridgeFinalized = true;
-  status.blocker = String(args.reason || "Cancelled by Codex.").trim();
+  status.failureCategory = failureCategory;
+  status.blocker = reason;
   status.processTermination = termination;
   writeJsonFile(statusPath, status);
+  const telemetryPath = path.join(jobDir, "worker-telemetry.json");
+  const telemetry = readJsonFile(telemetryPath, null);
+  if (telemetry) writeJsonFile(telemetryPath, { ...telemetry, success: false, failureCategory, completedAt: utcStamp() });
   return `CancelJobResult:\nJobId: ${jobId}\nState: cancelled\nProcessTreeStopped: ${termination.stopped}\nProcessNote: ${termination.note}`;
 }
 
@@ -5104,6 +5606,7 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
   const jobDir = jobDirFor(workspace, jobId);
   const request = summarizeFile(path.join(jobDir, "request.md"), 12000);
   const maxResultBullets = boundedResultBulletLimit(args, 8);
+  const maxOutputTokens = Math.max(2000, Math.min(50000, Number(args.maxOutputTokens ?? 12000)));
   const permissionMode = String(args.permissionMode || "").trim().toLowerCase();
   const artifactRules = permissionMode === "plan"
     ? [
@@ -5125,6 +5628,7 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
     "You are Claude Code running as a local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
     "Do not narrate planned tool calls. Use targeted reads/searches and stop when enough evidence exists for the assigned work items.",
+    `Hard efficiency budget: stop after one focused solution and do not exceed approximately ${maxOutputTokens} output tokens. Do not launch subagents or broaden the task.`,
     "",
     request,
     "",
@@ -5314,6 +5818,7 @@ function runClaudeJobWorker(args = {}) {
   const mode = String(args.mode || "fast").trim().toLowerCase();
   const permissionMode = safeClaudeFlag(args.permissionMode || (mode === "review" ? "plan" : "acceptEdits"), "permissionMode");
   const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 10)));
+  const maxOutputTokens = Math.max(2000, Math.min(50000, Number(args.maxOutputTokens ?? 12000)));
   const prompt = buildClaudeJobPrompt(workspace, jobId, { ...args, permissionMode });
   const cliArgs = [
     "-p",
@@ -5344,6 +5849,7 @@ function runClaudeJobWorker(args = {}) {
     claudeModel: args.model || "",
     claudePermissionMode: permissionMode,
     claudeIsolationMode: "safe-mode",
+    maxOutputTokens,
   });
 
   const startedMs = Date.now();
@@ -5384,12 +5890,15 @@ function runClaudeJobWorker(args = {}) {
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error) || parsedOutput.isError;
   const modelMismatch = !executionFailed && !claudeObservedModelMatches(dispatchModel, parsedOutput.observedModel);
+  const tokenBudgetExceeded = Number.isFinite(parsedOutput.outputTokens) && parsedOutput.outputTokens > maxOutputTokens;
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(summarizeFile(resultPath, 8000), args);
-  const failed = executionFailed || modelMismatch || !boundary.ok || !quality.ok;
+  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : modelMismatch
       ? "model-unavailable"
+    : tokenBudgetExceeded
+      ? "budget-exceeded"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`)
       : !quality.ok ? "insufficient-result" : "";
@@ -5423,6 +5932,8 @@ function runClaudeJobWorker(args = {}) {
     warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : tokenBudgetExceeded
+        ? `Claude output budget exceeded: ${parsedOutput.outputTokens} > ${maxOutputTokens} tokens. Do not auto-fail over; inspect the bounded artifact or rescope.`
       : modelMismatch
         ? `Requested Claude model ${dispatchModel}, but the dominant observed model was ${parsedOutput.observedModel || "unknown"}.`
       : !quality.ok
@@ -6484,6 +6995,27 @@ function runSelfTest() {
   assert(staleHost.every((candidate) => candidate.state === "capacity-stale"), "stale Codex capacity evidence fails closed for new host assignments");
   assert(shouldFanOut([{ id: "a", kind: "research", readOnly: true, dependsOn: [] }, { id: "b", kind: "review", readOnly: true, dependsOn: [] }]), "independent distinct read-only work may fan out");
   assert(!shouldFanOut([{ id: "a", kind: "implementation", readOnly: false, dependsOn: [] }, { id: "b", kind: "implementation", readOnly: false, dependsOn: [] }]), "parallel shared-workspace writers are refused");
+  const defaultControls = normalizedRunControls({});
+  assert(defaultControls.runDeadlineMinutes === 20 && defaultControls.maxWorkerMinutes === 6 && defaultControls.maxClaudeOutputTokens === 12000, "finite runs and workers receive conservative default budgets");
+  assert(workerMinutesFor(defaultControls, 4, "antigravity") === 5 && claudeBudgetFor(defaultControls, 4) === 0.75, "provider worker budgets stay below the run deadline");
+  const safetyConstraints = normalizedRunConstraints({ constraints: ["Do not access email."] });
+  assert(safetyConstraints.some((item) => /OAuth consent/.test(item)) && safetyConstraints.some((item) => /browser and account state/.test(item)) && safetyConstraints.some((item) => /Do not access email/.test(item)), "default browser, account, OAuth, and user constraints are propagated together");
+  const contractArgs = { goal: "Refactor a bounded module", mode: "patch", horizonHours: 5 };
+  const contractManifest = {
+    version: 2,
+    mode: "patch",
+    horizonHours: 5,
+    ...normalizedRunControls(contractArgs),
+    constraints: normalizedRunConstraints(contractArgs),
+    acceptanceCriteria: [],
+    verification: [],
+    routingPolicy: routingPolicyFromArgs(contractArgs),
+    workItems: buildGoalWorkGraph(contractArgs),
+  };
+  assert(runContractChanges(contractManifest, contractArgs).length === 0, "identical active goal contracts remain idempotent");
+  assert(runContractChanges(contractManifest, { ...contractArgs, constraints: ["Do not access email."] }).includes("constraints"), "same-goal safety changes force a bounded replan");
+  const carriedContract = carryForwardSameGoalContract(contractArgs, contractArgs, { ...contractManifest, constraints: [...contractManifest.constraints, "Do not access email."] });
+  assert(carriedContract.constraints.some((item) => item === "Do not access email.") && carriedContract.workItems.length === contractManifest.workItems.length, "same-goal continuation preserves terminal-run constraints and work graph");
   const capsuleFixture = buildContextCapsule({
     goal: "Build a bounded project plan",
     workspace: pluginRoot,
@@ -6524,9 +7056,14 @@ function runSelfTest() {
     cursorHeadlessFound: false,
     workspaceState: { outcomes: {}, decisions: [] },
   };
+  const gatedAgy = buildResourceCandidates({}, fakeContext).filter((candidate) => candidate.platform === "antigravity");
+  assert(gatedAgy.length > 0 && gatedAgy.every((candidate) => candidate.dispatchable === false && candidate.state === "authorization-required"), "Antigravity CLI cannot auto-dispatch when an OAuth popup was not explicitly authorized");
+  const enabledAgy = buildResourceCandidates({ allowAntigravityCli: true }, fakeContext).filter((candidate) => candidate.platform === "antigravity");
+  assert(enabledAgy.some((candidate) => candidate.dispatchable === true), "explicit Antigravity CLI authorization enables its model roster");
   const orchestrationDecision = buildResourceOrchestrationDecision({
     goal: "Implement and verify a cross-platform resource orchestrator plugin",
     mode: "patch",
+    allowAntigravityCli: true,
     workItems: [
       { id: "implement", objective: "Implement the orchestration control loop", kind: "implementation-architecture", complexity: "high", readOnly: false },
       { id: "verify", objective: "Independently verify failure handling", kind: "testing-review", complexity: "medium", readOnly: true, dependsOn: ["implement"] },
@@ -6587,12 +7124,14 @@ function runSelfTest() {
   const broadReviewDecision = buildResourceOrchestrationDecision({
     goal: "Review current project health and report the main blocker",
     mode: "review",
+    allowAntigravityCli: true,
     workItems: [{ id: "broad-review", objective: "Review current project health and report the main blocker", kind: "verification-review", complexity: "low", readOnly: true, preferredPlatform: "antigravity" }],
   }, fakeContext);
   assert(broadReviewDecision.workItems[0]?.assignment === "antigravity:gemini-3.5-flash-medium", "broad low-risk review prefers Flash Medium over Flash Low");
   const microReviewDecision = buildResourceOrchestrationDecision({
     goal: "Read one manifest value",
     mode: "review",
+    allowAntigravityCli: true,
     workItems: [{ id: "micro-review", objective: "Read one manifest value", kind: "verification", complexity: "low", readOnly: true, preferredPlatform: "antigravity", expectedFiles: [".codex-plugin/plugin.json"] }],
   }, fakeContext);
   assert(microReviewDecision.workItems[0]?.assignment === "antigravity:gemini-3.5-flash-low", "file-bounded micro review may use Flash Low");
@@ -6620,6 +7159,23 @@ function runSelfTest() {
     workItems: [{ id: "submit-real-jobs", objective: "Submit real job applications through the live harness", kind: "operation", complexity: "high", readOnly: false }],
   }, fakeContext);
   assert(consequentialDecision.workItems[0]?.assignment === "codex:current" && consequentialDecision.workItems[0]?.externallyConsequential === true, "externally consequential operations remain owned by the current Codex session");
+  const directReviewDecision = buildResourceOrchestrationDecision({
+    goal: "Perform one controlled live operation and verify it",
+    workItems: [
+      { id: "live-operation", objective: "Perform one controlled live operation", kind: "operation", complexity: "high", readOnly: false, externallyConsequential: true },
+      { id: "cycle-review", objective: "Review the terminal evidence", kind: "review", complexity: "low", readOnly: true, dependsOn: ["live-operation"] },
+    ],
+  }, fakeContext);
+  assert(directReviewDecision.workItems.find((item) => item.id === "cycle-review")?.assignment === "codex:current", "redundant low-complexity review of direct operational evidence stays with Codex");
+  const protectedSessionDecision = buildResourceOrchestrationDecision({
+    goal: "Verify the current portal session before a controlled operation",
+    workItems: [
+      { id: "session-check", objective: "Verify the authenticated browser session without changing profiles, cookies, accounts, or credentials", kind: "analysis", complexity: "medium", readOnly: true },
+      { id: "source-review", objective: "Review the browser authentication helper code", kind: "review", complexity: "medium", readOnly: true, expectedFiles: ["browser.js"] },
+    ],
+  }, fakeContext);
+  assert(protectedSessionDecision.workItems.find((item) => item.id === "session-check")?.assignment === "codex:current", "protected live browser and authentication checks stay with current Codex");
+  assert(protectedSessionDecision.workItems.find((item) => item.id === "source-review")?.assignment !== "codex:current", "bounded browser source review remains delegatable");
   const consequentialDefault = buildResourceOrchestrationDecision({ goal: "Start controlled real job submissions through the approved harness" }, fakeContext);
   assert(
     consequentialDefault.workItems.find((item) => item.id === "goal-context")?.readOnly === true
@@ -6628,6 +7184,9 @@ function runSelfTest() {
       && consequentialDefault.workItems.find((item) => item.id === "independent-verification")?.readOnly === true,
     "a consequential goal delegates preflight and verification but gates the real operation to Codex",
   );
+  const defaultComplexGraph = buildGoalWorkGraph({ goal: "Refactor the plugin orchestration architecture safely", estimatedCodexInputTokens: 6000 });
+  assert(defaultComplexGraph.find((item) => item.id === "goal-implementation")?.dependsOn.includes("goal-context"), "complex default implementation waits for discovery evidence and a safe file boundary");
+  assert(downstreamWriterNeedsBoundary({ workItems: defaultComplexGraph }, [defaultComplexGraph.find((item) => item.id === "goal-context")]), "discovery handoff requests exact file targets when it must scope a downstream writer");
   const liveEvidenceGraph = buildGoalWorkGraph({
     goal: "Manage live job submissions",
     workItems: [
@@ -6692,6 +7251,18 @@ function runSelfTest() {
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex-pending" }] }) === "running", "dependency-gated Codex actions keep the project run active until they become ready");
   assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
   assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
+  assert(failureCategoryFromText("Claude output budget exceeded") === "budget-exceeded" && !failoverAllowed("budget-exceeded"), "worker budget exhaustion stops instead of doubling cost through failover");
+  assert(inferFileBoundaryFromEvidence(pluginRoot, "Patch `scripts/ai-mobile-local-mcp.js` and verify it.").includes(path.join("scripts", "ai-mobile-local-mcp.js")), "writer file boundaries are inferred from verified dependency evidence");
+  const deadlineManifest = terminateOrchestrationRun(pluginRoot, {
+    version: 2,
+    runId: "deadline-test",
+    workItems: [{ id: "unfinished", state: "pending", assignment: "claude:sonnet" }],
+    jobs: [],
+    decisions: [],
+  }, "Run deadline reached.", "orchestration-deadline");
+  assert(deadlineManifest.state === "blocked" && deadlineManifest.workItems[0].state === "blocked" && deadlineManifest.termination.category === "orchestration-deadline", "run deadline termination blocks unfinished work without a success claim");
+  assert(runDeadlineExpired({ deadlineAt: "2000-01-01T00:00:00.000Z" }), "expired run deadlines are detected deterministically");
+  assert(isActiveOrchestrationRun({ version: 2, state: "ready-for-codex" }) && !isActiveOrchestrationRun({ version: 2, state: "blocked" }), "ready-for-codex remains active until final verification or termination");
   const parsedClaude = parseClaudeJsonOutput(JSON.stringify({ result: "ok", duration_ms: 12, usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { "claude-sonnet-5": {} } }));
   assert(parsedClaude.resultText === "ok" && parsedClaude.observedModel === "claude-sonnet-5", "Claude JSON output yields compact result and per-run model telemetry");
   const mixedClaude = parseClaudeJsonOutput(JSON.stringify({
@@ -6725,6 +7296,14 @@ function runSelfTest() {
   try {
     const init = spawnSync("git", ["init", "--quiet", workspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
     assert(init.status === 0, "temporary git workspace initializes");
+    const unconfirmedStop = terminateOrchestrationRun(workspace, {
+      version: 2,
+      runId: "unconfirmed-stop-test",
+      workItems: [{ id: "worker", state: "running", assignment: "claude:sonnet" }],
+      jobs: [{ jobId: "missing-worker-process", state: "running", workItemIds: ["worker"] }],
+      decisions: [],
+    }, "Stop before replacement.", "user-steering");
+    assert(unconfirmedStop.termination.targetedWorkers === 1 && unconfirmedStop.termination.cancelledWorkers === 0 && unconfirmedStop.termination.cancellationUnconfirmed === 1, "unconfirmed worker termination blocks overlapping replacement");
     const firstCapsule = writeContextCapsule({ goal: "cache capsule", workspace, workItems: [{ id: "one", objective: "inspect", expectedFiles: [] }] });
     const reusedCapsule = writeContextCapsule({ goal: "cache capsule", workspace, workItems: [{ id: "one", objective: "inspect", expectedFiles: [] }] });
     assert(firstCapsule.reused === false && reusedCapsule.reused === true && firstCapsule.capsule.capsuleHash === reusedCapsule.capsule.capsuleHash, "unchanged context capsules reuse the validated local artifact");
