@@ -14,13 +14,21 @@ For a nontrivial goal, mention `@ai-mobile` in the project chat. The skill calls
 @ai-mobile orchestrate this project goal using current capacity and CLI-first workers.
 ```
 
+### Operating Frame
+
+- **Objective:** persists until verified, genuinely blocked, or explicitly stopped.
+- **Capacity horizon:** rolling five-hour forecast used to choose models; it never ends the project.
+- **Capacity checkpoint:** every 20 minutes while the low-RAM supervisor runs, or on the next status call; refreshes quotas, resets, cooldowns, and pending assignments.
+- **Worker lease:** adaptive 10-90 minute safety window for one provider call; a dead call can be replaced without ending the objective.
+- **Utilization:** use every appropriate healthy resource when distinct dependency-ready work exists; never duplicate the same task merely to keep every model busy.
+
 PowerShell fallback:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<complete outcome>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
 ```
 
-The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. A normal cycle is finite: the default run deadline is 20 minutes, each external worker is capped at 6 minutes or less, and a new goal or safety constraint interrupts stale work instead of waiting behind it.
+The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. Project duration is continuous by default: the objective stays available until verified, genuinely blocked, or explicitly stopped. A lightweight detached Node.js supervisor advances sequential external stages and rolling capacity checkpoints without model-token use, then exits when Codex input is required.
 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 
@@ -132,7 +140,10 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Use `run-project-manager` as the one-call default. It reuses only the same active goal and run contract; changed constraints, work graph, gates, routing authorization, or budgets trigger a bounded replacement. Same-goal constraints, gates, and work graph carry across stopped/completed runs, so earlier boundaries survive later steering without being restated.
 - `ready-for-codex` is still active until final verification or explicit termination. A changed goal stops that run first, and a replacement is refused if any old worker process cannot be confirmed stopped.
 - Complex default implementations wait for discovery evidence before writer dispatch so the orchestrator can infer a narrow file boundary instead of granting repository-wide write scope.
-- A five-hour capacity horizon is planning context, not permission for a five-hour command. Runs default to a 20-minute deadline and external workers to 6 minutes or less. Override those bounds only for a concrete reason.
+- A five-hour capacity horizon is a rolling forecast, not a countdown or project deadline. Project duration is continuous by default, with capacity re-evaluated every 20 minutes by the low-RAM supervisor or on the next status call.
+- Individual provider calls use complexity-adaptive safety leases: roughly 10 minutes for small work and up to 90 minutes for critical work. These protect against dead CLIs; they do not end the project, and an explicit `MaxWorkerMinutes` may set a different ceiling.
+- Capacity checkpoints never kill running workers. They refresh model/quota/cooldown evidence and may reroute only work that has not started.
+- The detached supervisor consumes no model tokens. It advances external dependency stages while `State: running` and exits at `ready-for-codex`, `blocked`, `completed`, replacement, or explicit stop.
 - Pass user constraints, acceptance criteria, and verification at the top level. New constraints or a changed goal cancel incompatible active workers immediately and are written into the next context capsule.
 - Browser profiles, cookies, saved credentials, account selection, email/SMS messages, and OAuth flows are protected state. Workers must stop at sign-in, CAPTCHA, email, SMS, or authorization gates unless the user explicitly authorizes that exact action.
 - Live session, login, cookie, account, profile, credential, OAuth, email/SMS, and CAPTCHA checks remain current-Codex actions. CLI workers may review bounded source code about those systems but do not inspect the user's live protected state.
@@ -141,6 +152,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Current-runtime analysis is automatically sequenced after the relevant live Codex control action. Downstream workers receive compact dependency results and verified Codex evidence instead of rediscovering state from scratch.
 - Codex-owned work cannot be marked complete without `codexEvidence`. A cancelled or invalid worker must be formally reassigned with `takeoverCodexItems` before Codex edits its scope.
 - Selection uses capability fit, required quality, capacity/freshness, speed/cost, independence, and project continuity. It is not a fixed UI/backend/testing map.
+- Keep appropriate healthy resources occupied when independent dependency-ready work exists, but never create duplicate lanes solely to maximize utilization.
 - Project affinity is learned only from successful worker outcomes. Timeouts and failed work lower reliability instead of making that resource more likely for the same task kind.
 - Repeated recent failures without a platform success move broad work to a proven alternative for the five-hour horizon; micro tasks remain eligible for cheap bounded workers.
 - Reserve Flash Low for tightly file-bounded micro tasks; prefer Flash Medium for broader repository review or project-health inspection.

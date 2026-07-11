@@ -45,7 +45,7 @@ param(
   [string] $AgyModel = "",
   [string] $AgyProject = "",
   [string] $AgyConversation = "",
-  [string] $AgyPrintTimeout = "5m",
+  [string] $AgyPrintTimeout = "30m",
   [object] $AgyContinueLatest = $false,
   [object] $AgySandbox = $true,
   [string] $ClaudeModel = "auto",
@@ -53,7 +53,7 @@ param(
   [string] $ClaudeEffort = "",
   [string] $ClaudePermissionMode = "",
   [string] $ClaudeMaxBudgetUsd = "",
-  [int] $ClaudeMaxMinutes = 6,
+  [int] $ClaudeMaxMinutes = 30,
   [string] $CursorModel = "",
   [object] $CursorChat = $false,
   [object] $CursorNewWindow = $false,
@@ -72,8 +72,9 @@ param(
   [object] $AllowAntigravityCli = $false,
   [object] $IncludePlan = $false,
   [object] $RefreshInventory = $false,
-  [int] $RunDeadlineMinutes = 20,
-  [int] $MaxWorkerMinutes = 6,
+  [int] $RunDeadlineMinutes = 0,
+  [int] $CapacityCheckpointMinutes = 20,
+  [int] $MaxWorkerMinutes = 0,
   [int] $MaxClaudeOutputTokens = 12000,
   [double] $MaxClaudeBudgetUsd = 0.75,
   [int] $WaitSeconds = 30,
@@ -1177,6 +1178,7 @@ function Invoke-TeamCommand {
     allowAntigravityCli = $allowAntigravityCliValue
     includeCursor = $includeCursorValue
     runDeadlineMinutes = $RunDeadlineMinutes
+    capacityCheckpointMinutes = $CapacityCheckpointMinutes
     maxWorkerMinutes = $MaxWorkerMinutes
     maxClaudeOutputTokens = $MaxClaudeOutputTokens
     maxClaudeBudgetUsd = $MaxClaudeBudgetUsd
@@ -1510,7 +1512,7 @@ function Invoke-AgyBridgeCommand {
     printTimeout = $AgyPrintTimeout
     start = $startValue
     jobId = $JobId
-    maxMinutes = $MaxWorkerMinutes
+    maxMinutes = if ($MaxWorkerMinutes -gt 0) { $MaxWorkerMinutes } else { 30 }
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-agy-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
@@ -1558,7 +1560,7 @@ function Invoke-CursorBridgeCommand {
     reuseWindow = $reuseWindowValue
     start = $startValue
     jobId = $JobId
-    maxMinutes = $MaxWorkerMinutes
+    maxMinutes = if ($MaxWorkerMinutes -gt 0) { $MaxWorkerMinutes } else { 30 }
   } | ConvertTo-Json -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-cursor-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))

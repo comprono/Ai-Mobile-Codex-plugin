@@ -20,7 +20,9 @@
 - Do not add a paraphrasing meta-router. Pass the capsule and source artifacts directly; merge once.
 - Launch later stages only after dependencies complete.
 - For a complex default graph, make implementation depend on discovery so the writer receives verified evidence and a narrow file boundary.
-- Bound every finite cycle: default 20-minute run deadline, six-minute maximum worker runtime, and one failover only. Capacity horizon is not runtime duration.
+- Keep project duration continuous by default. Treat the five-hour horizon as a rolling capacity forecast and perform 20-minute resource checkpoints without interrupting running workers.
+- Keep the low-RAM supervisor active only while external stages can advance autonomously. It uses no model tokens and exits when Codex action, verification, a blocker, replacement, or stop is required.
+- Give individual provider calls complexity-adaptive safety leases from 10 to 90 minutes. A dead-call timeout may rescope/fail over the item once; it never terminates the overall objective.
 - Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
 - Mark completed or blocked current-Codex items through `project-manager-status`; completion requires a matching compact evidence entry so dependent CLI work advances from verified state.
 - A worker that requires live/current runtime truth depends on the Codex live-control item and receives its evidence. Git status is not runtime evidence.
@@ -46,13 +48,14 @@ When a result is close but incomplete, send one narrow correction. When failure 
 | "The worker probably understood" | Require objective-specific output and evidence |
 | "All workers finished, so the goal is done" | Integrate and run project-level verification |
 | "More agents will be faster" | Fan out only genuinely independent work |
+| "Every available model must be busy" | Use each appropriate resource only for distinct dependency-ready work; do not duplicate lanes |
 | "The cached model list is probably current" | Use fresh catalog/quota evidence or preserve unknown |
 | "The CLI failed once, so open every UI" | Classify the failure; use UI only for required visible state or unsupported CLI behavior |
 | "Codex fixed it after the worker failed" | Record a Codex takeover and evidence before claiming the item complete |
-| "The app watchdog is active, so AI Mobile is still managing" | Report the app watchdog and finite AI Mobile run as separate states |
+| "The app watchdog is active, so AI Mobile is still managing" | Report the app watchdog and AI Mobile's recorded objective/workers as separate states |
 | "I acknowledged the new constraint" | Cancel stale workers and persist the constraint before replying |
 | "One more external reviewer is safer" | Keep low-complexity review of direct operational evidence with Codex |
-| "The five-hour horizon allows a long run" | Horizon is capacity planning; enforce the finite run deadline |
+| "The five-hour horizon is nearly over" | It is a rolling forecast; refresh capacity and continue the objective |
 
 ## User Escalation
 

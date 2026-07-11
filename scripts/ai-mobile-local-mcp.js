@@ -233,8 +233,9 @@ const tools = [
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
-        runDeadlineMinutes: { type: "number", description: "Hard wall-clock deadline for one finite orchestration cycle.", default: 20 },
-        maxWorkerMinutes: { type: "number", description: "Maximum runtime for any one external worker.", default: 6 },
+        runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
+        capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
+        maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker, expressed as provider-reported USD equivalent.", default: 0.75 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes.", default: false },
@@ -268,8 +269,9 @@ const tools = [
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside automatic policy.", default: false },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
-        runDeadlineMinutes: { type: "number", description: "Hard wall-clock deadline for this finite run.", default: 20 },
-        maxWorkerMinutes: { type: "number", description: "Maximum runtime for any one external worker.", default: 6 },
+        runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
+        capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
+        maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker.", default: 0.75 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns a dry plan.", default: true },
@@ -308,13 +310,13 @@ const tools = [
           },
         },
         codexModel: { type: "string", description: "Current Codex model label used when taking over a worker item." },
-        projectVerified: { type: "boolean", description: "Mark this finite orchestration cycle complete only after every work item completed and final project verification passed.", default: false },
+        projectVerified: { type: "boolean", description: "Mark the active objective complete only after every work item and final project verification passed.", default: false },
         projectVerificationFailed: { type: "boolean", description: "Record a failed final verification after all work items finish, preserving the blocker instead of permitting completion.", default: false },
         projectVerificationSummary: { type: "string", description: "Required compact evidence when final verification is recorded as passed or failed." },
         addConstraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "New user constraints to persist before any continuation work." },
         steeringDirective: { type: "string", description: "Latest user steering instruction or safety correction." },
         interruptRunningWorkers: { type: "boolean", description: "Cancel running external workers before applying new steering. Defaults true when constraints or a directive are supplied." },
-        stopRun: { type: "boolean", description: "Stop the finite orchestration cycle and cancel external workers.", default: false },
+        stopRun: { type: "boolean", description: "Stop the active objective and cancel external workers.", default: false },
         stopReason: { type: "string", description: "Required reason when stopping the run." },
       },
       required: ["workspace"],
@@ -408,8 +410,9 @@ const tools = [
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside the automatic policy. Routine work stays off premium models.", default: false },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
-        runDeadlineMinutes: { type: "number", description: "Hard wall-clock deadline for this finite run.", default: 20 },
-        maxWorkerMinutes: { type: "number", description: "Maximum runtime for any one external worker.", default: 6 },
+        runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
+        capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
+        maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Claude print-mode budget cap per worker.", default: 0.75 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
@@ -530,9 +533,9 @@ const tools = [
         conversation: { type: "string", description: "Optional Antigravity CLI conversation id to resume." },
         continueLatest: { type: "boolean", description: "Continue the most recent Antigravity CLI conversation.", default: false },
         sandbox: { type: "boolean", description: "Run Antigravity CLI with terminal sandbox restrictions enabled.", default: true },
-        printTimeout: { type: "string", description: "Antigravity CLI print timeout, such as 5m or 30s.", default: "5m" },
+        printTimeout: { type: "string", description: "Antigravity CLI print timeout, such as 30m or 90s.", default: "30m" },
         start: { type: "boolean", description: "Set false to create the job without starting Antigravity CLI.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Antigravity CLI worker may run.", default: 6 },
+        maxMinutes: { type: "number", description: "Maximum minutes the direct background Antigravity CLI worker may run.", default: 30 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -565,7 +568,7 @@ const tools = [
         maxBudgetUsd: { type: "number", description: "Optional Claude Code maximum spend for this job." },
         maxOutputTokens: { type: "number", description: "Fail the worker result when Claude reports output above this token budget." },
         start: { type: "boolean", description: "Set false to create the job and payload without starting Claude Code.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Claude worker may run.", default: 6 },
+        maxMinutes: { type: "number", description: "Maximum minutes the direct background Claude worker may run.", default: 30 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -602,7 +605,7 @@ const tools = [
         nextStep: { type: "string", description: "Specific next action.", default: "Inspect the relevant files and write compact artifacts." },
         model: { type: "string", description: "Optional Cursor agent model id or alias." },
         start: { type: "boolean", description: "Set false to create the job without starting Cursor agent.", default: true },
-        maxMinutes: { type: "number", description: "Maximum minutes the background Cursor worker may run.", default: 6 },
+        maxMinutes: { type: "number", description: "Maximum minutes the direct background Cursor worker may run.", default: 30 },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -2388,10 +2391,19 @@ function normalizedRunConstraints(args = {}) {
 }
 
 function normalizedRunControls(args = {}) {
-  const runDeadlineMinutes = Math.max(2, Math.min(120, Number(args.runDeadlineMinutes ?? 20)));
+  const requestedDeadline = Number(args.runDeadlineMinutes ?? 0);
+  const requestedCheckpoint = Number(args.capacityCheckpointMinutes ?? 20);
+  const requestedWorkerCap = Number(args.maxWorkerMinutes ?? 0);
   return {
-    runDeadlineMinutes,
-    maxWorkerMinutes: Math.max(1, Math.min(Math.min(20, runDeadlineMinutes), Number(args.maxWorkerMinutes ?? 6))),
+    runDeadlineMinutes: Number.isFinite(requestedDeadline) && requestedDeadline > 0
+      ? Math.max(2, Math.min(10080, requestedDeadline))
+      : 0,
+    capacityCheckpointMinutes: Number.isFinite(requestedCheckpoint)
+      ? Math.max(5, Math.min(240, requestedCheckpoint))
+      : 20,
+    maxWorkerMinutes: Number.isFinite(requestedWorkerCap) && requestedWorkerCap > 0
+      ? Math.max(1, Math.min(180, requestedWorkerCap))
+      : 0,
     maxClaudeOutputTokens: Math.max(2000, Math.min(50000, Number(args.maxClaudeOutputTokens ?? 12000))),
     maxClaudeBudgetUsd: Math.max(0.1, Math.min(10, Number(args.maxClaudeBudgetUsd ?? 0.75))),
   };
@@ -2399,9 +2411,11 @@ function normalizedRunControls(args = {}) {
 
 function workerMinutesFor(manifest, complexityRank, platform) {
   const desired = platform === "antigravity"
-    ? ({ 1: 2, 2: 3, 3: 4, 4: 5 })[complexityRank]
-    : ({ 1: 2, 2: 3, 3: 5, 4: 6 })[complexityRank];
-  return Math.max(1, Math.min(Number(manifest.maxWorkerMinutes || 6), desired || 3));
+    ? ({ 1: 10, 2: 20, 3: 40, 4: 60 })[complexityRank]
+    : ({ 1: 10, 2: 20, 3: 45, 4: 90 })[complexityRank];
+  const adaptiveLease = desired || 20;
+  const optionalCap = Number(manifest.maxWorkerMinutes || 0);
+  return Math.max(1, optionalCap > 0 ? Math.min(optionalCap, adaptiveLease) : adaptiveLease);
 }
 
 function claudeBudgetFor(manifest, complexityRank) {
@@ -2792,12 +2806,14 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     "AiMobileResourceOrchestrationPlan:",
     `Goal: ${goal || "<missing>"}`,
     `Workspace: ${workspace || "<missing>"}`,
-    `HorizonHours: ${horizonHours}`,
-    `RunDeadlineMinutes: ${controls.runDeadlineMinutes}`,
-    `MaxWorkerMinutes: ${controls.maxWorkerMinutes}`,
+    `CapacityHorizonHours: ${horizonHours} (rolling forecast, not a countdown)`,
+    `ProjectDuration: ${controls.runDeadlineMinutes > 0 ? `optional deadline ${controls.runDeadlineMinutes}m` : "continuous until verified, blocked, or explicitly stopped"}`,
+    `CapacityCheckpointMinutes: ${controls.capacityCheckpointMinutes}`,
+    `WorkerLeasePolicy: ${controls.maxWorkerMinutes > 0 ? `adaptive with ${controls.maxWorkerMinutes}m ceiling` : "complexity-adaptive (10m to 90m), no global worker cap"}`,
     `MaxClaudeOutputTokens: ${controls.maxClaudeOutputTokens}`,
     `AntigravityCliAutoDispatch: ${args.allowAntigravityCli === true}`,
     `OperatingMode: ${dispatchable.length ? "goal-driven-team" : "codex-only-until-workers-available"}`,
+    "UtilizationPolicy: use appropriate healthy resources for distinct dependency-ready work; never duplicate a lane merely to keep every model busy.",
     "Orchestrator: Codex owns goal interpretation, risk, feedback, integration, and final verification; workers own bounded execution.",
     "",
     "ResourceEvidence:",
@@ -3154,6 +3170,13 @@ function appendOrchestrationDecision(manifest, entry) {
 function terminateOrchestrationRun(workspace, suppliedManifest, reason, category) {
   const terminationReason = truncateText(redactArtifactContent(String(reason || "Orchestration stopped.").trim()), 1000);
   const terminationCategory = normalizeTaskLane(category || "stopped") || "stopped";
+  const supervisorPid = Number(suppliedManifest.supervisorPid || 0);
+  const supervisorTermination = supervisorPid === process.pid
+    ? { stopped: true, note: "Supervisor is stopping its own run." }
+    : supervisorPid > 0
+      ? terminateProcessTree(supervisorPid, suppliedManifest.supervisorMarker || suppliedManifest.runId)
+      : { stopped: true, note: "No supervisor process was recorded." };
+  const supervisorStopUnconfirmed = supervisorTermination.stopped ? 0 : 1;
   let targetedWorkers = 0;
   let cancelledWorkers = 0;
   let cancellationUnconfirmed = 0;
@@ -3186,6 +3209,8 @@ function terminateOrchestrationRun(workspace, suppliedManifest, reason, category
   });
   let manifest = {
     ...suppliedManifest,
+    supervisorPid: supervisorTermination.stopped ? 0 : supervisorPid,
+    supervisorEndedAt: supervisorTermination.stopped ? utcStamp() : suppliedManifest.supervisorEndedAt,
     jobs,
     workItems: (suppliedManifest.workItems || []).map((item) => item.state === "completed"
       ? item
@@ -3197,6 +3222,9 @@ function terminateOrchestrationRun(workspace, suppliedManifest, reason, category
       targetedWorkers,
       cancelledWorkers,
       cancellationUnconfirmed,
+      supervisorStopped: supervisorTermination.stopped,
+      supervisorStopUnconfirmed,
+      supervisorNote: supervisorTermination.note,
     },
   };
   manifest = appendOrchestrationDecision(manifest, {
@@ -3206,6 +3234,8 @@ function terminateOrchestrationRun(workspace, suppliedManifest, reason, category
     targetedWorkers,
     cancelledWorkers,
     cancellationUnconfirmed,
+    supervisorStopped: supervisorTermination.stopped,
+    supervisorStopUnconfirmed,
   });
   manifest.state = "blocked";
   manifest.counts = {
@@ -3272,8 +3302,9 @@ function runContractChanges(manifest, args = {}) {
     mode: String(manifest.mode || "patch").trim().toLowerCase(),
     horizonHours: Math.max(1, Math.min(12, Number(manifest.horizonHours || 5))),
     controls: {
-      runDeadlineMinutes: Number(manifest.runDeadlineMinutes || 20),
-      maxWorkerMinutes: Number(manifest.maxWorkerMinutes || 6),
+      runDeadlineMinutes: Number(manifest.runDeadlineMinutes ?? 0),
+      capacityCheckpointMinutes: Number(manifest.capacityCheckpointMinutes ?? 20),
+      maxWorkerMinutes: Number(manifest.maxWorkerMinutes ?? 0),
       maxClaudeOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
       maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd || 0.75),
     },
@@ -3299,6 +3330,200 @@ function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
   next.verification = boundedTextList([...(manifest.verification || []), ...(Array.isArray(rawArgs.verification) ? rawArgs.verification : [])], 12, 400);
   if ((!Array.isArray(rawArgs.workItems) || !rawArgs.workItems.length) && !String(rawArgs.taskSplit || "").trim()) next.workItems = manifest.workItems || [];
   return next;
+}
+
+function capacityCheckpointDue(manifest, now = Date.now()) {
+  if (!isActiveOrchestrationRun(manifest)) return false;
+  const interval = Number(manifest.capacityCheckpointMinutes ?? 20);
+  if (!Number.isFinite(interval) || interval <= 0) return false;
+  const scheduled = Date.parse(String(manifest.nextCapacityCheckpointAt || ""));
+  if (Number.isFinite(scheduled)) return now >= scheduled;
+  const baseline = Date.parse(String(manifest.lastCapacityCheckpointAt || manifest.createdAt || ""));
+  return Number.isFinite(baseline) && now >= baseline + (interval * 60000);
+}
+
+function capacityArgsFromManifest(manifest) {
+  const routing = manifest.routingPolicy || {};
+  return {
+    goal: manifest.goal,
+    workspace: manifest.workspace,
+    mode: manifest.mode,
+    horizonHours: manifest.horizonHours,
+    allowAntigravityCli: routing.allowAntigravityCli === true || manifest.allowAntigravityCli === true,
+    allowPremiumModels: routing.allowPremiumModels === true,
+    agyModel: routing.agyModel || "auto",
+    claudeModel: routing.claudeModel || "auto",
+    includeCursor: routing.includeCursor === true,
+    refreshInventory: true,
+  };
+}
+
+function applyCapacityCheckpointCandidates(manifest, candidates, args = {}) {
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const reroutes = [];
+  const workItems = (manifest.workItems || []).map((item) => {
+    const resourceBlocked = item.state === "blocked" && String(item.blocker || "").startsWith("Assigned resource ");
+    if (item.state !== "pending" && !resourceBlocked) return item;
+    const ranked = rankResourcesForWorkItem(candidates, item, args, manifest.primaryWriterId || "");
+    const current = byId.get(item.assignment);
+    const currentRow = ranked.find((row) => row.candidate.id === current?.id);
+    const best = ranked[0];
+    const materiallyBetter = best && currentRow && best.candidate.id !== current?.id && best.score >= currentRow.score + 20;
+    const selected = current?.dispatchable && current.state === "available" && !materiallyBetter
+      ? current
+      : best?.candidate;
+    if (!selected) return { ...item, alternates: [] };
+    const alternates = selectAlternateResourceIds(ranked, selected, 3);
+    if (selected.id !== item.assignment) reroutes.push({ workItemId: item.id, from: item.assignment, to: selected.id });
+    return {
+      ...item,
+      state: resourceBlocked ? "pending" : item.state,
+      assignment: selected.id,
+      assignedModel: selected.model,
+      alternates,
+      blocker: resourceBlocked ? "" : item.blocker,
+      failureCategory: resourceBlocked ? "" : item.failureCategory,
+      decisionReason: selected.id === item.assignment
+        ? item.decisionReason
+        : "Rolling capacity checkpoint selected a healthy resource for remaining work.",
+    };
+  });
+  let next = { ...manifest, resources: candidates, workItems };
+  const writerReroute = reroutes.find((reroute) => workItems.find((item) => item.id === reroute.workItemId && !item.readOnly));
+  if (writerReroute) next.primaryWriterId = writerReroute.to;
+  for (const reroute of reroutes) {
+    next = appendOrchestrationDecision(next, {
+      type: "capacity-checkpoint-reroute",
+      ...reroute,
+      reason: "prior resource was unavailable; running workers were left untouched",
+    });
+  }
+  return { manifest: next, reroutes };
+}
+
+async function refreshCapacityCheckpoint(workspace) {
+  const manifestPath = lastTeamRunJsonPath(workspace);
+  const stored = readJsonFile(manifestPath, null);
+  if (!stored) return null;
+  const observed = refreshTeamRunManifest(workspace, stored);
+  if (!capacityCheckpointDue(observed)) return observed;
+  const args = capacityArgsFromManifest(observed);
+  let context;
+  try {
+    context = await getTeamCapacityContext(args);
+  } catch (error) {
+    return withFileLock(manifestPath, () => {
+      let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, observed));
+      if (latest.runId !== observed.runId) return latest;
+      if (!capacityCheckpointDue(latest)) return latest;
+      latest = appendOrchestrationDecision(latest, {
+        type: "capacity-checkpoint-failed",
+        reason: truncateText(redactArtifactContent(error?.message || String(error)), 500),
+      });
+      latest.lastCapacityCheckpointAt = utcStamp();
+      latest.nextCapacityCheckpointAt = new Date(Date.now() + Number(latest.capacityCheckpointMinutes || 20) * 60000).toISOString();
+      writeTeamRunManifest(workspace, latest);
+      return latest;
+    });
+  }
+  const candidates = buildResourceCandidates(args, context);
+  return withFileLock(manifestPath, () => {
+    let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, observed));
+    if (latest.runId !== observed.runId) return latest;
+    if (!capacityCheckpointDue(latest)) return latest;
+    const refreshed = applyCapacityCheckpointCandidates(latest, candidates, args);
+    latest = refreshed.manifest;
+    latest.capacityProbe = context.capacityProbe;
+    latest.lastCapacityCheckpointAt = utcStamp();
+    latest.nextCapacityCheckpointAt = new Date(Date.now() + Number(latest.capacityCheckpointMinutes || 20) * 60000).toISOString();
+    latest.capacityCheckpointCount = Number(latest.capacityCheckpointCount || 0) + 1;
+    latest = appendOrchestrationDecision(latest, {
+      type: "capacity-checkpoint",
+      resourceCount: candidates.length,
+      reroutedItems: refreshed.reroutes.map((item) => item.workItemId),
+      reason: "rolling capacity refreshed without interrupting active workers",
+    });
+    writeTeamRunManifest(workspace, latest);
+    return latest;
+  });
+}
+
+function shouldRunOrchestrationSupervisor(manifest) {
+  return Number(manifest?.version || 1) >= 2
+    && manifest?.state === "running"
+    && !manifest?.termination?.category;
+}
+
+function orchestrationSupervisorHealthy(manifest) {
+  const pid = Number(manifest?.supervisorPid || 0);
+  if (!Number.isInteger(pid) || pid <= 0 || !isProcessAlive(pid)) return false;
+  const commandLine = processCommandLine(pid).toLowerCase();
+  return Boolean(commandLine) && commandLine.includes(String(manifest.runId || "").toLowerCase());
+}
+
+function ensureOrchestrationSupervisor(workspace, suppliedManifest = null) {
+  const manifestPath = lastTeamRunJsonPath(workspace);
+  return withFileLock(manifestPath, () => {
+    let latest = refreshTeamRunManifest(workspace, readJsonFile(manifestPath, suppliedManifest) || suppliedManifest);
+    if (!shouldRunOrchestrationSupervisor(latest) || orchestrationSupervisorHealthy(latest)) return latest;
+    const supervisorDir = path.join(bridgeRootFor(workspace), "orchestrator");
+    const payloadPath = path.join(supervisorDir, `supervisor-${latest.runId}.json`);
+    writeJsonFile(payloadPath, { workspace, runId: latest.runId, pollSeconds: 3 });
+    const child = spawn(process.execPath, [__filename, "orchestration-supervisor-cli", "--json-file", payloadPath], {
+      cwd: pluginRoot,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    latest = {
+      ...latest,
+      supervisorPid: child.pid,
+      supervisorMarker: latest.runId,
+      supervisorStartedAt: utcStamp(),
+      supervisorEndedAt: "",
+    };
+    latest = appendOrchestrationDecision(latest, {
+      type: "supervisor-start",
+      pid: child.pid,
+      reason: "low-RAM CLI supervisor advances external stages without model-token use",
+    });
+    writeTeamRunManifest(workspace, latest);
+    return latest;
+  });
+}
+
+async function runOrchestrationSupervisor(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const runId = String(args.runId || "").trim();
+  if (!runId) throw new Error("orchestration-supervisor requires runId.");
+  const pollMs = Math.max(1000, Math.min(30000, Number(args.pollSeconds || 3) * 1000));
+  let finalState = "unknown";
+  while (true) {
+    let manifest = readJsonFile(lastTeamRunJsonPath(workspace), null);
+    if (!manifest || manifest.runId !== runId) {
+      finalState = "replaced";
+      break;
+    }
+    if (!shouldRunOrchestrationSupervisor(manifest)) {
+      finalState = manifest.state || "stopped";
+      break;
+    }
+    await refreshCapacityCheckpoint(workspace);
+    manifest = advanceOrchestrationRun(workspace, refreshTeamRunManifest(workspace));
+    finalState = manifest.state || "unknown";
+    if (!shouldRunOrchestrationSupervisor(manifest)) break;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  withFileLock(lastTeamRunJsonPath(workspace), () => {
+    let latest = readJsonFile(lastTeamRunJsonPath(workspace), null);
+    if (!latest || latest.runId !== runId || Number(latest.supervisorPid || 0) !== process.pid) return;
+    latest.supervisorPid = 0;
+    latest.supervisorEndedAt = utcStamp();
+    latest.supervisorLastState = finalState;
+    writeTeamRunManifest(workspace, latest);
+  });
+  return `OrchestrationSupervisorResult:\nRunId: ${runId}\nState: ${finalState}`;
 }
 
 function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, launchGroup = launchOrchestrationGroup) {
@@ -3610,10 +3835,12 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     `State: ${snapshot.state}`,
     orchestrated ? `CompletionClaimAllowed: ${snapshot.state === "completed"}` : null,
     orchestrated ? `RequiredUserStatus: AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
-    orchestrated && snapshot.state !== "completed" ? "RequiredClaimBoundary: do not say done, successful, actively managed, or that AI Mobile remains active." : null,
+    orchestrated && snapshot.state !== "completed" ? `RequiredClaimBoundary: do not say done or successful; report the exact ${snapshot.state} state and only the workers actually recorded below.` : null,
     `Workspace: ${workspace}`,
-    orchestrated ? `DeadlineAt: ${snapshot.deadlineAt || "legacy-run-no-deadline"}` : null,
-    orchestrated ? `Budgets: run=${snapshot.runDeadlineMinutes || "legacy"}m; worker<=${snapshot.maxWorkerMinutes || "legacy"}m; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
+    orchestrated ? `ProjectDuration: ${snapshot.deadlineAt ? `optional deadline ${snapshot.deadlineAt}` : "continuous until verified, blocked, or explicitly stopped"}` : null,
+    orchestrated ? `CapacityHorizon: rolling ${snapshot.horizonHours || 5}h forecast; nextReview=${snapshot.nextCapacityCheckpointAt || "on next status refresh"}; reviews=${snapshot.capacityCheckpointCount || 0}` : null,
+    orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
+    orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
     orchestrated ? "WorkGraph:" : null,
@@ -3642,7 +3869,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
         ].filter(Boolean)
       : []),
     ...(orchestrated && snapshot.termination?.category
-      ? ["RunTermination:", `- ${snapshot.termination.category}: ${truncateText(snapshot.termination.reason, 500)}; workersTargeted=${snapshot.termination.targetedWorkers || 0}; workersStopped=${snapshot.termination.cancelledWorkers || 0}; stopUnconfirmed=${snapshot.termination.cancellationUnconfirmed || 0}`]
+      ? ["RunTermination:", `- ${snapshot.termination.category}: ${truncateText(snapshot.termination.reason, 500)}; workersTargeted=${snapshot.termination.targetedWorkers || 0}; workersStopped=${snapshot.termination.cancelledWorkers || 0}; workerStopUnconfirmed=${snapshot.termination.cancellationUnconfirmed || 0}; supervisorStopped=${snapshot.termination.supervisorStopped !== false}; supervisorStopUnconfirmed=${snapshot.termination.supervisorStopUnconfirmed || 0}`]
       : []),
     ...(orchestrated && typeof snapshot.finalVerification?.passed === "boolean"
       ? ["FinalVerification:", `- passed=${snapshot.finalVerification.passed}; ${truncateText(snapshot.finalVerification.summary, 700)}`]
@@ -3678,10 +3905,10 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (snapshot.termination?.category) lines.push("Next: this run is stopped. Apply the latest user constraints and start a new bounded run only if the user still wants continuation.");
-  else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker, then run a new bounded cycle or re-verify this completed work graph; completion is not allowed.");
+  if (snapshot.termination?.category) lines.push("Next: this run is stopped. Apply the latest user constraints and start a new objective run only if the user still wants continuation.");
+  else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker and continue or re-verify this objective; completion is not allowed.");
   else if (snapshot.state === "ready-for-codex") lines.push("Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
-  else if (snapshot.state === "completed") lines.push("Next: this finite orchestration cycle is verified complete. Do not describe it as a persistent manager or scheduler unless a separate durable automation is actually running.");
+  else if (snapshot.state === "completed") lines.push("Next: this objective is verified complete. Continuous mode does not invent more work after the acceptance gates pass.");
   else if (snapshot.state === "running") lines.push(`Next: call project-manager-status for ${workspace}; completion is not yet allowed.`);
   else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
   return lines.join("\n");
@@ -3690,7 +3917,9 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
 async function readTeamRun(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
   const waitSeconds = Math.max(0, Math.min(300, Number(args.waitSeconds || 0)));
-  const snapshot = await waitForTeamRun(workspace, waitSeconds);
+  const checkpointSnapshot = await refreshCapacityCheckpoint(workspace);
+  let snapshot = await waitForTeamRun(workspace, waitSeconds, checkpointSnapshot);
+  if (shouldRunOrchestrationSupervisor(snapshot)) snapshot = ensureOrchestrationSupervisor(workspace, snapshot);
   const output = formatTeamRunSnapshot(workspace, snapshot, waitSeconds);
   writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${output}\n`);
   return output;
@@ -3742,7 +3971,12 @@ async function orchestrateProject(args = {}) {
     version: 2,
     runId,
     createdAt,
-    deadlineAt: new Date(Date.now() + controls.runDeadlineMinutes * 60000).toISOString(),
+    deadlineAt: controls.runDeadlineMinutes > 0
+      ? new Date(Date.now() + controls.runDeadlineMinutes * 60000).toISOString()
+      : "",
+    projectDurationMode: controls.runDeadlineMinutes > 0 ? "optional-deadline" : "continuous",
+    nextCapacityCheckpointAt: new Date(Date.now() + controls.capacityCheckpointMinutes * 60000).toISOString(),
+    capacityCheckpointCount: 0,
     goal,
     workspace,
     mode: String(args.mode || "patch").trim().toLowerCase(),
@@ -3776,7 +4010,9 @@ async function orchestrateProject(args = {}) {
   persistOrchestrationDecision(workspace, goal, decision);
 
   const waitSeconds = Math.max(0, Math.min(300, Number(args.waitSeconds ?? 30)));
-  const snapshot = await waitForTeamRun(workspace, waitSeconds, manifest);
+  const supervisedManifest = ensureOrchestrationSupervisor(workspace, manifest);
+  let snapshot = await waitForTeamRun(workspace, waitSeconds, supervisedManifest);
+  if (shouldRunOrchestrationSupervisor(snapshot)) snapshot = ensureOrchestrationSupervisor(workspace, snapshot);
   const compactResult = formatTeamRunSnapshot(workspace, snapshot, waitSeconds);
   const output = [
     "OrchestrateProjectResult:",
@@ -3834,19 +4070,19 @@ async function runProjectManager(args = {}) {
           goalChanged
             ? `User supplied a different project goal; run ${latest.runId || "<legacy>"} was stopped before replanning.`
             : expired
-              ? `Run ${latest.runId || "<legacy>"} reached its deadline and was replaced by a fresh bounded cycle.`
+              ? `Run ${latest.runId || "<legacy>"} reached its optional deadline and was stopped before replacement.`
               : `Run contract changed (${contractChanges.join(", ")}); run ${latest.runId || "<legacy>"} was stopped before replanning.`,
           expired ? "orchestration-deadline" : "user-steering",
         );
         writeTeamRunManifest(workspace, stopped);
         stoppedManifest = stopped;
       });
-      if (Number(stoppedManifest?.termination?.cancellationUnconfirmed || 0) > 0) {
+      if (Number(stoppedManifest?.termination?.cancellationUnconfirmed || 0) > 0 || Number(stoppedManifest?.termination?.supervisorStopUnconfirmed || 0) > 0) {
         const refusedReplacement = [
           "RunProjectManagerResult:",
           `ReplacedRunId: ${existing.runId || "<legacy>"}`,
           "ReplacementStarted: false",
-          "Reason: at least one previous worker process could not be confirmed stopped; a new run was refused to prevent overlapping work.",
+          "Reason: at least one previous worker or supervisor process could not be confirmed stopped; a new run was refused to prevent overlapping work.",
           "",
           formatTeamRunSnapshot(workspace, stoppedManifest, 0),
         ].join("\n");
@@ -3857,7 +4093,7 @@ async function runProjectManager(args = {}) {
       const replacementResult = [
         "RunProjectManagerResult:",
         `ReplacedRunId: ${existing.runId || "<legacy>"}`,
-        `Reason: ${replacementReason}, so stale workers were stopped before a new bounded run started.`,
+        `Reason: ${replacementReason}, so stale workers and the prior supervisor were stopped before a new objective run started.`,
         "",
         replacement,
       ].join("\n");
@@ -5572,7 +5808,7 @@ function submitAgyJob(args = {}) {
     workspace: created.workspace,
     jobId: created.jobId,
     model: args.model || args.agyModel || "gemini-3.5-flash-low",
-    printTimeout: args.printTimeout || "5m",
+    printTimeout: args.printTimeout || "30m",
   });
   const child = spawn(process.execPath, [__filename, "agy-job-worker-cli", "--json-file", payloadPath], {
     cwd: pluginRoot,
@@ -5817,7 +6053,7 @@ function runClaudeJobWorker(args = {}) {
 
   const mode = String(args.mode || "fast").trim().toLowerCase();
   const permissionMode = safeClaudeFlag(args.permissionMode || (mode === "review" ? "plan" : "acceptEdits"), "permissionMode");
-  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 10)));
+  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 30)));
   const maxOutputTokens = Math.max(2000, Math.min(50000, Number(args.maxOutputTokens ?? 12000)));
   const prompt = buildClaudeJobPrompt(workspace, jobId, { ...args, permissionMode });
   const cliArgs = [
@@ -6996,8 +7232,9 @@ function runSelfTest() {
   assert(shouldFanOut([{ id: "a", kind: "research", readOnly: true, dependsOn: [] }, { id: "b", kind: "review", readOnly: true, dependsOn: [] }]), "independent distinct read-only work may fan out");
   assert(!shouldFanOut([{ id: "a", kind: "implementation", readOnly: false, dependsOn: [] }, { id: "b", kind: "implementation", readOnly: false, dependsOn: [] }]), "parallel shared-workspace writers are refused");
   const defaultControls = normalizedRunControls({});
-  assert(defaultControls.runDeadlineMinutes === 20 && defaultControls.maxWorkerMinutes === 6 && defaultControls.maxClaudeOutputTokens === 12000, "finite runs and workers receive conservative default budgets");
-  assert(workerMinutesFor(defaultControls, 4, "antigravity") === 5 && claudeBudgetFor(defaultControls, 4) === 0.75, "provider worker budgets stay below the run deadline");
+  assert(defaultControls.runDeadlineMinutes === 0 && defaultControls.capacityCheckpointMinutes === 20 && defaultControls.maxWorkerMinutes === 0 && defaultControls.maxClaudeOutputTokens === 12000, "projects default to continuous duration with rolling capacity checkpoints");
+  assert(workerMinutesFor(defaultControls, 4, "antigravity") === 60 && workerMinutesFor(defaultControls, 4, "claude") === 90 && workerMinutesFor({ ...defaultControls, maxWorkerMinutes: 25 }, 4, "claude") === 25, "worker leases adapt to complexity and honor only an explicit ceiling");
+  assert(claudeBudgetFor(defaultControls, 4) === 0.75, "Claude output remains cost-bounded without limiting project duration");
   const safetyConstraints = normalizedRunConstraints({ constraints: ["Do not access email."] });
   assert(safetyConstraints.some((item) => /OAuth consent/.test(item)) && safetyConstraints.some((item) => /browser and account state/.test(item)) && safetyConstraints.some((item) => /Do not access email/.test(item)), "default browser, account, OAuth, and user constraints are propagated together");
   const contractArgs = { goal: "Refactor a bounded module", mode: "patch", horizonHours: 5 };
@@ -7202,6 +7439,20 @@ function runSelfTest() {
     ],
   }, { alternates: ["claude:sonnet"] });
   assert(dispatchAlternate?.id === "claude:sonnet", "an unavailable assigned resource can reroute to a healthy pre-vetted alternate before dispatch");
+  const checkpointCandidates = [
+    { id: "claude:haiku", platform: "claude", dispatchable: true, state: "cooldown", model: "haiku", capabilities: ["general-reasoning"], quality: 74, speed: 95, cost: 98, remainingPercent: 50 },
+    { id: "claude:sonnet", platform: "claude", dispatchable: true, state: "available", model: "sonnet", capabilities: ["general-reasoning"], quality: 98, speed: 68, cost: 55, remainingPercent: 80 },
+  ];
+  const checkpointRefresh = applyCapacityCheckpointCandidates({
+    primaryWriterId: "claude:haiku",
+    resources: checkpointCandidates,
+    decisions: [],
+    workItems: [
+      { id: "pending", objective: "Review pending evidence", kind: "review", state: "pending", assignment: "claude:haiku", assignedModel: "haiku", readOnly: true, complexity: "medium", requiredCapabilities: ["general-reasoning"], expectedFiles: [], dependsOn: [], alternates: [], blocker: "", failureCategory: "" },
+      { id: "running", objective: "Review active evidence", kind: "review", state: "running", assignment: "claude:haiku", assignedModel: "haiku", readOnly: true, complexity: "medium", requiredCapabilities: ["general-reasoning"], expectedFiles: [], dependsOn: [], alternates: [], blocker: "", failureCategory: "" },
+    ],
+  }, checkpointCandidates, {}).manifest;
+  assert(checkpointRefresh.workItems.find((item) => item.id === "pending")?.assignment === "claude:sonnet" && checkpointRefresh.workItems.find((item) => item.id === "running")?.assignment === "claude:haiku", "capacity checkpoints reroute only unstarted work and never interrupt a running worker");
   assert(hasAvailableDispatchRoute({
     resources: [
       { id: "claude:haiku", dispatchable: true, state: "cooldown" },
@@ -7262,6 +7513,9 @@ function runSelfTest() {
   }, "Run deadline reached.", "orchestration-deadline");
   assert(deadlineManifest.state === "blocked" && deadlineManifest.workItems[0].state === "blocked" && deadlineManifest.termination.category === "orchestration-deadline", "run deadline termination blocks unfinished work without a success claim");
   assert(runDeadlineExpired({ deadlineAt: "2000-01-01T00:00:00.000Z" }), "expired run deadlines are detected deterministically");
+  assert(!runDeadlineExpired({ deadlineAt: "" }), "continuous projects have no implicit wall-clock deadline");
+  assert(capacityCheckpointDue({ version: 2, state: "running", capacityCheckpointMinutes: 20, nextCapacityCheckpointAt: "2000-01-01T00:00:00.000Z" }), "rolling capacity checkpoints become due without terminating the project");
+  assert(shouldRunOrchestrationSupervisor({ version: 2, state: "running" }) && !shouldRunOrchestrationSupervisor({ version: 2, state: "ready-for-codex" }), "low-RAM supervisor runs only while external orchestration can advance autonomously");
   assert(isActiveOrchestrationRun({ version: 2, state: "ready-for-codex" }) && !isActiveOrchestrationRun({ version: 2, state: "blocked" }), "ready-for-codex remains active until final verification or termination");
   const parsedClaude = parseClaudeJsonOutput(JSON.stringify({ result: "ok", duration_ms: 12, usage: { input_tokens: 2, output_tokens: 1 }, modelUsage: { "claude-sonnet-5": {} } }));
   assert(parsedClaude.resultText === "ok" && parsedClaude.observedModel === "claude-sonnet-5", "Claude JSON output yields compact result and per-run model telemetry");
@@ -7780,7 +8034,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -7795,6 +8049,7 @@ if (["self-test-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-effi
 
   const actions = {
     "self-test-cli": async () => runSelfTest(),
+    "orchestration-supervisor-cli": runOrchestrationSupervisor,
     "orchestration-plan-cli": buildOrchestrationPlan,
     "efficiency-flow-cli": buildEfficiencyFlow,
     "run-efficient-task-cli": runEfficientTask,

@@ -16,7 +16,7 @@
 - Default to safe-mode, non-persistent sessions. Record the dominant model plus the bounded model mix so helper-model calls do not masquerade as the requested worker model.
 - Prefer an exact model id learned from real CLI telemetry over a moving alias. Keep the alias only for quota-window applicability and policy.
 - Never infer live runtime state from source control. Consume recorded dependency evidence or report the state as unknown.
-- Every Claude lane receives a time cap, provider budget cap, and output-token ceiling. Direct bridge jobs default to six minutes. A budget breach is terminal for that lane and does not trigger a second paid attempt.
+- Every Claude lane receives a complexity-adaptive safety lease, provider budget cap, and output-token ceiling. Direct bridge jobs default to 30 minutes. A budget breach is terminal for that lane and does not trigger a second paid attempt; it does not terminate the project.
 
 ## Antigravity CLI
 
@@ -24,7 +24,7 @@
 - Dispatch: `submit-agy-job`.
 - The CLI can automatically open browser OAuth when its token is absent or stale. Automatic orchestration therefore treats it as authorization-required unless `allowAntigravityCli=true` or an exact `agyModel` was explicitly requested.
 - Once explicitly enabled, CLI is the normal low-RAM path.
-- Direct bridge jobs default to six minutes; orchestration may choose a smaller cap by complexity.
+- Direct bridge jobs default to 30 minutes; orchestration chooses a 10-60 minute lease by complexity unless an explicit ceiling is supplied.
 
 ## Antigravity Desktop
 
@@ -37,7 +37,7 @@ If the DevTools MCP transport is closed, call `devtools-health` once. Repeated c
 - Status: `cursor-status`.
 - Dispatch: `submit-cursor-job` only for a verified headless agent.
 - `open-cursor` is an explicit UI fallback, never an automatic startup action.
-- Direct headless jobs default to six minutes.
+- Direct headless jobs default to 30 minutes; orchestration uses a 10-90 minute adaptive lease.
 
 ## Startup
 

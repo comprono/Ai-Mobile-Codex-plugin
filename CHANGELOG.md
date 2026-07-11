@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-- Added hard orchestration deadlines, provider-specific worker timeouts, Claude output-token ceilings, and per-worker provider budgets so a finite cycle cannot silently become a multi-hour run.
-- Bounded direct Claude, Antigravity, and Cursor bridge jobs to six minutes by default, with explicit overrides still available.
+- Replaced the default project deadline with continuous objective duration: work remains resumable until verified, genuinely blocked, or explicitly stopped; an optional explicit deadline remains available.
+- Added rolling 20-minute capacity checkpoints that refresh models, quota/reset windows, cooldowns, and pending assignments without interrupting running workers.
+- Added a detached low-RAM, zero-model-token supervisor that advances sequential external stages and checkpoints, then exits when Codex input or a terminal decision is required.
+- Replaced the global six-minute worker cap with complexity-adaptive 10-90 minute safety leases; direct Claude, Antigravity, and Cursor jobs default to 30 minutes.
 - Added immediate user steering: new goals, stop requests, and safety constraints cancel incompatible active workers, persist the reason, and block unfinished items fail closed.
 - Treated `ready-for-codex` as an active run, stopped it before changed-goal replacement, and refused replacement when an old worker process could not be confirmed stopped.
 - Made active-run idempotency compare the full contract, including constraints, work graph, gates, routing authorization, and budgets, while carrying prior same-goal constraints, gates, and work graph across later additions and terminal-run continuation.
@@ -14,7 +16,7 @@
 - Sequenced complex default implementation after discovery so verified evidence can establish that writer boundary.
 - Required discovery handoffs that unlock a writer to return exact workspace-relative file targets in backticks for deterministic boundary enforcement.
 - Collapsed redundant low-complexity reviews of current-Codex operations instead of launching another provider and delaying closeout.
-- Compacted project-manager status output to the newest relevant jobs, budget/deadline state, active constraints, and termination evidence.
+- Compacted project-manager status output to the newest relevant jobs, continuous-duration state, rolling capacity horizon/checkpoint, active constraints, and termination evidence.
 - Added evidence-backed Codex completion, explicit takeover of failed worker items, downstream dependency-result handoff, and final project verification before a run can report `completed`.
 - Failed final verification now records an explicit blocked state, and a cooling-down resource reroutes to a healthy pre-vetted alternate before dispatch.
 - Added live-state dependency injection so runtime analysis cannot race ahead of the current Codex control check or infer liveness from Git deletions.

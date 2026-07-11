@@ -9,11 +9,19 @@ Use one Codex chat as the project control room. The current Codex session is the
 
 ## Steering First
 
-When a user changes the goal, adds a safety constraint, says stop, or withdraws permission while a run exists, handle that before any other work. Call `project-manager-status` with `steeringDirective`, any `addConstraints`, and `interruptRunningWorkers=true` (or `stopRun=true`). Do not merely acknowledge the instruction while an old worker continues. Start a new bounded run only if the user still wants continuation.
+When a user changes the goal, adds a safety constraint, says stop, or withdraws permission while a run exists, handle that before any other work. Call `project-manager-status` with `steeringDirective`, any `addConstraints`, and `interruptRunningWorkers=true` (or `stopRun=true`). Do not merely acknowledge the instruction while an old worker continues. Start a new objective run only if the user still wants continuation.
 
 If `run-project-manager` is called again, reuse the active run only when its goal, work graph, constraints, acceptance/verification gates, routing authorization, and budgets are unchanged. Accumulate existing same-goal constraints and gates with later additions, including across a stopped/completed run; do not require the user to restate them.
 
 Examples requiring immediate interruption include: "do not access email", "stop", "do not use Antigravity", "do not change my browser profile", a new project goal, or revoked authorization for a live operation.
+
+## Operating Frame
+
+- Objective lifetime: continuous until verified, genuinely blocked, or explicitly stopped.
+- Capacity horizon: rolling five-hour forecast for model selection, never a countdown.
+- Capacity checkpoint: default 20 minutes while the low-RAM supervisor runs, or on the next status call; refresh resources without interrupting active workers.
+- Worker lease: adaptive 10-90 minute provider-call watchdog, not a project deadline.
+- Utilization: keep appropriate healthy resources working on distinct dependency-ready items; never duplicate work just to use every model.
 
 ## Default Workflow
 
@@ -21,7 +29,7 @@ For a nontrivial project goal:
 
 1. Understand the outcome, constraints, risk, current state, acceptance criteria, and focused verification.
 2. Look for the normalized direct MCP tool `mcp__ai_mobile_local__run_project_manager`. Do not declare AI Mobile unavailable until exposed tool names have been searched for the `mcp__ai_mobile_local__` prefix.
-3. Call `run-project-manager` once with `goal`, `workspace`, `horizonHours=5`, `runDeadlineMinutes=20`, `maxWorkerMinutes=6`, `maxClaudeOutputTokens=12000`, `start=true`, and a dependency-aware `workItems` graph only when the goal genuinely needs one. Pass top-level `constraints`, `acceptanceCriteria`, and `verification`; keep `includePlan=false` unless debugging routing. In a complex default graph, discovery completes before implementation so verified evidence can establish the writer's file boundary.
+3. Call `run-project-manager` once with `goal`, `workspace`, `horizonHours=5`, `runDeadlineMinutes=0`, `capacityCheckpointMinutes=20`, `maxWorkerMinutes=0`, `maxClaudeOutputTokens=12000`, `start=true`, and a dependency-aware `workItems` graph only when the goal genuinely needs one. Zero project deadline means continuous until verified, blocked, or explicitly stopped; zero worker cap means complexity-adaptive safety leases. Pass top-level `constraints`, `acceptanceCriteria`, and `verification`; keep `includePlan=false` unless debugging routing. In a complex default graph, discovery completes before implementation so verified evidence can establish the writer's file boundary.
 4. Do not read `project-manager-plan.json`, reconstruct submit commands, or manually call provider workers after a successful run call. The orchestrator dispatches eligible CLI work and returns `CodexOwnedActions` directly.
 5. While workers run, complete only the returned Codex-owned critical path: authorization, live-state checks, architecture decisions, integration, or another non-duplicated item. Any worker that needs live/current/runtime truth must depend on that verified Codex action.
 6. Use `project-manager-status` for compact continuation. Every `completedCodexItems` id must have a matching `codexEvidence` entry containing a concise verified summary and optional artifact refs. Pass blocked ids in `failedCodexItems`.
@@ -54,8 +62,12 @@ The bridge may start external CLI jobs, but an MCP server cannot invoke host-nat
 - Apply every quota window that governs a model and route using the most restrictive remaining window.
 - Discover models and supported effort levels from current catalogs/tool schemas. Honor the local model allow-pattern, and flag it when its review date is due.
 - Use the cheapest/fastest model that safely meets the quality floor. Reserve highest efforts and premium models for materially critical reasoning, not routine work.
+- Use all appropriate healthy resources when the graph has genuinely independent ready work, while preserving one writer and avoiding duplicate analysis.
 - A provider outage, exhausted window, invalid model, timeout, or insufficient result triggers cooldown and one narrow failover. Do not loop retries.
-- `horizonHours` is capacity planning, not permission to run for hours. The default finite run deadline is 20 minutes and each external worker is capped at six minutes or less.
+- `horizonHours` is a rolling capacity forecast, never a countdown. Project duration is continuous by default; `capacityCheckpointMinutes` refreshes remaining capacity without terminating the objective.
+- Worker calls use complexity-adaptive safety leases from 10 to 90 minutes when `maxWorkerMinutes=0`. A lease timeout rescoping/failover protects against a dead provider process but does not terminate the project.
+- At a capacity checkpoint, refresh catalogs, quota windows, resets, cooldowns, and recent outcomes. Preserve running assignments; reroute only pending or resource-blocked work.
+- The detached CLI supervisor uses no model tokens. It advances sequential external stages while the run is `running` and exits when current Codex input or a terminal decision is required.
 - Claude workers receive a provider cost cap and a reported output-token cap. `budget-exceeded` stops the lane without failover so cost is not doubled.
 - Antigravity CLI may launch a browser OAuth flow. Do not auto-dispatch it unless the user explicitly enables `allowAntigravityCli=true` or supplies a specific `agyModel`. Prefer Claude/current Codex when that authorization is absent.
 
@@ -91,7 +103,7 @@ Before answering the user, call `project-manager-status` once and treat its `Sta
 - Start with `AI Mobile run <RunId>: <State>`.
 - Report the models/resources that actually ran, the Codex-owned action, and the compact evidence.
 - If `CompletionClaimAllowed: false`, do not say done, successful, actively managed, or that the management goal remains active. State the failed/blocked item and the next recovery action.
-- A `completed` run means one finite orchestration cycle passed final verification. It is not a persistent manager, scheduler, or future improvement loop unless a separate durable automation was actually created and verified.
+- A `completed` run means the objective passed final verification. Continuous mode keeps unfinished work resumable for as long as needed, but it does not invent new work after completion or claim a background worker exists when none is recorded.
 - Distinguish the target application's own watchdog/runner from AI Mobile's run state.
 - A low-complexity review that only rechecks terminal evidence from a current-Codex operation stays with Codex; do not launch another provider merely to restate the same evidence.
 
