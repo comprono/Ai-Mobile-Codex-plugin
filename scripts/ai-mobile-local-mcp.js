@@ -3104,7 +3104,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
 
 function failureCategoryFromText(value) {
   const text = String(value || "").toLowerCase();
-  if (/budget[- ]exceeded|output budget|token budget/.test(text)) return "budget-exceeded";
+  if (/budget[- ]exceeded|output budget|token budget|error_max_budget|max[_ ]budget[_ ]usd/.test(text)) return "budget-exceeded";
   if (/review-worker-modified|review-only.*changed/.test(text)) return "policy-violation";
   if (/insufficient[- ]result|off[- ]task|result quality gate/.test(text)) return "insufficient-result";
   if (/rate.?limit|too many requests|429/.test(text)) return "rate-limit";
@@ -4937,7 +4937,14 @@ function writeAuthoritativeExecutionSummary(jobDir, worker, result, stderr) {
 function pathsFromGitStatus(statusText) {
   return String(statusText || "")
     .split(/\r?\n/)
-    .map((line) => line.length > 3 ? line.slice(3).trim() : "")
+    .map((line) => {
+      const trimmed = String(line || "").trim();
+      if (!trimmed) return "";
+      // collectGitState trims the whole status block, so the first porcelain
+      // line may begin with `M ` instead of the normal ` M `.
+      const porcelain = trimmed.match(/^[ MADRCU?!]{1,2}\s+(.+)$/);
+      return porcelain ? porcelain[1].trim() : trimmed;
+    })
     .map((file) => file.includes(" -> ") ? file.split(" -> ").pop().trim() : file)
     .filter(Boolean)
     .map((file) => file.replace(/\\/g, "/"));
@@ -5112,7 +5119,12 @@ function parseClaudeJsonOutput(stdout) {
     outputTokens: Number(usage.output_tokens ?? usage.outputTokens),
     reportedCostUsdEquivalent: Number(parsed.total_cost_usd ?? parsed.totalCostUsd),
     isError: parsed.is_error === true || parsed.subtype === "error",
+    errorSubtype: String(parsed.subtype || ""),
   };
+}
+
+function claudeBudgetErrorSubtype(subtype) {
+  return /budget/i.test(String(subtype || ""));
 }
 
 function pathFingerprint(workspace, relativePath) {
@@ -6127,13 +6139,14 @@ function runClaudeJobWorker(args = {}) {
   const executionFailed = result.status !== 0 || Boolean(result.error) || parsedOutput.isError;
   const modelMismatch = !executionFailed && !claudeObservedModelMatches(dispatchModel, parsedOutput.observedModel);
   const tokenBudgetExceeded = Number.isFinite(parsedOutput.outputTokens) && parsedOutput.outputTokens > maxOutputTokens;
+  const claudeBudgetError = claudeBudgetErrorSubtype(parsedOutput.errorSubtype);
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(summarizeFile(resultPath, 8000), args);
   const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : modelMismatch
       ? "model-unavailable"
-    : tokenBudgetExceeded
+    : (tokenBudgetExceeded || claudeBudgetError)
       ? "budget-exceeded"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`)
@@ -6170,6 +6183,8 @@ function runClaudeJobWorker(args = {}) {
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : tokenBudgetExceeded
         ? `Claude output budget exceeded: ${parsedOutput.outputTokens} > ${maxOutputTokens} tokens. Do not auto-fail over; inspect the bounded artifact or rescope.`
+      : claudeBudgetError
+        ? `Claude reported a budget-exceeded error (${parsedOutput.errorSubtype}). Do not auto-fail over; inspect the bounded artifact or rescope.`
       : modelMismatch
         ? `Requested Claude model ${dispatchModel}, but the dominant observed model was ${parsedOutput.observedModel || "unknown"}.`
       : !quality.ok
@@ -7503,6 +7518,10 @@ function runSelfTest() {
   assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
   assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
   assert(failureCategoryFromText("Claude output budget exceeded") === "budget-exceeded" && !failoverAllowed("budget-exceeded"), "worker budget exhaustion stops instead of doubling cost through failover");
+  assert(failureCategoryFromText("error_max_budget_usd") === "budget-exceeded", "Claude's error_max_budget_usd subtype text normalizes to budget-exceeded");
+  const parsedBudgetError = parseClaudeJsonOutput(JSON.stringify({ is_error: true, subtype: "error_max_budget_usd", result: "Claude Code spend limit reached." }));
+  assert(parsedBudgetError.isError === true && parsedBudgetError.errorSubtype === "error_max_budget_usd", "Claude JSON budget-error subtype is captured for classification");
+  assert(claudeBudgetErrorSubtype(parsedBudgetError.errorSubtype) && !claudeBudgetErrorSubtype("error_during_execution"), "only budget-shaped Claude error subtypes are treated as budget-exceeded, ordinary failures keep single narrow failover");
   assert(inferFileBoundaryFromEvidence(pluginRoot, "Patch `scripts/ai-mobile-local-mcp.js` and verify it.").includes(path.join("scripts", "ai-mobile-local-mcp.js")), "writer file boundaries are inferred from verified dependency evidence");
   const deadlineManifest = terminateOrchestrationRun(pluginRoot, {
     version: 2,
@@ -7535,6 +7554,7 @@ function runSelfTest() {
   assert(sensitiveArtifactPath("config/.env.production"), "sensitive untracked artifact paths are withheld");
   const credentialSample = ["API", "_KEY=example-sensitive-value"].join("");
   assert(!redactArtifactContent(credentialSample).includes("example-sensitive-value"), "credential-like untracked content is redacted");
+  assert(JSON.stringify(pathsFromGitStatus(" M scripts/ai-mobile-local-mcp.js\r\n?? notes/new.md\n")) === JSON.stringify(["scripts/ai-mobile-local-mcp.js", "notes/new.md"]), "Git porcelain parsing preserves the first filename character after trimmed status output");
   assert(validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["scripts/worker.js"] }).ok, "writer changes inside an assigned file boundary pass");
   assert(!validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["README.md"] }).ok, "writer changes outside an assigned file boundary fail closed");
   assert(compactResultBullets("- one\n- two\n- three", 2).split(/\r?\n/).length === 2, "worker result readback enforces a compact bullet limit");
