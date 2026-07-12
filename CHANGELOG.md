@@ -7,6 +7,7 @@
 - Added structured `verificationCommands` and bridge-owned `verification-evidence.json`. Requested checks now run as allowlisted argument arrays outside the model and record exit code, timeout, bounded output, and workspace mutation; writer lanes also receive a scoped `git diff --check`.
 - Added fake-executable lifecycle coverage for the Codex worker so CI proves discovery, authentication, routing, artifacts, telemetry, and deterministic verification without spending model quota.
 - Added `codex-cli-status` and `submit-codex-job` to the PowerShell and advanced MCP surfaces while preserving the ten-tool default manager surface.
+- Added no-model `verify-job` to execute structured checks against an existing terminal job and idempotently upgrade older worker-reported test claims to bridge-owned evidence.
 
 ## 0.2.0 - 2026-07-13
 

@@ -152,6 +152,8 @@ Durable control artifacts live under:
 
 Read only compact worker artifacts: `result.md`, `changed-files.txt`, `diff.patch`, `test-output-summary.md`, bridge-owned `verification-evidence.json`, `worker-telemetry.json`, and `status.json`. Treat `WorkerReportedSummary` as a claim; accept a requested command check only from `BridgeDeterministicVerification` and `verification-evidence.json`.
 
+When an older terminal job has only `WorkerReportedSummary`, use no-model `verify-job` with the exact structured command instead of launching another model. An identical passing request is idempotently reused.
+
 Detailed contract: [context-capsules.md](references/context-capsules.md).
 
 ## Lifecycle Gates

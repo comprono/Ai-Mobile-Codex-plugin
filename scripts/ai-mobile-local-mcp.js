@@ -797,6 +797,20 @@ const tools = [
     },
   },
   {
+    name: "verify-job",
+    description: "Run structured bridge-owned checks against an existing terminal job without launching another model. Useful for upgrading older worker-reported test claims to independent evidence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string", description: "Local workspace containing the durable bridge job." },
+        jobId: { type: "string", description: "Existing terminal job id.", default: "latest" },
+        verificationCommands: projectWorkItemSchema.properties.verificationCommands,
+      },
+      required: ["workspace", "verificationCommands"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "cancel-job",
     description: "Mark a durable Antigravity bridge job cancelled. This does not stop a running Antigravity UI task.",
     inputSchema: {
@@ -7514,6 +7528,52 @@ function getCodexCliStatusText() {
   ].join("\n");
 }
 
+function verifyJob(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const jobId = resolveJobId(workspace, args.jobId || "latest");
+  const jobDir = jobDirFor(workspace, jobId);
+  const status = effectiveBridgeJobStatus(readJsonFile(path.join(jobDir, "status.json"), {}));
+  if (["queued", "submitted", "running", "unknown"].includes(status.state)) {
+    throw new Error(`verify-job requires a terminal job; ${jobId} is ${status.state}.`);
+  }
+  const verificationCommands = normalizeVerificationCommands(args.verificationCommands);
+  if (!verificationCommands.length) throw new Error("verify-job requires at least one structured verification command.");
+  const requestHash = crypto.createHash("sha256").update(JSON.stringify(verificationCommands)).digest("hex").slice(0, 20);
+  const existing = readJsonFile(path.join(jobDir, "verification-evidence.json"), null);
+  if (existing?.requestHash === requestHash && existing.passed === true) {
+    return [
+      "VerifyJobResult:",
+      `JobId: ${jobId}`,
+      "State: passed",
+      "Reused: true",
+      `Checks: ${existing.checks?.length || 0}`,
+      `Evidence: ${path.join(jobDir, "verification-evidence.json")}`,
+    ].join("\n");
+  }
+  const changedFiles = pathsFromGitStatus(summarizeFile(path.join(jobDir, "changed-files.txt"), 10000))
+    .filter((file) => file && !/^NONE$/i.test(file));
+  const evidence = verificationRunner.run(workspace, jobDir, {
+    verificationCommands,
+    verificationRequestHash: requestHash,
+  }, { changedDuringRun: changedFiles });
+  updateJobStatus(workspace, jobId, {
+    bridgeVerificationState: evidence.state,
+    bridgeVerificationAt: evidence.generatedAt,
+    bridgeVerificationChecks: evidence.checks.length,
+    bridgeVerificationRequestHash: requestHash,
+  });
+  return [
+    "VerifyJobResult:",
+    `JobId: ${jobId}`,
+    `State: ${evidence.state}`,
+    "Reused: false",
+    `Checks: ${evidence.checks.length}`,
+    `WorkspaceMutationDetected: ${evidence.workspaceMutationDetected === true}`,
+    evidence.blocker ? `Blocker: ${evidence.blocker}` : null,
+    `Evidence: ${path.join(jobDir, "verification-evidence.json")}`,
+  ].filter(Boolean).join("\n");
+}
+
 function findCursorApp() {
   const candidates = [];
   if (process.platform === "win32") {
@@ -10660,6 +10720,9 @@ function runSelfTest() {
     const fakeCodexTelemetry = readJsonFile(path.join(fakeCodexJob.jobDir, "worker-telemetry.json"), {});
     const fakeVerificationEvidence = readJsonFile(path.join(fakeCodexJob.jobDir, "verification-evidence.json"), {});
     assert(/State: completed/.test(fakeCodexWorkerResult) && fakeCodexJobStatus.state === "completed" && fakeCodexTelemetry.outputTokens === 19 && fakeVerificationEvidence.passed === true, "durable Codex worker records compact output, lifecycle state, measured usage, and bridge-owned verification without a live model call");
+    const firstJobVerification = verifyJob({ workspace, jobId: fakeCodexJob.jobId, verificationCommands: fakeVerificationCommands });
+    const repeatedJobVerification = verifyJob({ workspace, jobId: fakeCodexJob.jobId, verificationCommands: fakeVerificationCommands });
+    assert(/Reused: false/.test(firstJobVerification) && /Reused: true/.test(repeatedJobVerification), "verify-job upgrades terminal worker evidence without a model call and reuses an identical passing check");
     if (originalCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
     else process.env.CODEX_CLI_PATH = originalCodexCliPath;
     const appendedCycle = appendContinuousCycle({
@@ -11462,6 +11525,12 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "verify-job") {
+        const text = verifyJob(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "cancel-job") {
         const text = cancelJob(params?.arguments || {});
         sendResult(id, { content: [{ type: "text", text }] });
@@ -11513,7 +11582,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "verify-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -11571,6 +11640,7 @@ if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", 
     "cursor-job-worker-cli": async (value) => runWorkerFailClosed("cursor-agent", value, runCursorJobWorker),
     "list-jobs-cli": async (value) => listJobs(value),
     "read-job-cli": async (value) => readJob(value),
+    "verify-job-cli": async (value) => verifyJob(value),
     "cancel-job-cli": async (value) => cancelJob(value),
     "retry-job-cli": retryJob,
   };

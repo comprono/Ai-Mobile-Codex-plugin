@@ -101,6 +101,7 @@ function createVerificationRunner(dependencies = {}) {
       required: commands.length > 0,
       passed: commands.length ? false : null,
       generatedAt: utcStamp(),
+      requestHash: String(args.verificationRequestHash || ""),
       blocker: commands.length ? reason : "",
       checks: [],
     };
@@ -121,7 +122,7 @@ function createVerificationRunner(dependencies = {}) {
     const evidencePath = path.join(jobDir, "verification-evidence.json");
     const summaryPath = path.join(jobDir, "test-output-summary.md");
     if (!commands.length) {
-      const evidence = { version: 1, state: "not-requested", required: false, passed: null, generatedAt: utcStamp(), checks: [] };
+      const evidence = { version: 1, state: "not-requested", required: false, passed: null, generatedAt: utcStamp(), requestHash: String(args.verificationRequestHash || ""), checks: [] };
       writeJson(evidencePath, evidence);
       fs.appendFileSync(summaryPath, "\nBridgeDeterministicVerification:\nRequired: false\nState: not-requested\n", "utf8");
       return evidence;
@@ -180,6 +181,7 @@ function createVerificationRunner(dependencies = {}) {
       required: true,
       passed,
       generatedAt: utcStamp(),
+      requestHash: String(args.verificationRequestHash || ""),
       workspaceMutationDetected,
       blocker,
       checks,

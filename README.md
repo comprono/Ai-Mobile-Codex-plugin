@@ -166,7 +166,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 - `ai-mobile-local`: capacity metadata, context capsules, project-manager plans, passive resource inventory, durable jobs, bounded failover, model switching, worker submission, job readback, and privacy scan.
 - `ai-mobile-devtools`: Chromium DevTools bridge for live Antigravity UI inspection and interaction.
 
-Important local tools include `run-project-manager`, `project-manager-status`, `project-manager-plan`, `context-capsule`, `codex-usage`, `codex-cli-status`, `submit-codex-job`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
+Important local tools include `run-project-manager`, `project-manager-status`, `project-manager-plan`, `context-capsule`, `codex-usage`, `codex-cli-status`, `submit-codex-job`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, no-model `verify-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
 
 ## Operating Rules
 

@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "codex-cli-status", "submit-codex-job", "context-capsule", "project-manager-plan", "run-project-manager", "project-manager-status", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "codex-cli-status", "submit-codex-job", "context-capsule", "project-manager-plan", "run-project-manager", "project-manager-status", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "verify-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -39,6 +39,7 @@ param(
   [string] $ConstraintsJson = "",
   [string] $AcceptanceCriteriaJson = "",
   [string] $VerificationJson = "",
+  [string] $VerificationCommandsJson = "",
   [string] $CompletionPolicy = "",
   [string] $CycleObjective = "",
   [string] $CycleAcceptanceCriteriaJson = "",
@@ -1458,6 +1459,14 @@ function Invoke-BridgeJobCommand {
       throw "NextWorkItemsJson must be a valid JSON array. $($_.Exception.Message)"
     }
   }
+  $verificationCommandValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($VerificationCommandsJson)) {
+    try {
+      $verificationCommandValues = @(ConvertFrom-Json -InputObject $VerificationCommandsJson | ForEach-Object { $_ })
+    } catch {
+      throw "VerificationCommandsJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
   $nextCycleAcceptanceValues = @()
   if (-not [string]::IsNullOrWhiteSpace($NextCycleAcceptanceCriteriaJson)) {
     try {
@@ -1504,6 +1513,7 @@ function Invoke-BridgeJobCommand {
     takeoverCodexItems = $takeoverCodexItemValues
     codexEvidence = $codexEvidenceValues
     hostWorkerEvents = $hostWorkerEventValues
+    verificationCommands = $verificationCommandValues
     codexModel = $CodexModel
     projectVerified = $projectVerifiedValue
     projectVerificationFailed = $projectVerificationFailedValue
@@ -1975,6 +1985,10 @@ switch ($Command) {
 
   "read-job" {
     Invoke-BridgeJobCommand -CliCommand "read-job-cli"
+  }
+
+  "verify-job" {
+    Invoke-BridgeJobCommand -CliCommand "verify-job-cli"
   }
 
   "cancel-job" {
