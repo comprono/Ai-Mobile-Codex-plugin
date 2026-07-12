@@ -2,9 +2,9 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for Windows. It turns one existing Codex task into a CEO-style project control room across native Codex workers, local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers. A workflow can start from the ChatGPT mobile app and continue through Codex on the linked PC.
+AI Mobile is a community Codex MCP plugin for Windows. It turns one existing Codex task into a CEO-style project control room across standalone or host-native Codex workers, local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers. A workflow can start from the ChatGPT mobile app and continue through Codex on the linked PC.
 
-The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players. The parent Codex task stays manager-only: it discovers capacity, maintains the work graph, assigns owners, intervenes on failures or stalls, asks for decisions, and reports verified outcomes. **Do not create another Codex control-room task** never means do not create workers. Separate native Codex subagents, Claude Code sessions, Antigravity CLI jobs, and optional Cursor jobs are expected and can run concurrently when dependencies and ownership boundaries allow it.
+The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players. The parent Codex task stays manager-only: it discovers capacity, maintains the work graph, assigns owners, intervenes on failures or stalls, asks for decisions, and reports verified outcomes. **Do not create another Codex control-room task** never means do not create workers. Separate Codex CLI/host workers, Claude Code sessions, Antigravity CLI jobs, and optional Cursor jobs are expected and can run concurrently when dependencies and ownership boundaries allow it.
 
 ## Core Flow
 
@@ -22,7 +22,7 @@ The one-line form is sufficient only when the same task already has an active Go
 - **Objective:** persists until verified, genuinely blocked, or explicitly stopped.
 - **Capacity horizon:** rolling five-hour forecast used to choose models; it never ends the project.
 - **Capacity checkpoint:** normally every 20 minutes, accelerating to five minutes as shared Codex capacity approaches the manager reserve; refreshes quotas, resets, cooldowns, and pending assignments.
-- **Manager runway:** 15% of shared Codex capacity is protected by default, and only one native Codex worker runs at once unless the caller explicitly raises the limit. Claude and Antigravity CLI workers retain independent parallelism.
+- **Manager runway:** 15% of shared Codex capacity is protected by default, and only one standalone-or-host Codex worker runs at once unless the caller explicitly raises the shared limit. Claude and Antigravity CLI workers retain independent parallelism.
 - **Writer boundaries:** up to two writers may run together when their workspace-relative file or directory boundaries are explicit and pairwise disjoint. Overlapping or unscoped writers remain serialized.
 - **Worker lease:** short read-only leases (5-30 minutes by provider/complexity) and longer bounded writer leases (10-90 minutes); a silent or dead call can fail over without ending the objective.
 - **Visible activity:** manager reports show each active worker's current bridge step and elapsed/maximum lease, so a healthy long-running worker is distinguishable from a stalled one without opening provider UIs or reading large logs.
@@ -45,16 +45,16 @@ The public PowerShell helper preserves nested work-item arrays at full depth, in
 
 ### Lean tool surface
 
-AI Mobile exposes ten manager/setup MCP tools by default instead of loading all 49 low-level bridge schemas into every Codex task. Normal work uses `run-project-manager` and `project-manager-status`; setup, capacity, profile, diagnostics, and privacy remain available. All low-level commands still work through `scripts/antigravity.ps1`. Set `AI_MOBILE_EXPOSE_ADVANCED_TOOLS=1` before starting Codex only when debugging requires the full MCP surface.
+AI Mobile exposes ten manager/setup MCP tools by default instead of loading every low-level bridge schema into each Codex task. Normal work uses `run-project-manager` and `project-manager-status`; setup, capacity, profile, diagnostics, and privacy remain available. All advanced commands still work through `scripts/antigravity.ps1`. Set `AI_MOBILE_EXPOSE_ADVANCED_TOOLS=1` before starting Codex only when debugging requires the full MCP surface.
 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 
 ```powershell
-$items = '[{"id":"architecture","objective":"Review the design and risks","executionClass":"analysis","kind":"architecture-review","complexity":"high","readOnly":true},{"id":"implementation","objective":"Implement the accepted design","executionClass":"code","kind":"implementation","complexity":"high","readOnly":false,"expectedFiles":["src/"]},{"id":"verification","objective":"Independently verify behavior","executionClass":"analysis","kind":"testing-review","complexity":"high","readOnly":true,"dependsOn":["implementation"]}]'
+$items = '[{"id":"architecture","objective":"Review the design and risks","executionClass":"analysis","kind":"architecture-review","complexity":"high","readOnly":true},{"id":"implementation","objective":"Implement the accepted design","executionClass":"code","kind":"implementation","complexity":"high","readOnly":false,"expectedFiles":["src/"]},{"id":"verification","objective":"Independently verify behavior","executionClass":"analysis","kind":"testing-review","complexity":"high","readOnly":true,"dependsOn":["implementation"],"verificationCommands":[{"name":"project-tests","command":"npm","args":["test"],"timeoutSeconds":300,"expectedExitCode":0}]}]'
 & "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<complete outcome>" -Workspace "<path>" -WorkItemsJson $items
 ```
 
-The active Codex skill reserves each token-bound native Codex action through `project-manager-status` before calling the host tool. The next status response exposes the exact spawn action while reserved; `started` then binds the returned agent id. Starts, completions, failures, and cancellations use the same token, so bounded-writer and replacement safety also cover host agents. The MCP server never starts `codex.exe`. Existing external-only orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
+AI Mobile prefers the official standalone Codex CLI when it is installed and `codex login status` confirms ChatGPT-plan authentication. It runs an isolated, ephemeral `codex exec` worker with stdin prompt transport, the selected catalog model/effort, bounded sandboxing, measured usage, and the same manager reserve as the parent. It does not create another user-visible Codex task and refuses unknown/API-style auth to avoid unexpected separate billing. When that lane is unavailable, the active skill can use token-bound host-native actions through `project-manager-status`. Existing external orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
@@ -70,6 +70,7 @@ Workers write compact artifacts under:
   changed-files.txt
   diff.patch
   test-output-summary.md
+  verification-evidence.json
   worker-telemetry.json
 
 .antigravity-bridge/last-team-run.json
@@ -80,7 +81,7 @@ Workers write compact artifacts under:
 .antigravity-bridge/orchestrator/task-capsules/<workItemId>.json
 ```
 
-Codex reads those artifacts instead of watching full chats, logs, or source dumps. `status.json` is bridge-owned: worker-written terminal state is ignored until the bridge has finalized the result, telemetry, and execution summary. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
+Codex reads those artifacts instead of watching full chats, logs, or source dumps. `status.json` and `verification-evidence.json` are bridge-owned: worker-written terminal state or test prose cannot replace independently executed command evidence. Structured `verificationCommands` run as allowlisted argument arrays without an inline shell and record exit code, timeout, bounded output, and workspace mutation. `State: ready-for-codex` means worker work is ready for critique/integration; Codex still must verify the user goal before claiming completion.
 
 Result budgets scale with complexity: low 5 bullets, medium 6, high 8, and critical 10. Aggregate team readback is capped independently; use `read-job` only when a failed or partial lane needs deeper evidence. Worker telemetry records prompt/result character counts, and Claude telemetry also records reported token usage. Claude workers default to a 12,000 output-token ceiling and an auth-aware budget policy: with claude.ai subscription auth (Pro/Max/Team/Enterprise, no `ANTHROPIC_API_KEY`) no per-worker USD cap is passed and spend is governed by measured 5-hour/weekly/model quota windows plus output-token and lease guards; API-key, PAYG, or unknown billing keeps a conservative automatic per-worker USD cap. `maxClaudeBudgetUsd=0` means auth-aware automatic policy; an explicit positive value is always preserved. The selected policy is shown in plan (`ClaudeBudgetPolicy:`) and run status (`claudeBudget=`) output, and no account identifiers or credentials are stored. Exceeding a budget or token ceiling fails closed without launching a second expensive worker.
 
@@ -106,6 +107,7 @@ Requirements:
 - Windows.
 - Codex plugins loaded from `%USERPROFILE%\plugins`.
 - Node.js on `PATH`.
+- Recommended for unattended Codex worker lanes: the official standalone Codex CLI, signed in with the same ChatGPT plan (`codex login status`). Host-native workers remain the fallback when exposed.
 - Antigravity desktop at `%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe`.
 - Optional: Antigravity CLI as `agy`.
 - Optional: Claude Code CLI as `claude`.
@@ -117,6 +119,7 @@ Requirements:
 # Health and capacity
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" quick
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" codex-usage
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" codex-cli-status
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" models
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" limits-summary
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>"
@@ -163,7 +166,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 - `ai-mobile-local`: capacity metadata, context capsules, project-manager plans, passive resource inventory, durable jobs, bounded failover, model switching, worker submission, job readback, and privacy scan.
 - `ai-mobile-devtools`: Chromium DevTools bridge for live Antigravity UI inspection and interaction.
 
-Important local tools include `run-project-manager`, `project-manager-status`, `project-manager-plan`, `context-capsule`, `codex-usage`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
+Important local tools include `run-project-manager`, `project-manager-status`, `project-manager-plan`, `context-capsule`, `codex-usage`, `codex-cli-status`, `submit-codex-job`, `orchestrator-profile`, `resource-inventory`, `claude-usage`, `orchestrate-project`, `read-team-run`, `submit-agy-job`, `submit-claude-job`, `read-job`, `select-chat`, `switch-model`, `devtools-health`, and `privacy`.
 
 ## Operating Rules
 
@@ -181,7 +184,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Browser profiles, cookies, saved credentials, account selection, email/SMS messages, and OAuth flows are protected state. Workers must stop at sign-in, CAPTCHA, email, SMS, or authorization gates unless the user explicitly authorizes that exact action.
 - Live session, login, cookie, account, profile, credential, OAuth, email/SMS, and CAPTCHA checks remain current-Codex actions. CLI workers may review bounded source code about those systems but do not inspect the user's live protected state.
 - The current Codex task is manager-only by default: every normal orchestration entrypoint treats an omitted `managerOnly` as true. It owns goals, capacity decisions, steering, intervention, compact evidence review, user-boundary decisions, and reporting. It does not scan project files, run diagnostics/tests, edit source, or duplicate worker execution. Set `managerOnly=false` only when the user explicitly asks this parent task to implement or diagnose a bounded item.
-- Manager-only never disables the Codex platform. Separate native Codex host workers remain eligible whenever their measured shared capacity is above the manager reserve, and may run beside Claude and Antigravity workers on independent work.
+- Manager-only never disables the Codex platform. Separate standalone or host-native Codex workers remain eligible whenever measured shared capacity is above the manager reserve, and may run beside Claude and Antigravity workers on independent work.
 - Native Codex workers are separate host agents selected from the current model catalog and shared Codex capacity evidence. The default 15% manager reserve prevents new native dispatch when the shared pool is low, and default native concurrency is one so parallel subagents cannot consume the manager's recovery runway. Every host attempt reserves before spawn, then uses a run-bound attempt id and dispatch token through `hostWorkerEvents` to bind, complete, fail, or cancel the returned agent id.
 - Real submissions, sends, deploys, purchases, destructive actions, and other external effects remain current-Codex actions with authorization and live-state checks. CLI workers may analyze, patch, or verify them but cannot silently execute them.
 - Current-runtime analysis is automatically sequenced after the relevant live Codex control action. Downstream workers receive compact dependency results and verified Codex evidence instead of rediscovering state from scratch.
@@ -208,7 +211,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - External writer lanes require an explicit file boundary or a narrow boundary inferred from verified dependency evidence. If neither exists, manager-only mode requests bounded discovery and blocks the writer instead of making the control-room task explore or implement.
 - Native Codex host workers participate in the same dependency, bounded-writer, evidence, cooldown, and bounded-failover rules as CLI workers. A changed goal cannot start a replacement until any running host agent is confirmed closed.
 - Worker change artifacts include only paths changed during that worker run. A path already dirty before launch is detected but its full pre-existing diff is never attributed to the worker.
-- Give each nontrivial work item concise acceptance criteria and focused verification checks. Use canonical `objective`, `executionClass`, and `expectedFiles` fields. Load only relevant context, run at most two pairwise-disjoint writers, and merge independent reports once in Codex.
+- Give each nontrivial work item concise acceptance criteria and focused verification checks. Use canonical `objective`, `executionClass`, `expectedFiles`, and structured `verificationCommands` fields. Load only relevant context, run at most two pairwise-disjoint writers, and merge independent reports once in Codex.
 - Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
 - Treat `State: ready-for-codex` as an integration or cycle gate, not completion. Only a finite run can return `CompletionClaimAllowed: true`; continuous control rooms keep the root Goal active until explicit user stop.

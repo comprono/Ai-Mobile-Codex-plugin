@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-07-13
+
+- Added a durable standalone Codex CLI provider that passively discovers the official client, requires ChatGPT-plan authentication, selects current catalog models/efforts, uses isolated JSONL stdin execution, and records measured usage without creating another Codex task.
+- Unified standalone and host-native Codex workers under the same measured capacity, manager reserve, model policy, cooldown history, and concurrency ceiling; only one transport is represented for each model.
+- Added structured `verificationCommands` and bridge-owned `verification-evidence.json`. Requested checks now run as allowlisted argument arrays outside the model and record exit code, timeout, bounded output, and workspace mutation; writer lanes also receive a scoped `git diff --check`.
+- Added fake-executable lifecycle coverage for the Codex worker so CI proves discovery, authentication, routing, artifacts, telemetry, and deterministic verification without spending model quota.
+- Added `codex-cli-status` and `submit-codex-job` to the PowerShell and advanced MCP surfaces while preserving the ten-tool default manager surface.
+
 ## 0.2.0 - 2026-07-13
 
 - Replaced user-specific MCP paths with installation-relative entrypoints that work from the actual plugin directory.

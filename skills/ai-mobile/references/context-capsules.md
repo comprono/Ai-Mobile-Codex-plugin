@@ -15,6 +15,7 @@ A capsule packages the minimum durable state required to continue work without r
   "blockers": [],
   "acceptanceCriteria": [],
   "verification": [],
+  "verificationCommands": [],
   "workItems": [],
   "fileEvidence": [],
   "continuity": { "summary": "", "artifactRefs": [] },

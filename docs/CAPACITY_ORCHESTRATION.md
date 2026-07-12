@@ -24,7 +24,7 @@ Host-native model ids and reasoning efforts come from the current spawn-agent sc
 
 Codex capacity windows currently apply to the shared Codex agent pool unless the observed source explicitly identifies a model-specific window. A private local allow pattern can restrict eligible catalog models without hardcoding those names into the public plugin.
 
-Because native Codex workers consume that same shared pool, AI Mobile protects a configurable manager reserve (15% by default), penalizes native dispatch as headroom shrinks, and stops new native workers at the reserve. Default native concurrency is one. Claude and Antigravity CLI workers use independent capacity and can continue in parallel through the durable supervisor.
+Because standalone and host-native Codex workers consume that same shared pool, AI Mobile protects a configurable manager reserve (15% by default), penalizes Codex dispatch as headroom shrinks, and stops new Codex workers at the reserve. Default shared Codex-worker concurrency is one. A ChatGPT-authenticated standalone CLI is preferred for unattended durable work; the host-native transport is the fallback. Claude and Antigravity CLI workers use independent capacity and can continue in parallel through the durable supervisor.
 
 ## Visible Progress And Scope Recovery
 

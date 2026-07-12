@@ -94,6 +94,13 @@ function normalizeWorkItem(item, index) {
     requiredCapabilities: boundedList(item?.requiredCapabilities || item?.capabilities, 10, 100),
     acceptanceCriteria: boundedList(item?.acceptanceCriteria || item?.acceptance, 6, 400),
     verification: boundedList(item?.verification || item?.tests, 6, 400),
+    verificationCommands: (Array.isArray(item?.verificationCommands) ? item.verificationCommands : []).slice(0, 4).map((entry, commandIndex) => ({
+      name: boundedText(entry?.name || `verification-${commandIndex + 1}`, 80),
+      command: boundedText(entry?.command, 260),
+      args: boundedList(entry?.args, 30, 1000),
+      timeoutSeconds: Math.max(1, Math.min(900, Number(entry?.timeoutSeconds || 300))),
+      expectedExitCode: Math.max(0, Math.min(255, Number(entry?.expectedExitCode ?? 0))),
+    })).filter((entry) => entry.command),
     contextBudgetChars: { low: 4000, medium: 7000, high: 11000, critical: 15000 }[complexity],
   };
 }

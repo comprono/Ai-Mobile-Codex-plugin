@@ -6,6 +6,16 @@ const fs = require("node:fs");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { readCodexUsageTelemetry, parseTokenCountEvent } = require("./lib/codex-telemetry");
+const {
+  buildCodexExecArgs,
+  codexCliCandidates,
+  parseCodexJsonl,
+  parseCodexLoginStatus,
+} = require("./lib/codex-cli");
+const {
+  createVerificationRunner,
+  normalizeVerificationCommands: normalizeVerificationCommandList,
+} = require("./lib/verification-runner");
 const { buildContextCapsule, buildTaskCapsule, writeContextCapsule } = require("./lib/context-capsule");
 const {
   buildHostCodexCandidates,
@@ -32,6 +42,15 @@ const resourceCacheTtlMs = 10 * 60 * 1000;
 const processIdentityCache = new Map();
 const claudeCliCapabilityCache = new Map();
 const claudeWorkerPluginDir = path.join(pluginRoot, "claude-plugin");
+const verificationRunner = createVerificationRunner({
+  collectGitState,
+  isPathInside: pathIsInside,
+  redact: redactArtifactContent,
+  runCommand: runWindowsFriendly,
+  truncate: truncateText,
+  utcStamp,
+  writeJson: writeJsonFile,
+});
 
 const projectWorkItemSchema = {
   type: "object",
@@ -57,6 +76,23 @@ const projectWorkItemSchema = {
     acceptance: { type: "array", items: { type: "string" }, maxItems: 4, description: "Accepted alias for acceptanceCriteria." },
     verification: { type: "array", items: { type: "string" }, maxItems: 4 },
     tests: { type: "array", items: { type: "string" }, maxItems: 4, description: "Accepted alias for verification." },
+    verificationCommands: {
+      type: "array",
+      maxItems: 4,
+      description: "Structured, shell-free checks the bridge must execute and record independently after the worker returns.",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short evidence label." },
+          command: { type: "string", description: "Allowlisted executable name, such as git, node, python, npm, or dotnet." },
+          args: { type: "array", items: { type: "string" }, maxItems: 30 },
+          timeoutSeconds: { type: "number", minimum: 1, maximum: 900, default: 300 },
+          expectedExitCode: { type: "number", minimum: 0, maximum: 255, default: 0 },
+        },
+        required: ["command"],
+        additionalProperties: false,
+      },
+    },
     priority: { type: "number", description: "Higher values dispatch first.", default: 50 },
   },
   required: ["id"],
@@ -283,7 +319,7 @@ const tools = [
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager task, steering, and failover. Native Codex workers stop dispatching at or below this percentage.", default: 15 },
-        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneously active native Codex workers. External CLI workers can still run in parallel.", default: 1 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers sharing the measured Codex pool. Other providers remain independently parallel.", default: 1 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
@@ -296,7 +332,7 @@ const tools = [
   },
   {
     name: "run-project-manager",
-    description: "Start or resume one root project objective. Inventory capacity, dispatch a bounded first cycle, and return a compact CEO result. For persistent control rooms use completionPolicy=continuous-management; later cycles use project-manager-status.nextWorkItems under the same run id and can never complete the root Goal. Manager-only keeps execution in separate native Codex/provider workers.",
+    description: "Start or resume one root project objective. Inventory capacity, dispatch a bounded first cycle, and return a compact CEO result. For persistent control rooms use completionPolicy=continuous-management; later cycles use project-manager-status.nextWorkItems under the same run id and can never complete the root Goal. Manager-only keeps execution in separate standalone or host-native Codex/provider workers.",
     inputSchema: {
       type: "object",
       properties: {
@@ -329,8 +365,8 @@ const tools = [
         managerOnly: { type: "boolean", description: "Keep the calling Codex task as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
-        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; native Codex workers stop at this threshold.", default: 15 },
-        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; defaults to one to protect the shared five-hour pool.", default: 1 },
+        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; standalone and host-native Codex workers stop at this threshold.", default: 15 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; defaults to one to protect the shared five-hour pool.", default: 1 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
@@ -430,7 +466,7 @@ const tools = [
         address: { type: "string", description: "Optional local form of address." },
         updateStyle: { type: "string", enum: ["concise-executive", "technical", "minimal"] },
         role: { type: "string", description: "Local project-manager role label." },
-        codexModelAllowPattern: { type: "string", description: "Local regex policy for native Codex models." },
+        codexModelAllowPattern: { type: "string", description: "Local regex policy for standalone and host-native Codex models." },
         claudeModelAllowPattern: { type: "string", description: "Local regex allow policy for Claude Code model aliases and ids." },
         claudePreferredModelPattern: { type: "string", description: "Local regex preference used to favor a Claude model when capability and quota are otherwise suitable." },
         antigravityPreferredTaskPattern: { type: "string", description: "Local regex describing task kinds and objectives that should preferentially use Antigravity." },
@@ -497,7 +533,7 @@ const tools = [
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager task, steering, and recovery.", default: 15 },
-        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; external providers remain independently parallel.", default: 1 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; other providers remain independently parallel.", default: 1 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
@@ -622,10 +658,39 @@ const tools = [
         sandbox: { type: "boolean", description: "Run Antigravity CLI with terminal sandbox restrictions enabled.", default: true },
         autoApprovePermissions: { type: "boolean", description: "Pass --dangerously-skip-permissions for this sandboxed worker. Requires explicit user authorization and never authorizes external effects or authentication bypass.", default: false },
         printTimeout: { type: "string", description: "Antigravity CLI print timeout, such as 30m or 90s.", default: "30m" },
+        expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Enforced writer file boundary." },
+        readOnly: { type: "boolean", description: "Treat this as a read-only worker assignment.", default: true },
         start: { type: "boolean", description: "Set false to create the job without starting Antigravity CLI.", default: true },
         maxMinutes: { type: "number", description: "Maximum minutes the direct background Antigravity CLI worker may run.", default: 30 },
+        verificationCommands: projectWorkItemSchema.properties.verificationCommands,
       },
       required: ["goal", "workspace"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "codex-cli-status",
+    description: "Report whether the official standalone Codex CLI is installed and authenticated through the ChatGPT plan. Does not run a model prompt.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "submit-codex-job",
+    description: "Create a durable headless Codex worker job using the measured shared Codex capacity and manager reserve. Refuses non-ChatGPT-plan authentication.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "Bounded work-item goal for the standalone Codex worker." },
+        workspace: { type: "string", description: "Local workspace path where durable bridge evidence is stored." },
+        mode: { type: "string", description: "review for read-only work or patch for a bounded writer.", default: "review" },
+        nextStep: { type: "string", description: "Specific next action for this worker." },
+        model: { type: "string", description: "Exact model id from the local Codex catalog, such as gpt-5.6-luna." },
+        effort: { type: "string", description: "Supported reasoning effort for the selected model.", default: "medium" },
+        expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Enforced writer file boundary." },
+        readOnly: { type: "boolean", description: "Use the read-only sandbox when true.", default: true },
+        start: { type: "boolean", description: "Set false to create the durable job without starting Codex.", default: true },
+        maxMinutes: { type: "number", description: "Maximum minutes the background Codex worker may run.", default: 30 },
+      },
+      required: ["goal", "workspace", "model"],
       additionalProperties: false,
     },
   },
@@ -655,8 +720,11 @@ const tools = [
         permissionMode: { type: "string", description: "Claude Code permission mode. Defaults to plan for review and acceptEdits otherwise." },
         maxBudgetUsd: { type: "number", description: "Optional explicit Claude Code USD cap for this job. When omitted, the auth-aware automatic policy applies: subscription auth runs uncapped against measured quota windows; API-key/PAYG/unknown billing gets a conservative automatic cap." },
         maxOutputTokens: { type: "number", description: "Fail the worker result when Claude reports output above this token budget." },
+        expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Enforced writer file boundary." },
+        readOnly: { type: "boolean", description: "Treat this as a read-only worker assignment.", default: true },
         start: { type: "boolean", description: "Set false to create the job and payload without starting Claude Code.", default: true },
         maxMinutes: { type: "number", description: "Maximum minutes the direct background Claude worker may run.", default: 30 },
+        verificationCommands: projectWorkItemSchema.properties.verificationCommands,
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -692,8 +760,11 @@ const tools = [
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
         nextStep: { type: "string", description: "Specific next action.", default: "Inspect the relevant files and write compact artifacts." },
         model: { type: "string", description: "Optional Cursor agent model id or alias." },
+        expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Enforced writer file boundary." },
+        readOnly: { type: "boolean", description: "Treat this as a read-only worker assignment.", default: true },
         start: { type: "boolean", description: "Set false to create the job without starting Cursor agent.", default: true },
         maxMinutes: { type: "number", description: "Maximum minutes the direct background Cursor worker may run.", default: 30 },
+        verificationCommands: projectWorkItemSchema.properties.verificationCommands,
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -1165,7 +1236,7 @@ async function buildEfficiencyFlow(args = {}) {
   const expectedProject = String(args.expectedProject || "").trim();
   const expectedChat = String(args.expectedChat || "").trim();
   const statusFile = ".antigravity-bridge/jobs/<jobId>/status.json";
-  const readArtifacts = "result.md, changed-files.txt, diff.patch, test-output-summary.md, status.json";
+  const readArtifacts = "result.md, changed-files.txt, diff.patch, test-output-summary.md, verification-evidence.json, status.json";
   const submitStep = (() => {
     if (route === "antigravity-cli") return "Call submit-agy-job with the compact goal, workspace, mode, and nextStep; then stop watching.";
     if (route === "antigravity-desktop-chat") return "Call select-chat, then switch-model, then submit-job or submit-offload only after the expected chat is active.";
@@ -1364,6 +1435,7 @@ function updateSafeResourceCache(patch = {}) {
       ...patch,
       antigravity: { ...(current.antigravity || {}), ...(patch.antigravity || {}) },
       claude: { ...(current.claude || {}), ...(patch.claude || {}) },
+      codex: { ...(current.codex || {}), ...(patch.codex || {}) },
       cursor: { ...(current.cursor || {}), ...(patch.cursor || {}) },
       updatedAt: utcStamp(),
     };
@@ -1655,6 +1727,12 @@ async function getTeamCapacityContext(args = {}) {
   const cursorAgent = args.includeCursor ? resolveCommandFast("cursor-agent") : { found: false, command: "" };
   const liveProbe = await probeAntigravityDevTools();
 
+  let codexCli = cache.codex?.cli || { found: false, command: "", version: "", auth: { checked: false, loggedIn: null, authMode: "unknown" } };
+  if (refresh || !isFreshTimestamp(cache.codex?.cliCheckedAt) || !codexCli.found) {
+    codexCli = findCodexCli();
+    cache = updateSafeResourceCache({ codex: { cli: codexCli, cliCheckedAt: utcStamp() } });
+  }
+
   let agyVersion = String(cache.antigravity?.cliVersion || "");
   if (agy.found && (refresh || !agyVersion || !isFreshTimestamp(cache.antigravity?.versionCheckedAt, 24 * 60 * 60 * 1000))) {
     const versionProbe = commandCheck(agy.command, ["--version"], { timeout: 5000 });
@@ -1740,6 +1818,7 @@ async function getTeamCapacityContext(args = {}) {
   updateSafeResourceCache({
     antigravity: { found: agy.found, live: liveProbe.live, lastSeenAt: utcStamp() },
     claude: { found: claude.found, lastSeenAt: utcStamp() },
+    codex: { cli: codexCli, lastSeenAt: utcStamp() },
     cursor: { headlessFound: cursorAgent.found, lastSeenAt: utcStamp() },
   });
 
@@ -1763,6 +1842,10 @@ async function getTeamCapacityContext(args = {}) {
     codexResetAt: String(args.codexResetAt || measuredReset || ""),
     codexTelemetry,
     codexCatalog,
+    codexCliFound: codexCli.found === true,
+    codexCliCommand: String(codexCli.command || ""),
+    codexCliVersion: String(codexCli.version || ""),
+    codexCliAuth: codexCli.auth || { checked: false, loggedIn: null, authMode: "unknown" },
     quickError,
     capacityProbe: liveProbe.live
       ? `${antigravityQuotaEvidence} Antigravity quota, Claude usage windows, and local CLI/auth evidence`
@@ -2086,6 +2169,10 @@ function buildNativeCodexCandidates(args = {}, context = {}) {
   const localProfile = args.localProfile || readProfile();
   const outcomes = context.workspaceState?.outcomes || {};
   const controls = normalizedRunControls(args);
+  const cliReady = context.codexCliFound === true
+    && context.codexCliAuth?.loggedIn === true
+    && context.codexCliAuth?.authMode === "chatgpt";
+  const transportReady = cliReady || args.hostCodexAvailable === true;
   const effectiveRemainingPercent = Number.isFinite(context.codexRemainingPercent)
     ? context.codexRemainingPercent
     : Number.isFinite(context.codexTelemetry?.effectiveRemainingPercent)
@@ -2098,27 +2185,34 @@ function buildNativeCodexCandidates(args = {}, context = {}) {
   };
   return buildHostCodexCandidates(context.codexCatalog || {}, effectiveTelemetry, {
     includePattern: modelPattern(localProfile),
-    hostCapabilityVerified: args.hostCodexAvailable === true,
-  }).map((candidate) => ({
-    ...candidate,
-    managerReservePercent: controls.codexManagerReservePercent,
-    capacityHeadroomPercent: Number.isFinite(candidate.remainingPercent)
-      ? candidate.remainingPercent - controls.codexManagerReservePercent
-      : null,
-    dispatchable: candidate.dispatchable
-      && !(["low", "critical", "exhausted"].includes(context.codexBudget?.state)
-        || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent)),
-    hostDispatchable: candidate.hostDispatchable
-      && !(["low", "critical", "exhausted"].includes(context.codexBudget?.state)
-        || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent)),
-    state: candidate.state === "available"
-      && (["low", "critical", "exhausted"].includes(context.codexBudget?.state)
-        || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent))
-      ? "manager-reserve"
-      : candidate.state,
-    outcome: compactOutcome(outcomes[candidate.id] || {}),
-    platformReliability: platformReliabilitySummary(outcomes, "codex", args.horizonHours || 5),
-  }));
+    hostCapabilityVerified: transportReady,
+  }).map((candidate) => {
+    const id = cliReady ? `codex-cli:${candidate.model}` : candidate.id;
+    const reserveBlocked = ["low", "critical", "exhausted"].includes(context.codexBudget?.state)
+      || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent);
+    const dispatchable = transportReady && candidate.state === "available" && !reserveBlocked;
+    return {
+      ...candidate,
+      id,
+      team: cliReady ? "Codex CLI worker" : candidate.team,
+      dispatchMode: cliReady ? "codex-cli" : "host-subagent",
+      bridgeDispatchable: cliReady,
+      hostDispatchable: !cliReady && candidate.hostDispatchable && !reserveBlocked,
+      hostCapabilityVerified: !cliReady && candidate.hostCapabilityVerified,
+      hostTool: cliReady ? "" : candidate.hostTool,
+      managerReservePercent: controls.codexManagerReservePercent,
+      capacityHeadroomPercent: Number.isFinite(candidate.remainingPercent)
+        ? candidate.remainingPercent - controls.codexManagerReservePercent
+        : null,
+      dispatchable,
+      state: candidate.state === "available" && reserveBlocked ? "manager-reserve" : candidate.state,
+      evidence: cliReady
+        ? (outcomes[id]?.lastSuccessAt ? "observed-run" : "codex-cli-chatgpt-plan")
+        : candidate.evidence,
+      outcome: compactOutcome(outcomes[id] || {}),
+      platformReliability: platformReliabilitySummary(outcomes, "codex", args.horizonHours || 5),
+    };
+  });
 }
 
 function formatResourceInventory(args = {}, context = {}, candidates = buildResourceCandidates(args, context)) {
@@ -2130,7 +2224,7 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     `HorizonHours: ${horizonHours}`,
     `Evidence: ${context.capacityProbe}`,
     "Software:",
-    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; local-capacity=${context.codexTelemetry?.found === true}; fresh=${context.codexTelemetry?.fresh === true}; plan=${context.codexTelemetry?.planType || "unknown"}`,
+    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; cli=${context.codexCliFound === true}; cli-version=${context.codexCliVersion || "unknown"}; cli-auth=${context.codexCliAuth?.authMode || "unknown"}; local-capacity=${context.codexTelemetry?.found === true}; fresh=${context.codexTelemetry?.fresh === true}; plan=${context.codexTelemetry?.planType || "unknown"}`,
     `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}; efforts=${context.claudeEfforts?.join(",") || "unknown"}`,
     `- Antigravity: cli=${context.agyFound}; cli-version=${context.agyVersion || "unknown"}; desktop-live=${context.antigravityLiveReady}; live-models=${(context.rawLimits?.Models || []).filter((model) => model.DisplayName).length}`,
     `- Cursor: ui=${context.cursorUiFound}; headless-agent=${context.cursorHeadlessFound}; version=${String(context.cursorUiVersion || "unknown").split(/\r?\n/)[0]}`,
@@ -2145,7 +2239,7 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
         ? "; policy=explicit or high-value dedicated-reset opportunity"
         : "; policy=complex premium reasoning or explicit request")
       : "";
-    const runway = candidate.dispatchMode === "host-subagent"
+    const runway = candidate.platform === "codex" && candidate.id !== "codex:current"
       ? `; managerReserve=${candidate.managerReservePercent ?? 15}%; headroom=${candidate.capacityHeadroomPercent ?? "unknown"}%`
       : "";
     lines.push(`- ${candidate.id} | ${candidate.displayName} | state=${candidate.state}; ${capacity}${reset}; evidence=${candidate.evidence}; dispatchable=${candidate.dispatchable}${policy}${runway}`);
@@ -2287,7 +2381,7 @@ function projectManagerResourceScore(candidate, item, args = {}, primaryWriterId
   let score = scoreResourceForWorkItem(candidate, item, args, primaryWriterId);
   if (!Number.isFinite(score)) return score;
   const intent = `${item.kind || ""} ${item.objective || ""}`.toLowerCase();
-  if (candidate.dispatchMode === "host-subagent") {
+  if (candidate.platform === "codex" && candidate.id !== "codex:current") {
     if (/architecture|integration|security|incident|migration|risk|final-verification/.test(intent)) score += 24;
     if (item.complexity === "critical") score += 16;
     if (item.complexity === "low" && item.readOnly) score -= 12;
@@ -2396,10 +2490,17 @@ async function buildProjectManagerPlan(args = {}) {
     }
     const taskCapsulePath = capsuleResult.taskCapsules?.[item.id]?.path || capsuleResult.outputPath;
     const prompt = boundedWorkerPrompt(item, goal, taskCapsulePath);
+    const structuredVerification = bridgeVerificationCommands([item], item.readOnly);
     const hostAction = resource?.dispatchMode === "host-subagent" ? chooseHostCodexAction([resource], item) : null;
     const providerEffort = hostAction?.reasoningEffort
-      || (resource?.platform === "claude" ? selectProviderReasoningEffort(resource, item) : "provider-managed");
-    const toolName = resource?.platform === "claude"
+      || (resource?.platform === "claude"
+        ? selectProviderReasoningEffort(resource, item)
+        : resource?.dispatchMode === "codex-cli"
+          ? selectReasoningEffort(resource, item)
+          : "provider-managed");
+    const toolName = resource?.dispatchMode === "codex-cli"
+      ? "ai-mobile-local.submit-codex-job"
+      : resource?.platform === "claude"
       ? "ai-mobile-local.submit-claude-job"
       : resource?.platform === "antigravity"
         ? "ai-mobile-local.submit-agy-job"
@@ -2414,6 +2515,21 @@ async function buildProjectManagerPlan(args = {}) {
           reasoning_effort: providerEffort,
           message: prompt,
         }
+      : resource?.dispatchMode === "codex-cli"
+        ? {
+            goal: prompt,
+            workspace,
+            mode,
+            nextStep: `Complete only ${item.id} using the project capsule.`,
+            model: resource.model,
+            effort: providerEffort,
+            expectedFiles: item.expectedFiles,
+            readOnly: item.readOnly,
+            verificationCommands: structuredVerification,
+            resourceId: resource.id,
+            workItemKinds: [item.kind],
+            start: true,
+          }
       : resource?.platform === "claude"
         ? {
             goal: prompt,
@@ -2423,6 +2539,9 @@ async function buildProjectManagerPlan(args = {}) {
             model: resource.model,
             effort: providerEffort,
             permissionMode: item.readOnly ? "plan" : "acceptEdits",
+            expectedFiles: item.expectedFiles,
+            readOnly: item.readOnly,
+            verificationCommands: structuredVerification,
             start: true,
           }
         : resource?.platform === "antigravity"
@@ -2432,10 +2551,13 @@ async function buildProjectManagerPlan(args = {}) {
               mode,
               nextStep: `Complete only ${item.id} using the project capsule.`,
               model: resource.model,
+              expectedFiles: item.expectedFiles,
+              readOnly: item.readOnly,
+              verificationCommands: structuredVerification,
               start: true,
             }
           : resource?.platform === "cursor"
-            ? { goal: prompt, workspace, mode, model: resource.model, start: true }
+            ? { goal: prompt, workspace, mode, model: resource.model, expectedFiles: item.expectedFiles, readOnly: item.readOnly, verificationCommands: structuredVerification, start: true }
           : args.managerOnly
             ? { action: "blocked-manager-only", reason: "No dispatchable worker satisfies this item; do not execute it in the parent control-room task." }
             : { action: "current-codex", prompt };
@@ -2578,7 +2700,7 @@ function projectManagerRunwayLines(controls = normalizedRunControls({}), context
   const checkpointDelay = capacityCheckpointDelayMinutes({ ...controls, resources });
   return [
     `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; current=${remaining === null ? "unknown" : `${remaining}%`}`,
-    `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent capacity`,
+    `CodexWorkerConcurrency: ${controls.maxConcurrentCodexWorkers}; non-Codex CLI workers retain independent capacity`,
     `ParallelWriters: ${controls.maxParallelWriters}; only pairwise-disjoint verified boundaries may overlap`,
     `CapacityCheckpoint: ${checkpointDelay}m; accelerates near the manager reserve without ending the project`,
     "QuotaResetContinuity: durable run state persists; running external work continues and pending work is reconsidered after capacity refresh",
@@ -2780,6 +2902,10 @@ function normalizeExecutionClass(value, readOnly, externallyConsequential, kind)
   return readOnly ? "analysis" : "code";
 }
 
+function normalizeVerificationCommands(value) {
+  return normalizeVerificationCommandList(value, truncateText);
+}
+
 function normalizeWorkItem(item, index, fallbackComplexity) {
   const requestedClass = String(item.executionClass || item.class || "").trim().toLowerCase();
   const objective = String(item.objective || item.description || item.title || "").trim();
@@ -2820,6 +2946,7 @@ function normalizeWorkItem(item, index, fallbackComplexity) {
     preferredPlatform: normalizeTaskLane(item.preferredPlatform || item.platform || ""),
     acceptanceCriteria: Array.isArray(item.acceptanceCriteria || item.acceptance) ? (item.acceptanceCriteria || item.acceptance).map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
     verification: Array.isArray(item.verification || item.tests) ? (item.verification || item.tests).map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
+    verificationCommands: normalizeVerificationCommands(item.verificationCommands),
     priority: Math.max(0, Math.min(100, Number(item.priority ?? 50))),
     state: "pending",
     failoverCount: 0,
@@ -2930,6 +3057,17 @@ function writerGroupCanLaunch(manifest = {}, items = []) {
   return writers.every((writer) => activeWriters.every((active) => writerItemsAreDisjoint(writer, active)));
 }
 
+function codexWorkerCanLaunch(manifest = {}, resource = {}) {
+  if (resourcePlatform(resource) !== "codex" || resource.id === "codex:current") return true;
+  const limit = Math.max(1, Math.min(3, Number(manifest.maxConcurrentCodexWorkers || 1)));
+  const active = (manifest.jobs || []).filter((job) => {
+    if (!["queued", "running", "unknown"].includes(job.state)) return false;
+    if (job.transport === "host-subagent") return true;
+    return String(job.resourceId || "").startsWith("codex-cli:");
+  }).length;
+  return active < limit;
+}
+
 function parallelWriterIds(workItems = []) {
   const byId = new Map(workItems.map((item) => [item.id, item]));
   const memo = new Map();
@@ -2983,7 +3121,7 @@ function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = 
   score += candidate.speed * (item.complexity === "low" ? 0.16 : 0.08);
   score += candidate.cost * (item.complexity === "low" || item.kind.includes("discovery") ? 0.14 : 0.05);
   if (candidate.remainingPercent !== null) score += Math.max(-20, Math.min(15, (candidate.remainingPercent - 30) / 4));
-  if (candidate.dispatchMode === "host-subagent" && Number.isFinite(candidate.capacityHeadroomPercent) && candidate.capacityHeadroomPercent < 30) {
+  if (candidate.platform === "codex" && candidate.id !== "codex:current" && Number.isFinite(candidate.capacityHeadroomPercent) && candidate.capacityHeadroomPercent < 30) {
     score -= Math.min(40, (30 - candidate.capacityHeadroomPercent) * 1.5);
   }
   if (candidate.evidence === "observed-run" || candidate.evidence === "measured-live") score += 7;
@@ -3230,7 +3368,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     `CompletionPolicy: ${completionPolicyFrom(args)}${completionPolicyFrom(args) === "continuous-management" ? "; delivery cycles cannot complete the root Goal" : ""}`,
     `CapacityCheckpointMinutes: ${controls.capacityCheckpointMinutes}`,
     `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; native workers stop at the reserve and are penalized as headroom shrinks`,
-    `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent parallelism`,
+    `CodexWorkerConcurrency: ${controls.maxConcurrentCodexWorkers}; non-Codex providers retain independent parallelism`,
     `ParallelWriters: ${controls.maxParallelWriters}; overlapping or unscoped writers remain serialized`,
     `WorkerLeasePolicy: ${controls.maxWorkerMinutes > 0 ? `adaptive with ${controls.maxWorkerMinutes}m ceiling` : "complexity-adaptive (10m to 90m), no global worker cap"}`,
     `MaxClaudeOutputTokens: ${controls.maxClaudeOutputTokens}`,
@@ -3257,7 +3395,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     "",
     "ControlLoop:",
     "1. Inventory measured, observed, cached, caller-provided, and unknown capacity without opening desktop apps.",
-    "2. Dispatch dependency-ready work concurrently across native Codex and external CLIs. Read-only lanes may fan out; writers overlap only with pairwise-disjoint verified boundaries.",
+    "2. Dispatch dependency-ready work concurrently across standalone or host-native Codex and other provider CLIs. Read-only lanes may fan out; writers overlap only with pairwise-disjoint verified boundaries.",
     "3. Read compact artifacts and per-run telemetry, then continue dependent work automatically within the bounded wait.",
     "4. On quota, outage, timeout, auth, or model failure, cool down that resource and fail over the narrow work item once.",
     "5. Protect manager runway: before the shared Codex pool reaches its reserve, route remaining work to durable external CLI jobs so the local supervisor can continue without Codex tokens.",
@@ -3320,7 +3458,8 @@ function workItemBrief(items) {
     const files = item.expectedFiles?.length ? `; file boundary: ${item.expectedFiles.join(", ")}` : "";
     const acceptance = item.acceptanceCriteria?.length ? `; accept when: ${item.acceptanceCriteria.join(" | ")}` : "";
     const verification = item.verification?.length ? `; verify: ${item.verification.join(" | ")}` : "";
-    return `- ${item.id} [${item.kind}, ${item.complexity}, readOnly=${item.readOnly}]: ${item.objective}${files}${acceptance}${verification}`;
+    const commands = item.verificationCommands?.length ? `; bridge checks: ${item.verificationCommands.map((entry) => entry.name || entry.command).join(" | ")}` : "";
+    return `- ${item.id} [${item.kind}, ${item.complexity}, readOnly=${item.readOnly}]: ${item.objective}${files}${acceptance}${verification}${commands}`;
   }).join("\n");
 }
 
@@ -3427,7 +3566,7 @@ function scopeRecoveryResource(manifest, item) {
   const routingArgs = { ...capacityArgsFromManifest(manifest), localProfile };
   return rankResourcesForWorkItem(manifest.resources || [], item, routingArgs, manifest.primaryWriterId || "")
     .map((row) => row.candidate)
-    .find((candidate) => candidate.platform !== "codex"
+    .find((candidate) => candidate.id !== "codex:current"
       && candidate.dispatchMode !== "host-subagent"
       && candidate.dispatchable
       && candidate.state === "available") || null;
@@ -3516,6 +3655,26 @@ function contextCharacterLimitForComplexity(complexityRank) {
   return ({ 1: 5000, 2: 8000, 3: 12000, 4: 16000 })[Math.max(1, Math.min(4, Number(complexityRank || 2)))] || 8000;
 }
 
+function bridgeVerificationCommands(items = [], readOnly = true) {
+  const candidates = [
+    ...(readOnly ? [] : [{
+      name: "git-diff-check",
+      command: "git",
+      args: ["diff", "--check"],
+      timeoutSeconds: 120,
+      expectedExitCode: 0,
+    }]),
+    ...items.flatMap((item) => normalizeVerificationCommands(item.verificationCommands)),
+  ];
+  const seen = new Set();
+  return candidates.filter((entry) => {
+    const key = JSON.stringify([entry.command, entry.args, entry.expectedExitCode]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
 function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const workspace = manifest.workspace;
   const readOnly = items.every((item) => item.readOnly);
@@ -3523,6 +3682,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const complexityRank = Math.max(...items.map((item) => ({ low: 1, medium: 2, high: 3, critical: 4 }[item.complexity] || 2)));
   const maxResultBullets = resultBulletLimitForComplexity(complexityRank);
   const contextCharacterLimit = contextCharacterLimitForComplexity(complexityRank);
+  const verificationCommands = bridgeVerificationCommands(items, readOnly);
   const dependencyEvidence = dependencyEvidenceForItems(manifest, items);
   const activeConstraints = boundedTextList(manifest.constraints, 20, 600);
   const projectAcceptance = boundedTextList(manifest.acceptanceCriteria, 12, 400);
@@ -3586,7 +3746,31 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   let action = "";
   let toolName = "";
 
-  if (resource.platform === "claude") {
+  if (resource.dispatchMode === "codex-cli") {
+    toolName = "submit-codex-job";
+    action = submitCodexJob({
+      goal,
+      workspace,
+      mode,
+      nextStep,
+      model: items[0]?.assignedModel || resource.model,
+      effort: selectReasoningEffort(resource, {
+        complexity: items.some((item) => item.complexity === "critical") ? "critical" : items.some((item) => item.complexity === "high") ? "high" : items.some((item) => item.complexity === "medium") ? "medium" : "low",
+        kind: items.map((item) => item.kind).join(" "),
+        objective: items.map((item) => item.objective).join(" "),
+        requiredCapabilities: [...new Set(items.flatMap((item) => item.requiredCapabilities || []))],
+      }),
+      maxMinutes: maxWorkerMinutes,
+      resourceId: resource.id,
+      workItemKinds: items.map((item) => item.kind),
+      expectedFiles,
+      readOnly,
+      boundaryTargets,
+      verificationCommands,
+      maxResultBullets,
+      start: true,
+    });
+  } else if (resource.platform === "claude") {
     toolName = "submit-claude-job";
     action = submitClaudeJob({
       goal,
@@ -3608,6 +3792,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       expectedFiles,
       readOnly,
       boundaryTargets,
+      verificationCommands,
       maxResultBullets,
       start: true,
     });
@@ -3628,6 +3813,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       expectedFiles,
       readOnly,
       boundaryTargets,
+      verificationCommands,
       maxResultBullets,
       start: true,
     });
@@ -3645,6 +3831,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       expectedFiles,
       readOnly,
       boundaryTargets,
+      verificationCommands,
       maxResultBullets,
       start: true,
     });
@@ -3666,6 +3853,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       laneId: summary.laneId,
       worker: resource.team,
       resourceId: resource.id,
+      transport: resource.dispatchMode || "external-cli",
       assignedTasks: items.map((item) => item.id),
       workItemIds: items.map((item) => item.id),
       model: summary.model,
@@ -3682,6 +3870,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
 function failureCategoryFromText(value) {
   const text = String(value || "").toLowerCase();
   if (/budget[- ]exceeded|output budget|token budget|error_max_budget|max[_ ]budget[_ ]usd/.test(text)) return "budget-exceeded";
+  if (/verification-failed|deterministic verification failed|bridge verification failed/.test(text)) return "verification-failed";
   if (/review-worker-modified|review-only.*changed/.test(text)) return "policy-violation";
   if (/insufficient[- ]result|off[- ]task|result quality gate/.test(text)) return "insufficient-result";
   if (/rate.?limit|too many requests|429/.test(text)) return "rate-limit";
@@ -3891,6 +4080,7 @@ function workGraphContract(items = []) {
     externallyConsequential: item.externallyConsequential === true,
     acceptanceCriteria: item.acceptanceCriteria || [],
     verification: item.verification || [],
+    verificationCommands: normalizeVerificationCommands(item.verificationCommands),
     priority: Number(item.priority || 0),
   }));
 }
@@ -3972,7 +4162,7 @@ function capacityCheckpointDue(manifest, now = Date.now()) {
 function capacityCheckpointDelayMinutes(manifest, candidates = manifest?.resources || []) {
   const configured = Math.max(5, Math.min(240, Number(manifest?.capacityCheckpointMinutes || 20)));
   const reserve = Math.max(5, Math.min(50, Number(manifest?.codexManagerReservePercent || 15)));
-  const nativeCodex = (candidates || []).filter((candidate) => candidate.dispatchMode === "host-subagent");
+  const nativeCodex = (candidates || []).filter((candidate) => candidate.platform === "codex" && candidate.id !== "codex:current");
   const remaining = nativeCodex.map((candidate) => Number(candidate.remainingPercent)).filter(Number.isFinite);
   if (nativeCodex.some((candidate) => ["manager-reserve", "exhausted", "capacity-stale"].includes(candidate.state))) return 5;
   if (!remaining.length) return configured;
@@ -4376,6 +4566,7 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
       changed = true;
       continue;
     }
+    if (!codexWorkerCanLaunch(manifest, resource)) continue;
     if (!writerGroupCanLaunch(manifest, items)) continue;
     const failedItemJob = [...(manifest.jobs || [])].reverse().find((job) => items.some((item) => (job.workItemIds || []).includes(item.id)) && job.state === "failed");
     const launch = launchGroup(manifest, resource, items, failedItemJob?.jobId || "");
@@ -4760,7 +4951,7 @@ function resourcePlatform(resource = {}) {
   const explicit = String(resource.platform || "").trim().toLowerCase();
   if (explicit) return explicit;
   const prefix = String(resource.id || "").split(":")[0].toLowerCase();
-  return prefix === "codex-host" ? "codex" : prefix;
+  return ["codex-host", "codex-cli"].includes(prefix) ? "codex" : prefix;
 }
 
 function latestOrchestrationTransition(snapshot = {}) {
@@ -5130,12 +5321,14 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     const result = hostTransport ? String(job.inlineEvidence?.summary || "").trim() : summarizeFile(path.join(jobDir, "result.md"), 500).trim();
     const changed = hostTransport ? (job.inlineEvidence?.changedFiles || []).join(", ") : summarizeFile(path.join(jobDir, "changed-files.txt"), 250).trim();
     const tests = hostTransport ? String(job.inlineEvidence?.testSummary || "").trim() : summarizeFile(path.join(jobDir, "test-output-summary.md"), 250).trim();
+    const verificationEvidence = hostTransport ? null : readJsonFile(path.join(jobDir, "verification-evidence.json"), null);
     const telemetry = hostTransport ? null : readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     lines.push(`${index + 1}. ${job.laneId || job.toolName} | ${job.state} | ${job.jobId} | model=${job.model || "default"}`);
     lines.push(`   Assigned: ${(job.assignedTasks || []).join(", ") || "unspecified"}`);
     if (job.blocker && !supersededByCodex) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
     if (job.warning && !supersededBySuccess && !supersededByCodex) lines.push(`   Warning: ${truncateText(job.warning, 300)}`);
     if (telemetry) lines.push(`   Telemetry: model=${telemetry.observedModel || "unknown"}; durationSec=${Number.isFinite(Number(telemetry.durationMs)) ? Math.round(Number(telemetry.durationMs) / 1000) : "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
+    if (verificationEvidence) lines.push(`   BridgeVerification: state=${verificationEvidence.state || "unknown"}; required=${verificationEvidence.required === true}; checks=${verificationEvidence.checks?.length || 0}; workspaceMutation=${verificationEvidence.workspaceMutationDetected === true}`);
     if (["queued", "running", "unknown"].includes(job.state)) {
       const started = Date.parse(String(job.startedAt || job.createdAt || ""));
       const elapsed = Number.isFinite(started) ? Math.max(0, Math.round((Date.now() - started) / 1000)) : "unknown";
@@ -5145,7 +5338,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     if (supersededByCodex) lines.push("   Recovered: the current Codex session explicitly took over and completed this work item with recorded evidence.");
     if (result && !supersededBySuccess && !supersededByCodex) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
     if (changed && !/^NONE$/i.test(changed) && !supersededBySuccess && !supersededByCodex) lines.push(`   Changed: ${changed.replace(/\s*\n\s*/g, ", ")}`);
-    if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
+    if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   WorkerAndBridgeSummary: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
   if (!graphIntegrity.valid && snapshot.state !== "completed" && !snapshot.termination?.category) lines.push(isContinuousManagement(snapshot)
@@ -6239,6 +6432,7 @@ function artifactContract(jobId, jobDir, maxResultBullets = 8) {
     "- changed-files.txt: one changed path per line, or NONE.",
     "- diff.patch: compact patch/diff if files changed, or empty.",
     "- test-output-summary.md: commands run and pass/fail summary only.",
+    "- verification-evidence.json is bridge-owned. Workers must not read, edit, or replace it.",
     "",
     "Do not paste full files, full logs, screenshots, or full chat transcripts.",
   ].join("\n");
@@ -6264,7 +6458,7 @@ function buildJobRequest(args, jobId, jobDir) {
     "",
     artifactContract(jobId, jobDir, args.maxResultBullets),
     "",
-    "Codex will read only result.md, changed-files.txt, diff.patch, test-output-summary.md, and status.json.",
+    "Codex will read only result.md, changed-files.txt, diff.patch, test-output-summary.md, verification-evidence.json, and status.json.",
   ].join("\n");
 }
 
@@ -6289,6 +6483,7 @@ function createJob(args = {}) {
     changedFilesFile: "changed-files.txt",
     diffFile: "diff.patch",
     testOutputSummaryFile: "test-output-summary.md",
+    verificationEvidenceFile: "verification-evidence.json",
   };
   fs.writeFileSync(path.join(jobDir, "request.md"), `${request}\n`, "utf8");
   writeJsonFile(path.join(jobDir, "status.json"), status);
@@ -6524,6 +6719,7 @@ function readJob(args = {}) {
   const result = summarizeFile(path.join(jobDir, "result.md"), 8000);
   const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 4000);
   const tests = summarizeFile(path.join(jobDir, "test-output-summary.md"), 6000);
+  const verificationEvidence = summarizeFile(path.join(jobDir, "verification-evidence.json"), 6000);
   const telemetry = summarizeFile(path.join(jobDir, "worker-telemetry.json"), 4000);
   const diff = summarizeFile(path.join(jobDir, "diff.patch"), 12000);
   return [
@@ -6547,6 +6743,9 @@ function readJob(args = {}) {
     "",
     "test-output-summary.md:",
     tests || "<empty>",
+    "",
+    "verification-evidence.json:",
+    verificationEvidence || "<not recorded by this job version>",
     "",
     "worker-telemetry.json:",
     telemetry || "<empty>",
@@ -7018,7 +7217,7 @@ function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
   }
   const preExistingDirty = changedDuringRun.filter((file) => baselinePaths.has(file));
   writeWorkerGitArtifacts(workspace, jobDir, changedDuringRun, preExistingDirty);
-  return { reviewMutationDetected, changedDuringRun };
+  return { reviewMutationDetected, changedDuringRun, preExistingDirty };
 }
 
 async function runWorkerFailClosed(worker, args, runner) {
@@ -7272,6 +7471,47 @@ function runWindowsFriendly(command, args = [], options = {}) {
     timeout: options.timeout || 10000,
     windowsHide: true,
   });
+}
+
+function findCodexCli(options = {}) {
+  for (const candidate of codexCliCandidates()) {
+    const versionProbe = runWindowsFriendly(candidate, ["--version"], { timeout: 10000 });
+    if (versionProbe.status !== 0) continue;
+    const authProbe = options.probeAuth === false
+      ? null
+      : runWindowsFriendly(candidate, ["login", "status"], { timeout: 15000 });
+    const auth = authProbe
+      ? parseCodexLoginStatus(authProbe.stdout, authProbe.stderr)
+      : { checked: false, loggedIn: null, authMode: "unknown", text: "" };
+    return {
+      found: true,
+      command: candidate,
+      version: String(versionProbe.stdout || versionProbe.stderr || "").trim(),
+      auth,
+    };
+  }
+  return {
+    found: false,
+    command: "",
+    version: "",
+    auth: { checked: true, loggedIn: false, authMode: "none", text: "" },
+    message: "Standalone Codex CLI was not found. Install the official CLI and sign in with codex login.",
+  };
+}
+
+function getCodexCliStatusText() {
+  const status = findCodexCli();
+  return [
+    "CodexCliStatus:",
+    `Found: ${status.found}`,
+    `Command: ${status.command || "<not found>"}`,
+    `Version: ${status.version || "<unknown>"}`,
+    `LoggedIn: ${status.auth?.loggedIn ?? "unknown"}`,
+    `AuthMode: ${status.auth?.authMode || "unknown"}`,
+    `ChatGptPlanWorkerReady: ${status.found && status.auth?.loggedIn === true && status.auth?.authMode === "chatgpt"}`,
+    "SupportedBridge: durable headless Codex CLI jobs through codex exec; no desktop task or window is created.",
+    "Startup: passive; status discovery does not run a model prompt.",
+  ].join("\n");
 }
 
 function findCursorApp() {
@@ -7639,9 +7879,16 @@ function runAgyJobWorker(args = {}) {
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
   const observedModel = inferAgyObservedModel(stdout, args.model || "");
   const modelMismatch = Boolean(args.model && observedModel && normalizedModelText(args.model) !== normalizedModelText(observedModel));
-  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok;
+  const preVerificationOk = !executionFailed && boundary.ok && quality.ok && boundaryEvidence.ok && writerCompletion.ok;
+  const deterministicVerification = preVerificationOk
+    ? verificationRunner.run(workspace, jobDir, args, gitOutcome)
+    : verificationRunner.skip(jobDir, args);
+  const verificationFailed = preVerificationOk && deterministicVerification.required && deterministicVerification.passed !== true;
+  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
   const failureCategory = !boundary.ok
     ? "scope-violation"
+    : verificationFailed
+      ? "verification-failed"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`)
       : (!quality.ok || !boundaryEvidence.ok || !writerCompletion.ok) ? "insufficient-result" : "";
@@ -7673,6 +7920,8 @@ function runAgyJobWorker(args = {}) {
     ].filter(Boolean).join(" "),
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : verificationFailed
+        ? deterministicVerification.blocker || "Bridge-owned deterministic verification failed."
       : !writerCompletion.ok
         ? writerCompletion.reason
       : !boundaryEvidence.ok
@@ -7761,6 +8010,229 @@ function submitAgyJob(args = {}) {
     "Started: true",
     `WorkerPid: ${child.pid}`,
     "Next: call read-job with this jobId; Codex should read only compact artifacts.",
+  ].join("\n");
+}
+
+function buildCodexJobPrompt(workspace, jobId, args = {}) {
+  const jobDir = jobDirFor(workspace, jobId);
+  const request = summarizeFile(path.join(jobDir, "request.md"), 12000);
+  const maxResultBullets = boundedResultBulletLimit(args, 8);
+  const operationBudget = maxResultBullets <= 5 ? 8 : maxResultBullets <= 6 ? 12 : 16;
+  return [
+    "You are a standalone Codex CLI worker managed by AI Mobile.",
+    "Execute only the assigned bounded work item in this workspace. Do not delegate, create another task, or inspect unrelated project history.",
+    "Do not read or edit .antigravity-bridge. The parent bridge captures your final response and git evidence independently.",
+    args.readOnly === false
+      ? "You are the assigned writer. Edit only the stated file boundary, preserve concurrent user changes, and run focused verification."
+      : "This is a read-only assignment. Do not modify project files.",
+    `Stay within roughly ${operationBudget} targeted file/search/verification operations unless one additional focused check is necessary for correctness.`,
+    "Never expose credentials, cookies, private chats, full files, or full logs.",
+    "",
+    request,
+    "",
+    `Current next step: ${String(args.nextStep || "Complete the assigned work and return compact evidence.").trim()}`,
+    `Final response: at most ${maxResultBullets} concise evidence bullets. Name changed files and exact focused checks actually run. If blocked, state one blocker and the smallest next action.`,
+  ].join("\n");
+}
+
+function runCodexJobWorker(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const jobId = resolveJobId(workspace, args.jobId);
+  const jobDir = jobDirFor(workspace, jobId);
+  const status = findCodexCli();
+  const chatGptReady = status.found && status.auth?.loggedIn === true && status.auth?.authMode === "chatgpt";
+  if (!chatGptReady) {
+    const blocker = status.found
+      ? `Codex CLI is not authenticated through the ChatGPT plan (auth=${status.auth?.authMode || "unknown"}); refusing a potentially separately billed worker.`
+      : status.message;
+    updateJobStatus(workspace, jobId, {
+      state: "failed",
+      currentStep: "codex-cli-not-ready",
+      blocker,
+      failureCategory: status.found ? "auth" : "worker-failure",
+      bridgeFinalized: true,
+      completedAt: utcStamp(),
+    });
+    writeJobFailureArtifacts(workspace, jobId, "codex-cli", blocker);
+    recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || `codex-cli:${args.model || "default"}` }, {
+      provider: "codex",
+      requestedModel: args.model || "",
+      success: false,
+      failureCategory: status.found ? "auth" : "worker-failure",
+    });
+    return `CodexJobWorkerResult:\nJobId: ${jobId}\nState: failed\nBlocker: ${blocker}`;
+  }
+
+  const maxMinutes = Math.max(1, Math.min(180, Number(args.maxMinutes || 30)));
+  const model = String(args.model || "").trim();
+  const effort = String(args.effort || "medium").trim().toLowerCase();
+  const prompt = buildCodexJobPrompt(workspace, jobId, args);
+  const cliArgs = buildCodexExecArgs({ workspace, model, effort, readOnly: args.readOnly !== false });
+  updateJobStatus(workspace, jobId, {
+    state: "running",
+    worker: "codex-cli",
+    currentStep: "codex-cli-running",
+    startedAt: utcStamp(),
+    codexCommand: path.basename(status.command),
+    codexVersion: status.version,
+    codexAuthMode: status.auth.authMode,
+    requestedModel: model,
+    requestedReasoningEffort: effort,
+    sandboxMode: args.readOnly === false ? "workspace-write" : "read-only",
+  });
+
+  const startedMs = Date.now();
+  const result = runWindowsFriendly(status.command, cliArgs, {
+    cwd: workspace,
+    input: prompt,
+    timeout: maxMinutes * 60 * 1000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const descendantCleanup = result.error?.code === "ETIMEDOUT" ? terminateDescendantProcesses(process.pid) : null;
+  const stdout = String(result.stdout || "");
+  const stderr = String(result.stderr || "");
+  const parsed = parseCodexJsonl(stdout);
+  fs.writeFileSync(path.join(jobDir, "codex-output.jsonl"), truncateText(stdout, 80000), "utf8");
+  fs.writeFileSync(path.join(jobDir, "codex-error.txt"), truncateText(stderr, 30000), "utf8");
+
+  const resultPath = path.join(jobDir, "result.md");
+  fs.writeFileSync(
+    resultPath,
+    `${compactResultBullets(parsed.resultText || parsed.errors.join("\n") || stderr || "<Codex CLI produced no result>", boundedResultBulletLimit(args, 8), resultCharacterLimit(args, 8))}\n`,
+    "utf8",
+  );
+  const compactCodexResult = compactResultArtifact(resultPath, args, 8);
+  writeAuthoritativeExecutionSummary(jobDir, "codex-cli", result, stderr);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
+  const boundary = validateWorkerFileBoundary(args, gitOutcome);
+  const executionFailed = result.status !== 0 || Boolean(result.error) || parsed.turnFailed || parsed.parsedEvents === 0;
+  const resultText = summarizeFile(resultPath, 8000);
+  const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
+  const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
+  const preVerificationOk = !executionFailed && boundary.ok && quality.ok && boundaryEvidence.ok && writerCompletion.ok;
+  const deterministicVerification = preVerificationOk
+    ? verificationRunner.run(workspace, jobDir, args, gitOutcome)
+    : verificationRunner.skip(jobDir, args);
+  const verificationFailed = preVerificationOk && deterministicVerification.required && deterministicVerification.passed !== true;
+  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
+  const failureCategory = !boundary.ok
+    ? "scope-violation"
+    : verificationFailed
+      ? "verification-failed"
+    : executionFailed
+      ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsed.errors.join(" ")} ${stdout}`)
+      : (!quality.ok || !boundaryEvidence.ok || !writerCompletion.ok) ? "insufficient-result" : "";
+
+  recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || `codex-cli:${model}` }, {
+    provider: "codex",
+    requestedModel: model,
+    observedModel: model,
+    success: !failed,
+    failureCategory,
+    durationMs: Date.now() - startedMs,
+    inputTokens: parsed.inputTokens,
+    cacheReadInputTokens: parsed.cachedInputTokens,
+    outputTokens: parsed.outputTokens,
+    promptChars: prompt.length,
+    resultChars: compactCodexResult.length,
+    sessionId: parsed.threadId,
+    numTurns: 1,
+  });
+  updateJobStatus(workspace, jobId, {
+    state: failed ? "failed" : "completed",
+    currentStep: failed ? "codex-cli-failed" : "codex-cli-completed",
+    completedAt: utcStamp(),
+    bridgeFinalized: true,
+    exitCode: result.status,
+    observedModel: model,
+    failureCategory,
+    descendantCleanup,
+    blocker: !boundary.ok
+      ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : verificationFailed
+        ? deterministicVerification.blocker || "Bridge-owned deterministic verification failed."
+      : !writerCompletion.ok
+        ? writerCompletion.reason
+      : !boundaryEvidence.ok
+        ? boundaryEvidence.reason
+      : !quality.ok
+        ? quality.reason
+        : failed ? truncateText(result.error?.message || parsed.errors.join(" ") || stderr || stdout || "Codex CLI exited without a valid result.", 1000) : "",
+  });
+
+  return [
+    "CodexJobWorkerResult:",
+    `JobId: ${jobId}`,
+    `State: ${failed ? "failed" : "completed"}`,
+    `JobFolder: ${jobDir}`,
+  ].join("\n");
+}
+
+function submitCodexJob(args = {}) {
+  const created = createJob({ ...args, worker: "codex-cli" });
+  const start = args.start !== false;
+  updateJobStatus(created.workspace, created.jobId, {
+    worker: "codex-cli",
+    currentStep: start ? "codex-cli-queued" : "codex-cli-created-not-started",
+  });
+  if (!start) {
+    return [
+      "SubmitCodexJobResult:",
+      `JobId: ${created.jobId}`,
+      `JobFolder: ${created.jobDir}`,
+      "State: queued",
+      "Started: false",
+    ].join("\n");
+  }
+
+  const status = findCodexCli();
+  const chatGptReady = status.found && status.auth?.loggedIn === true && status.auth?.authMode === "chatgpt";
+  if (!chatGptReady) {
+    const blocker = status.found
+      ? `Codex CLI auth mode is ${status.auth?.authMode || "unknown"}; ChatGPT-plan authentication is required to avoid separate API billing.`
+      : status.message;
+    updateJobStatus(created.workspace, created.jobId, {
+      state: "failed",
+      currentStep: "codex-cli-not-ready",
+      completedAt: utcStamp(),
+      bridgeFinalized: true,
+      blocker,
+    });
+    writeJobFailureArtifacts(created.workspace, created.jobId, "codex-cli", blocker);
+    return `SubmitCodexJobResult:\nJobId: ${created.jobId}\nJobFolder: ${created.jobDir}\nState: failed\nBlocker: ${blocker}`;
+  }
+
+  const payloadPath = path.join(created.jobDir, "codex-worker-payload.json");
+  writeJsonFile(payloadPath, {
+    ...args,
+    workspace: created.workspace,
+    jobId: created.jobId,
+  });
+  const child = spawn(process.execPath, [__filename, "codex-job-worker-cli", "--json-file", payloadPath], {
+    cwd: pluginRoot,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+  updateJobStatus(created.workspace, created.jobId, {
+    state: "running",
+    currentStep: "codex-cli-background-started",
+    workerPid: child.pid,
+    workerCommandMarker: created.jobId,
+    codexCommand: path.basename(status.command),
+    codexVersion: status.version,
+    codexAuthMode: status.auth.authMode,
+  });
+  return [
+    "SubmitCodexJobResult:",
+    `JobId: ${created.jobId}`,
+    `JobFolder: ${created.jobDir}`,
+    "State: running",
+    "Started: true",
+    `WorkerPid: ${child.pid}`,
+    "Next: call read-job with this jobId; the bridge will return compact Codex output and measured usage.",
   ].join("\n");
 }
 
@@ -8096,9 +8568,16 @@ function runClaudeJobWorker(args = {}) {
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
   const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
-  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok;
+  const preVerificationOk = !executionFailed && !modelMismatch && !tokenBudgetExceeded && !claudeBudgetError && boundary.ok && quality.ok && boundaryEvidence.ok && writerCompletion.ok;
+  const deterministicVerification = preVerificationOk
+    ? verificationRunner.run(workspace, jobDir, args, gitOutcome)
+    : verificationRunner.skip(jobDir, args);
+  const verificationFailed = preVerificationOk && deterministicVerification.required && deterministicVerification.passed !== true;
+  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
   const failureCategory = !boundary.ok
     ? "scope-violation"
+    : verificationFailed
+      ? "verification-failed"
     : modelMismatch
       ? "model-unavailable"
     : (tokenBudgetExceeded || claudeBudgetError)
@@ -8144,6 +8623,8 @@ function runClaudeJobWorker(args = {}) {
     warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : verificationFailed
+        ? deterministicVerification.blocker || "Bridge-owned deterministic verification failed."
       : tokenBudgetExceeded
         ? `Claude output budget exceeded: ${parsedOutput.outputTokens} > ${maxOutputTokens} tokens. Do not auto-fail over; inspect the bounded artifact or rescope.`
       : claudeBudgetError
@@ -8337,9 +8818,16 @@ function runCursorJobWorker(args = {}) {
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
   const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
-  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok;
+  const preVerificationOk = !executionFailed && boundary.ok && quality.ok && boundaryEvidence.ok && writerCompletion.ok;
+  const deterministicVerification = preVerificationOk
+    ? verificationRunner.run(workspace, jobDir, args, gitOutcome)
+    : verificationRunner.skip(jobDir, args);
+  const verificationFailed = preVerificationOk && deterministicVerification.required && deterministicVerification.passed !== true;
+  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
   const failureCategory = !boundary.ok
     ? "scope-violation"
+    : verificationFailed
+      ? "verification-failed"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`)
       : (!quality.ok || !boundaryEvidence.ok || !writerCompletion.ok) ? "insufficient-result" : "";
@@ -8364,6 +8852,8 @@ function runCursorJobWorker(args = {}) {
     warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but the bridge cannot attribute concurrent edits to the review worker; no diff was accepted." : "",
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : verificationFailed
+        ? deterministicVerification.blocker || "Bridge-owned deterministic verification failed."
       : !writerCompletion.ok
         ? writerCompletion.reason
       : !boundaryEvidence.ok
@@ -9079,7 +9569,7 @@ async function submitJob(args = {}) {
     "",
     text,
     "",
-    "Codex follow-up: do not read the Antigravity chat. Later call read-job for result.md, changed-files.txt, diff.patch, test-output-summary.md, and status.json.",
+    "Codex follow-up: do not read the Antigravity chat. Later call read-job for result.md, changed-files.txt, diff.patch, test-output-summary.md, verification-evidence.json, and status.json.",
   ].join("\n");
 }
 
@@ -9177,7 +9667,7 @@ function runSelfTest() {
   assert(aliasedGraph[2].readOnly === false && aliasedGraph[2].executionClass === "integration", "integration aliases retain writable integration semantics");
   assert(buildGoalWorkGraph({ goal: "repair", workItems: [{ id: "contradictory", title: "Repair code", class: "code", readOnly: true }] })[0].readOnly === false, "an explicit code execution class overrides a contradictory readOnly downgrade");
   const managerWorkItemSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties?.workItems?.items;
-  assert(managerWorkItemSchema?.properties?.objective && managerWorkItemSchema?.properties?.description && managerWorkItemSchema?.properties?.executionClass && managerWorkItemSchema?.properties?.class, "manager tool publishes canonical work-item fields and defensive aliases");
+  assert(managerWorkItemSchema?.properties?.objective && managerWorkItemSchema?.properties?.description && managerWorkItemSchema?.properties?.executionClass && managerWorkItemSchema?.properties?.class && managerWorkItemSchema?.properties?.verificationCommands, "manager tool publishes canonical work-item fields, defensive aliases, and structured verification");
   const managerToolSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties;
   const managerStatusSchema = tools.find((tool) => tool.name === "project-manager-status")?.inputSchema?.properties;
   assert(managerToolSchema?.completionPolicy
@@ -9244,6 +9734,15 @@ function runSelfTest() {
   }));
   assert(codexEvent?.windows?.[0]?.id === "five_hour" && codexEvent.windows[0].remainingPercent === 60, "Codex local rate-limit metadata normalizes five-hour capacity");
   assert(!JSON.stringify(codexEvent).includes("SHOULD_NOT_SURVIVE"), "Codex telemetry parser discards transcript and unrelated event fields");
+  assert(parseCodexLoginStatus("Logged in using ChatGPT", "").authMode === "chatgpt", "Codex CLI discovery distinguishes included ChatGPT-plan authentication");
+  const codexArgs = buildCodexExecArgs({ workspace: pluginRoot, model: "gpt-5.6-luna", effort: "low", readOnly: true });
+  assert(codexArgs.includes("--ignore-user-config") && codexArgs.includes("read-only") && codexArgs[codexArgs.length - 1] === "-", "Codex CLI worker uses isolated JSONL stdin transport and a read-only sandbox");
+  const parsedCodex = parseCodexJsonl([
+    JSON.stringify({ type: "thread.started", thread_id: "codex-thread-test" }),
+    JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "- Verified bounded routing.\n- Focused test passed." } }),
+    JSON.stringify({ type: "turn.completed", usage: { input_tokens: 101, cached_input_tokens: 80, output_tokens: 12 } }),
+  ].join("\n"));
+  assert(parsedCodex.threadId === "codex-thread-test" && parsedCodex.inputTokens === 101 && parsedCodex.resultText.includes("Focused test passed"), "Codex CLI JSONL becomes compact result and measured token evidence");
   const hostCatalog = {
     models: [
       { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultReasoning: "low", reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"], contextWindow: 353400 },
@@ -9253,6 +9752,19 @@ function runSelfTest() {
   };
   const hostCandidates = buildHostCodexCandidates(hostCatalog, { found: true, fresh: true, state: "healthy", evidence: "test", effectiveRemainingPercent: 70, windows: [] }, { hostCapabilityVerified: true, includePattern: /^gpt-/i });
   assert(hostCandidates.length === 3 && hostCandidates.some((candidate) => candidate.model === "gpt-future-nova"), "future catalog models remain discoverable without code changes");
+  const cliCandidateContext = {
+    codexCatalog: hostCatalog,
+    codexTelemetry: { found: true, fresh: true, state: "healthy", evidence: "test", effectiveRemainingPercent: 70, windows: [] },
+    codexBudget: { state: "healthy" },
+    codexRemainingPercent: 70,
+    codexCliFound: true,
+    codexCliAuth: { loggedIn: true, authMode: "chatgpt" },
+    workspaceState: { outcomes: {} },
+  };
+  const cliCandidates = buildNativeCodexCandidates({ localProfile: neutralLocalRoutingProfile(), codexManagerReservePercent: 15 }, cliCandidateContext);
+  assert(cliCandidates.length === 3 && cliCandidates.every((candidate) => candidate.dispatchMode === "codex-cli" && candidate.dispatchable), "ChatGPT-authenticated Codex CLI replaces duplicate host candidates with durable workers");
+  const reserveCliCandidates = buildNativeCodexCandidates({ localProfile: neutralLocalRoutingProfile(), codexManagerReservePercent: 15 }, { ...cliCandidateContext, codexRemainingPercent: 12, codexTelemetry: { ...cliCandidateContext.codexTelemetry, effectiveRemainingPercent: 12 } });
+  assert(reserveCliCandidates.every((candidate) => candidate.state === "manager-reserve" && candidate.dispatchable === false), "standalone Codex workers share the manager reserve with the parent task");
   const criticalHostAction = chooseHostCodexAction(hostCandidates.filter((candidate) => candidate.model === "gpt-5.6-sol"), { objective: "Review an irreversible architecture migration", kind: "architecture-risk", complexity: "critical", requiredCapabilities: ["frontier-reasoning"] });
   assert(criticalHostAction?.reasoningEffort === "ultra", "critical frontier work selects the strongest supported Codex effort");
   assert(selectReasoningEffort(hostCandidates.find((candidate) => candidate.model === "gpt-5.6-terra"), { complexity: "low" }) === "low", "low-complexity Codex work selects a supported low effort");
@@ -9595,7 +10107,7 @@ function runSelfTest() {
   assert(reserveDecision.candidates.filter((candidate) => candidate.dispatchMode === "host-subagent").every((candidate) => candidate.state === "manager-reserve" && candidate.dispatchable === false), "native Codex dispatch stops before consuming the manager reserve");
   assert(capacityCheckpointDelayMinutes({ ...normalizedRunControls({}), resources: reserveDecision.candidates }) === 5, "capacity reviews accelerate to five minutes when the Codex manager reserve is active");
   const runwayText = projectManagerRunwayLines(normalizedRunControls({ codexManagerReservePercent: 18, maxConcurrentCodexWorkers: 1 }), reserveContext, reserveDecision.candidates).join("\n");
-  assert(runwayText.includes("CodexManagerReserve: 18%") && runwayText.includes("NativeCodexConcurrency: 1") && runwayText.includes("QuotaResetContinuity: durable run state persists"), "project-manager plans expose manager reserve, native concurrency, and reset continuity");
+  assert(runwayText.includes("CodexManagerReserve: 18%") && runwayText.includes("CodexWorkerConcurrency: 1") && runwayText.includes("QuotaResetContinuity: durable run state persists"), "project-manager plans expose manager reserve, Codex worker concurrency, and reset continuity");
   const boundaryEvidence = "BOUNDARY writer-a: `scripts/ai-mobile-local-mcp.js`\nBOUNDARY writer-b: `README.md`";
   assert(inferFileBoundaryFromEvidence(pluginRoot, boundaryEvidence, "writer-a").join(",") === path.join("scripts", "ai-mobile-local-mcp.js"), "writer boundary parsing uses only the target's machine-readable boundary line");
   assert(inferFileBoundaryFromEvidence(pluginRoot, "Observed `README.md` before proposing a correction.", "writer-a").length === 0, "writer boundaries never fall back to incidental backtick paths when the target marker is missing");
@@ -10091,9 +10603,65 @@ function runSelfTest() {
   const tempRoot = path.resolve(os.tmpdir());
   const workspace = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-self-test-"));
   let sleeper = null;
+  let fakeCodexRoot = "";
+  const originalCodexCliPath = process.env.CODEX_CLI_PATH;
   try {
     const init = spawnSync("git", ["init", "--quiet", workspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
     assert(init.status === 0, "temporary git workspace initializes");
+    assert(!verificationRunner.validate(workspace, { command: "powershell", args: ["-Command", "Write-Output unsafe"] }).ok, "deterministic verification refuses inline shell commands");
+    assert(!verificationRunner.validate(workspace, { command: "node", args: ["-e", "process.exit(0)"] }).ok, "deterministic verification refuses inline runtime evaluation");
+    fs.writeFileSync(path.join(workspace, "verification-fixture.js"), '"use strict";\n', "utf8");
+    fakeCodexRoot = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-fake-codex-"));
+    const fakeCodexScript = path.join(fakeCodexRoot, "fake-codex.js");
+    fs.writeFileSync(fakeCodexScript, [
+      '"use strict";',
+      'const args = process.argv.slice(2);',
+      'if (args.includes("--version")) { process.stdout.write("codex-cli 9.9.9\\n"); }',
+      'else if (args[0] === "login" && args[1] === "status") { process.stdout.write("Logged in using ChatGPT\\n"); }',
+      'else {',
+      '  let input = "";',
+      '  process.stdin.setEncoding("utf8");',
+      '  process.stdin.on("data", (chunk) => { input += chunk; });',
+      '  process.stdin.on("end", () => {',
+      '    process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-codex-thread" }) + "\\n");',
+      '    process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "- Verified the bounded Codex worker transport and read-only sandbox.\\n- Focused fake lifecycle check passed without project changes." } }) + "\\n");',
+      '    process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: input.length, cached_input_tokens: 7, output_tokens: 19 } }) + "\\n");',
+      '  });',
+      '}',
+    ].join("\n"), "utf8");
+    const fakeCodexCommand = process.platform === "win32"
+      ? path.join(fakeCodexRoot, "codex.cmd")
+      : path.join(fakeCodexRoot, "codex");
+    if (process.platform === "win32") {
+      fs.writeFileSync(fakeCodexCommand, `@echo off\r\n"${process.execPath}" "${fakeCodexScript}" %*\r\n`, "utf8");
+    } else {
+      fs.writeFileSync(fakeCodexCommand, `#!/bin/sh\nexec "${process.execPath}" "${fakeCodexScript}" "$@"\n`, "utf8");
+      fs.chmodSync(fakeCodexCommand, 0o755);
+    }
+    process.env.CODEX_CLI_PATH = fakeCodexCommand;
+    const fakeCodexStatus = findCodexCli();
+    assert(fakeCodexStatus.found && fakeCodexStatus.auth?.authMode === "chatgpt", "Codex CLI passive probe verifies version and ChatGPT-plan authentication");
+    const fakeVerificationCommands = [{ name: "fake-node-check", command: "node", args: ["--check", "verification-fixture.js"], timeoutSeconds: 10, expectedExitCode: 0 }];
+    const fakeCodexJob = createJob({ goal: "Verify bounded Codex worker transport", workspace, mode: "review", readOnly: true, worker: "codex-cli", verificationCommands: fakeVerificationCommands });
+    const fakeCodexWorkerResult = runCodexJobWorker({
+      goal: "Verify bounded Codex worker transport",
+      workspace,
+      jobId: fakeCodexJob.jobId,
+      mode: "review",
+      readOnly: true,
+      model: "gpt-5.6-luna",
+      effort: "low",
+      maxMinutes: 1,
+      resourceId: "codex-cli:gpt-5.6-luna",
+      workItemKinds: ["verification"],
+      verificationCommands: fakeVerificationCommands,
+    });
+    const fakeCodexJobStatus = readJsonFile(path.join(fakeCodexJob.jobDir, "status.json"), {});
+    const fakeCodexTelemetry = readJsonFile(path.join(fakeCodexJob.jobDir, "worker-telemetry.json"), {});
+    const fakeVerificationEvidence = readJsonFile(path.join(fakeCodexJob.jobDir, "verification-evidence.json"), {});
+    assert(/State: completed/.test(fakeCodexWorkerResult) && fakeCodexJobStatus.state === "completed" && fakeCodexTelemetry.outputTokens === 19 && fakeVerificationEvidence.passed === true, "durable Codex worker records compact output, lifecycle state, measured usage, and bridge-owned verification without a live model call");
+    if (originalCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = originalCodexCliPath;
     const appendedCycle = appendContinuousCycle({
       ...cycleVerified,
       runId: "continuous-cycle-test",
@@ -10621,6 +11189,9 @@ function runSelfTest() {
     assert(!isProcessAlive(sleeper.pid), "cancel-job stops the worker process tree");
   } finally {
     if (sleeper?.pid && isProcessAlive(sleeper.pid)) terminateProcessTree(sleeper.pid);
+    if (originalCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = originalCodexCliPath;
+    if (fakeCodexRoot && path.resolve(fakeCodexRoot).startsWith(`${tempRoot}${path.sep}`)) fs.rmSync(fakeCodexRoot, { recursive: true, force: true });
     const resolved = path.resolve(workspace);
     if (resolved.startsWith(`${tempRoot}${path.sep}`)) fs.rmSync(resolved, { recursive: true, force: true });
   }
@@ -10835,6 +11406,17 @@ async function handleRequest(message) {
         return;
       }
 
+      if (name === "codex-cli-status") {
+        sendResult(id, { content: [{ type: "text", text: getCodexCliStatusText() }] });
+        return;
+      }
+
+      if (name === "submit-codex-job") {
+        const text = submitCodexJob(params?.arguments || {});
+        sendResult(id, { content: [{ type: "text", text }] });
+        return;
+      }
+
       if (name === "claude-status") {
         sendResult(id, { content: [{ type: "text", text: getClaudeStatusText() }] });
         return;
@@ -10931,7 +11513,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -10976,6 +11558,9 @@ if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", 
     "agy-models-cli": async () => getAgyModelsText(),
     "submit-agy-job-cli": async (value) => submitAgyJob(value),
     "agy-job-worker-cli": async (value) => runWorkerFailClosed("antigravity-cli", value, runAgyJobWorker),
+    "codex-cli-status-cli": async () => getCodexCliStatusText(),
+    "submit-codex-job-cli": async (value) => submitCodexJob(value),
+    "codex-job-worker-cli": async (value) => runWorkerFailClosed("codex-cli", value, runCodexJobWorker),
     "claude-status-cli": async () => getClaudeStatusText(),
     "claude-usage-cli": async () => getClaudeUsageText(),
     "submit-claude-job-cli": async (value) => submitClaudeJob(value),

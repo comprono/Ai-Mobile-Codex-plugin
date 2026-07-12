@@ -14,6 +14,8 @@ Before opening a pull request, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
+node .\scripts\reliability-e2e.js
+powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
 git diff --check
 python -m pipx run plugin-scanner lint .
 python -m pipx run plugin-scanner verify . --format json

@@ -1,9 +1,16 @@
 # Provider Adapters
 
-## Native Codex
+## Standalone Codex CLI
 
-- Dispatch boundary: the host's native agent tool.
-- Never invoke a locked or nested `codex.exe` process.
+- Status/auth: `codex-cli-status`; dispatch: `submit-codex-job` through the orchestrator.
+- Use only when the official CLI is logged in through the ChatGPT plan. Refuse unknown/API-style auth so a subscription workflow cannot silently become separately billed API work.
+- Run `codex exec` ephemerally with ignored user config, JSONL output, stdin prompt transport, an exact catalog model/effort, and `read-only` or `workspace-write` sandboxing.
+- Share measured capacity, manager reserve, and concurrency with host-native Codex workers. Never create both transports for the same model in one inventory.
+- The parent task never reconstructs or manually starts the CLI command; the durable bridge owns launch, cancellation, output parsing, token telemetry, git attribution, and verification evidence.
+
+## Host-Native Codex
+
+- Dispatch boundary: the host's native agent tool, used when the standalone ChatGPT-plan CLI lane is unavailable.
 - Pass an exact catalog model and supported effort only when the active skill explicitly returns a bounded native-host action. Never read a plan file merely to reconstruct routine dispatch.
 - Receive the worker result directly in the control chat and integrate it once.
 
@@ -42,4 +49,4 @@ If the DevTools MCP transport is closed, call `devtools-health` once. Repeated c
 
 ## Startup
 
-All adapters are passive during Codex startup. Model/catalog discovery must not open desktop applications. UI open/repair commands require an active task need or explicit user request.
+All adapters are passive during Codex startup. Codex/Claude/Antigravity status and auth probes do not run model prompts. Model/catalog discovery must not open desktop applications. UI open/repair commands require an active task need or explicit user request.

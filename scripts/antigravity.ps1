@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "context-capsule", "project-manager-plan", "run-project-manager", "project-manager-status", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
+  [ValidateSet("status", "open", "repair-live", "inspect", "path", "models", "limits", "limits-summary", "quick", "live", "setup", "doctor", "privacy", "self-test", "devtools-health", "submission-guide", "offload-advice", "handoff-template", "prepare-offload", "orchestration-plan", "efficiency-flow", "run-efficient-task", "codex-usage", "codex-cli-status", "submit-codex-job", "context-capsule", "project-manager-plan", "run-project-manager", "project-manager-status", "orchestrator-profile", "resource-inventory", "orchestrate-project", "team-orchestration-plan", "run-team-task", "read-team-run", "create-job", "submit-job", "select-chat", "agy-status", "agy-models", "submit-agy-job", "claude-status", "claude-usage", "submit-claude-job", "cursor-status", "open-cursor", "submit-cursor-job", "list-jobs", "read-job", "cancel-job", "retry-job", "switch-model", "submit-offload")]
   [string] $Command = "status",
 
   [string] $Goal = "",
@@ -16,6 +16,11 @@ param(
   [string] $CodexRemainingPercent = "",
   [string] $CodexResetAt = "",
   [string] $CurrentCodexEffort = "",
+  [string] $CodexWorkerModel = "",
+  [string] $CodexWorkerEffort = "medium",
+  [object] $CodexWorkerReadOnly = $true,
+  [int] $CodexMaxMinutes = 30,
+  [string] $ExpectedFilesJson = "",
   [object] $HostCodexAvailable = $false,
   [string] $ProfileAction = "get",
   [string] $CommunicationStyle = "",
@@ -1549,6 +1554,56 @@ function Invoke-BridgeJobCommand {
   }
 }
 
+function Invoke-CodexBridgeCommand {
+  param(
+    [string] $CliCommand
+  )
+
+  $localMcpScript = Join-Path $PSScriptRoot "ai-mobile-local-mcp.js"
+  if (-not (Test-Path -LiteralPath $localMcpScript)) {
+    throw "ai-mobile-local-mcp.js was not found at $localMcpScript"
+  }
+
+  $expectedFiles = @()
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedFilesJson)) {
+    try {
+      $expectedFiles = @(ConvertFrom-Json -InputObject $ExpectedFilesJson | ForEach-Object { [string]$_ })
+    } catch {
+      throw "ExpectedFilesJson must be a JSON array of workspace-relative paths. $($_.Exception.Message)"
+    }
+  }
+  $payload = [PSCustomObject]@{
+    goal = $Goal
+    workspace = $Workspace
+    mode = $Mode
+    nextStep = $NextStep
+    model = if ([string]::IsNullOrWhiteSpace($CodexWorkerModel)) { $CodexModel } else { $CodexWorkerModel }
+    effort = $CodexWorkerEffort
+    readOnly = ConvertTo-BooleanValue -Value $CodexWorkerReadOnly -Default $true
+    expectedFiles = $expectedFiles
+    start = ConvertTo-BooleanValue -Value $Start -Default $true
+    maxMinutes = $CodexMaxMinutes
+  } | ConvertTo-Json -Depth 5 -Compress
+
+  $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-codex-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    [System.IO.File]::WriteAllText($payloadFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    $output = & node $localMcpScript $CliCommand --json-file $payloadFile 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      if (Test-HasCommandOutput -Output $output) { $output | Write-Output }
+      throw "$CliCommand failed with exit code $exitCode"
+    }
+    if (Test-HasCommandOutput -Output $output) {
+      $output | Write-Output
+    } elseif ($CliCommand -eq "submit-codex-job-cli") {
+      Write-LatestJobFallback -FallbackLabel "SubmitCodexJobResult:"
+    }
+  } finally {
+    Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-ClaudeBridgeCommand {
   param(
     [string] $CliCommand
@@ -1880,6 +1935,14 @@ switch ($Command) {
 
   "submit-agy-job" {
     Invoke-AgyBridgeCommand -CliCommand "submit-agy-job-cli"
+  }
+
+  "codex-cli-status" {
+    Invoke-CodexBridgeCommand -CliCommand "codex-cli-status-cli"
+  }
+
+  "submit-codex-job" {
+    Invoke-CodexBridgeCommand -CliCommand "submit-codex-job-cli"
   }
 
   "claude-status" {

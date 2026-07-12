@@ -18,12 +18,12 @@
 - Fan out only distinct independent work with no ordering dependency or shared writer state.
 - Keep exactly one user-facing Codex control-room task/thread per project. Do not use `create_thread` for workers.
 - The parent Codex task owns goals, workstreams, capacity decisions, owner/model assignments, dependencies, risks, intervention, user-boundary decisions, compact evidence review, and reporting. In manager-only mode it does not inspect files, run project commands, edit source, or duplicate worker execution.
-- Manager-only applies only to the control-room task. Native Codex subagents and headless Claude, Antigravity, and Cursor sessions/jobs are allowed and expected when eligible.
+- Manager-only applies only to the control-room task. Standalone or host-native Codex workers and headless Claude, Antigravity, and Cursor sessions/jobs are allowed and expected when eligible.
 - Do not add a paraphrasing meta-router. Pass the capsule and source artifacts directly; merge once.
 - Launch later stages only after dependencies complete.
 - For a complex default graph, make implementation depend on discovery so the writer receives verified evidence and a narrow file boundary.
 - Keep project duration continuous by default. Treat the five-hour horizon as a rolling capacity forecast, perform 20-minute resource checkpoints without interrupting running workers, and accelerate to five-minute checks near the protected Codex manager reserve.
-- Protect manager runway before native Codex workers exhaust the shared pool. Default to one native worker, route unstarted work externally as reserve headroom shrinks, and let the durable supervisor continue external dependency stages without parent-chat tokens.
+- Protect manager runway before Codex workers exhaust the shared pool. Default to one standalone-or-host worker across the shared pool, route unstarted work externally as reserve headroom shrinks, and let the durable supervisor continue CLI dependency stages without parent-chat tokens.
 - Keep the low-RAM supervisor active only while external stages can advance autonomously. It uses no model tokens and exits when Codex action, verification, a blocker, replacement, or stop is required.
 - Give read-only provider calls shorter role-aware safety leases (5-30 minutes) and writers adaptive 10-90 minute leases. A silent/dead-call timeout may rescope or fail over the item once; it never terminates the overall objective.
 - Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
@@ -52,6 +52,8 @@
 ## Result Gate
 
 Reject a result when it is empty, an acknowledgement, a model identity, generic advice, off-task, missing required evidence, or outside its file boundary. Exit code zero alone is insufficient.
+
+For material code/test claims, provide structured `verificationCommands`. The bridge executes allowlisted argument arrays without a shell, records exit code, timeout, bounded stdout/stderr, and workspace mutation in `verification-evidence.json`, and fails the lane when a required check fails. Worker-written test prose remains explicitly non-authoritative.
 
 When a result is close but incomplete, send one narrow correction. When failure is quota, outage, timeout, auth, unavailable model, or insufficient result, cool down that resource and fail over the item once. Do not restart the full plan.
 
