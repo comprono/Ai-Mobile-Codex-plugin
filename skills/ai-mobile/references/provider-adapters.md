@@ -25,7 +25,7 @@
 - Dispatch: `submit-agy-job`.
 - The CLI can automatically open browser OAuth when its token is absent or stale. Automatic orchestration therefore treats it as authorization-required unless `allowAntigravityCli=true` or an exact `agyModel` was explicitly requested.
 - Once explicitly enabled, CLI is the normal low-RAM path.
-- Direct bridge jobs default to 30 minutes; orchestration chooses a 10-60 minute lease by complexity unless an explicit ceiling is supplied.
+- Direct bridge jobs default to 30 minutes; orchestration gives read-only Antigravity work 5-20 minutes and writer work 10-60 minutes by complexity unless an explicit lower ceiling is supplied.
 
 ## Antigravity Desktop
 
@@ -38,7 +38,7 @@ If the DevTools MCP transport is closed, call `devtools-health` once. Repeated c
 - Status: `cursor-status`.
 - Dispatch: `submit-cursor-job` only for a verified headless agent.
 - `open-cursor` is an explicit UI fallback, never an automatic startup action.
-- Direct headless jobs default to 30 minutes; orchestration uses a 10-90 minute adaptive lease.
+- Direct headless jobs default to 30 minutes; orchestration uses an 8-30 minute read-only lease or a 10-90 minute writer lease.
 
 ## Startup
 

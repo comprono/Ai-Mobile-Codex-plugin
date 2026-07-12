@@ -57,7 +57,7 @@ Examples requiring immediate interruption include: "do not access email", "stop"
 - Capacity checkpoint: default 20 minutes, accelerating to five minutes near the protected Codex manager reserve, or on the next status call; refresh resources without interrupting active workers.
 - Manager runway: reserve 15% of shared Codex capacity and default to one active native Codex worker; external CLI providers retain independent parallelism.
 - Writer concurrency: allow up to two simultaneous writers only when every pair has explicit, disjoint workspace-relative file or directory boundaries. Overlapping or unscoped writers remain serialized.
-- Worker lease: adaptive 10-90 minute provider-call watchdog, not a project deadline.
+- Worker lease: role-aware provider-call watchdog (5-30 minutes for read-only work, 10-90 minutes for writers), not a project deadline.
 - Utilization: keep appropriate healthy resources working on distinct dependency-ready items; never duplicate work just to use every model.
 - Persistent control room: set `completionPolicy=continuous-management`. Worker completion closes only the current numbered cycle; the root objective and Codex Goal remain active.
 
@@ -103,7 +103,8 @@ Do not preload all reference files. Open one only when its specific edge case is
 - Protect browser and account state. Never log out, clear cookies/storage, switch or create browser profiles, change the signed-in account, inspect saved credentials, install a connector, request OAuth consent, or access email/SMS verification codes unless the user explicitly authorized that exact action. Use task-owned automation tabs and stop at human authentication gates.
 - Keep live checks of signed-in sessions, browser profiles, cookies, accounts, credentials, OAuth, email/SMS authentication, and CAPTCHA with the current Codex session. CLI workers may review bounded source code about those systems but may not inspect the user's live protected state.
 - Git status, tracked deletions, ignored files, and source layout are not runtime-liveness evidence. Workers must use recorded dependency evidence or an explicitly allowed current health check.
-- External writers require a verified file boundary. The bridge may infer it from completed dependency evidence; otherwise manager-only mode blocks and requests bounded discovery instead of returning implementation to current Codex.
+- External writers require a verified file boundary. Completed dependency evidence must expose the exact machine-readable `BOUNDARY <work-item-id>:` marker; incidental paths never authorize edits. Otherwise manager-only mode blocks and requests bounded discovery instead of returning implementation to current Codex.
+- A writer also requires attributable in-boundary file changes and a non-blocked result. `BLOCKED`, `no code changed`, or no changed files is failed implementation evidence; rescope or fail over before releasing its verifier.
 - A `ready-for-codex` run is still active until final verification or explicit termination. Stop it before changed-goal replacement, and refuse the replacement if any old worker process cannot be confirmed stopped.
 - In `continuous-management`, `ready-for-codex` is a cycle boundary. Record cycle verification and submit `nextWorkItems`; it is never permission to complete the root Goal.
 - Antigravity desktop UI is reserved for visible project/chat state or verified CLI gaps. Startup remains passive.
@@ -123,7 +124,7 @@ The bridge may start external CLI jobs, but an MCP server cannot invoke host-nat
 - Use all appropriate healthy resources when the graph has genuinely independent ready work. Native Codex, Claude, and Antigravity may run simultaneously; writers require pairwise-disjoint verified boundaries, while readers must avoid duplicate analysis.
 - A provider outage, exhausted window, invalid model, timeout, or insufficient result triggers cooldown and one narrow failover. Do not loop retries.
 - `horizonHours` is a rolling capacity forecast, never a countdown. Project duration is continuous by default; `capacityCheckpointMinutes` refreshes remaining capacity without terminating the objective.
-- Worker calls use complexity-adaptive safety leases from 10 to 90 minutes when `maxWorkerMinutes=0`. A lease timeout rescoping/failover protects against a dead provider process but does not terminate the project.
+- Worker calls use role-aware safety leases when `maxWorkerMinutes=0`: read-only work gets 5-30 minutes by provider and complexity, while writers get 10-90 minutes. A lease timeout rescoping/failover protects against a silent or dead provider process but does not terminate the project.
 - At a capacity checkpoint, refresh catalogs, quota windows, resets, cooldowns, and recent outcomes. Preserve running assignments; reroute only pending or resource-blocked work.
 - The detached CLI supervisor uses no model tokens. It advances sequential external stages while the run is `running` and exits when current Codex input or a terminal decision is required.
 - If the parent Codex window is exhausted, do not abandon or reconstruct the project. External jobs and the supervisor continue from `.antigravity-bridge`; after reset, call `project-manager-status` and resume the same run.

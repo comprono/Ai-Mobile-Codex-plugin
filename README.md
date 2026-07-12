@@ -24,7 +24,7 @@ The one-line form is sufficient only when the same task already has an active Go
 - **Capacity checkpoint:** normally every 20 minutes, accelerating to five minutes as shared Codex capacity approaches the manager reserve; refreshes quotas, resets, cooldowns, and pending assignments.
 - **Manager runway:** 15% of shared Codex capacity is protected by default, and only one native Codex worker runs at once unless the caller explicitly raises the limit. Claude and Antigravity CLI workers retain independent parallelism.
 - **Writer boundaries:** up to two writers may run together when their workspace-relative file or directory boundaries are explicit and pairwise disjoint. Overlapping or unscoped writers remain serialized.
-- **Worker lease:** adaptive 10-90 minute safety window for one provider call; a dead call can be replaced without ending the objective.
+- **Worker lease:** short read-only leases (5-30 minutes by provider/complexity) and longer bounded writer leases (10-90 minutes); a silent or dead call can fail over without ending the objective.
 - **Utilization:** use every appropriate healthy resource when distinct dependency-ready work exists; never duplicate the same task merely to keep every model busy.
 - **Continuous management:** persistent control rooms use one immutable root objective and numbered delivery cycles. Finishing a review/fix cycle never completes the root Goal.
 
@@ -166,8 +166,8 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - For `continuous-management`, `ready-for-codex` is only a cycle boundary. `projectVerified` is rejected; the manager records cycle evidence and supplies the next bounded cycle under the same run id.
 - Complex default implementations wait for discovery evidence before writer dispatch so the orchestrator can infer a narrow file boundary instead of granting repository-wide write scope.
 - A five-hour capacity horizon is a rolling forecast, not a countdown or project deadline. Project duration is continuous by default, with capacity re-evaluated every 20 minutes, every five minutes near the Codex manager reserve, or on the next status call.
-- Individual provider calls use complexity-adaptive safety leases: roughly 10 minutes for small work and up to 90 minutes for critical work. These protect against dead CLIs; they do not end the project, and an explicit `MaxWorkerMinutes` may set a different ceiling.
-- Direct manual provider jobs keep their 30-minute default. The adaptive 10-90 minute policy applies only to orchestrated worker leases.
+- Individual provider calls use role-aware safety leases. Read-only Antigravity work receives 5-20 minutes and other read-only providers 8-30 minutes; writers retain complexity-adaptive 10-90 minute ceilings. These protect against silent or dead CLIs without limiting project duration, and an explicit `MaxWorkerMinutes` may lower the ceiling.
+- Direct manual provider jobs keep their 30-minute default. Role-aware adaptive leases apply only to orchestrated workers.
 - Capacity checkpoints never kill running workers. They refresh model/quota/cooldown evidence and may reroute only work that has not started.
 - The detached supervisor consumes no model tokens. It advances external dependency stages while `State: running` and exits at `ready-for-codex`, `blocked`, `completed`, replacement, or explicit stop.
 - Pass user constraints, acceptance criteria, and verification at the top level. New constraints or a changed goal cancel incompatible active workers immediately and are written into the next context capsule.
@@ -195,6 +195,8 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Do not submit into an existing chat unless `expectedChat` matches the active Antigravity document title/context.
 - Do not report a submitted task unless the helper returns `Submitted: true` or a worker job returns `Started: true`.
 - Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
+- Writer success additionally requires attributable file changes and a non-blocked result. `BLOCKED`, `no code changed`, or an empty changed-file set is an insufficient implementation result and cannot release dependent verification.
+- A dependency may authorize writer files only through `BOUNDARY <work-item-id>: ` followed by exact backtick-wrapped paths. Incidental paths mentioned in diagnostics or generated reports are never treated as edit permission.
 - Keep worker prompts bounded and results complexity-sized. Do not stream worker narration or repeatedly read successful job artifacts into Codex.
 - External writer lanes require an explicit file boundary or a narrow boundary inferred from verified dependency evidence. If neither exists, manager-only mode requests bounded discovery and blocks the writer instead of making the control-room task explore or implement.
 - Native Codex host workers participate in the same dependency, bounded-writer, evidence, cooldown, and bounded-failover rules as CLI workers. A changed goal cannot start a replacement until any running host agent is confirmed closed.

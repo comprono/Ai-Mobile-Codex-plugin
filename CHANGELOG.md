@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 - 2026-07-12
+
+- Shortened orchestrated read-only worker leases by provider and complexity so silent Antigravity discovery fails over in 5-20 minutes and other read-only lanes in 8-30 minutes, while bounded writer leases and continuous project duration remain unchanged.
+- Added regression coverage proving explicit worker ceilings still win and writer leases retain their longer complexity budget.
+- Made writer completion fail closed when a provider reports `BLOCKED`/`no code changed` or produces no attributable file changes, preventing no-op implementation from releasing dependent verification.
+- Made dependency-derived writer boundaries require the exact machine-readable `BOUNDARY <work-item-id>:` marker, so incidental diagnostic/generated-file paths cannot authorize the wrong edit surface.
+
 ## 0.1.6 - 2026-07-12
 
 - Added an immutable `RootGoal` and explicit `finite` versus `continuous-management` completion policy so "manage as CEO" cannot shrink the project objective into a monitoring task.

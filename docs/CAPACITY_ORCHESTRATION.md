@@ -70,7 +70,7 @@ The baseline family roles follow [Claude Code model configuration](https://code.
 
 Claude jobs feature-detect the installed CLI instead of relying on a fixed version. On Windows the bridge prefers Claude's native executable for exact argument transport, uses isolated non-persistent sessions, assigns bounded scout/reviewer/verifier/writer contracts, and accepts structured final evidence when supported. A small optional Claude plugin with the same roles lives under `claude-plugin/`; bridge safe mode uses explicit equivalent role instructions because safe mode suppresses plugin components.
 
-Direct manual provider jobs default to 30 minutes. Orchestrated provider calls instead receive complexity-adaptive 10-90 minute safety leases unless an explicit ceiling is supplied.
+Direct manual provider jobs default to 30 minutes. Orchestrated read-only calls receive shorter provider-aware leases (Antigravity 5-20 minutes; other providers 8-30 minutes), while writers retain complexity-adaptive 10-90 minute safety leases unless an explicit lower ceiling is supplied. Worker timeout/failover never limits the continuous project duration.
 
 ## Five-Hour Planning Horizon
 

@@ -2694,10 +2694,14 @@ function normalizedRunControls(args = {}) {
   };
 }
 
-function workerMinutesFor(manifest, complexityRank, platform) {
+function workerMinutesFor(manifest, complexityRank, platform, readOnly = false) {
   const desired = platform === "antigravity"
-    ? ({ 1: 10, 2: 20, 3: 40, 4: 60 })[complexityRank]
-    : ({ 1: 10, 2: 20, 3: 45, 4: 90 })[complexityRank];
+    ? (readOnly
+      ? ({ 1: 5, 2: 8, 3: 12, 4: 20 })[complexityRank]
+      : ({ 1: 10, 2: 20, 3: 40, 4: 60 })[complexityRank])
+    : (readOnly
+      ? ({ 1: 8, 2: 12, 3: 20, 4: 30 })[complexityRank]
+      : ({ 1: 10, 2: 20, 3: 45, 4: 90 })[complexityRank]);
   const adaptiveLease = desired || 20;
   const optionalCap = Number(manifest.maxWorkerMinutes || 0);
   return Math.max(1, optionalCap > 0 ? Math.min(optionalCap, adaptiveLease) : adaptiveLease);
@@ -3367,6 +3371,7 @@ function inferFileBoundaryFromEvidence(workspace, evidence, workItemId = "") {
   const marker = workItemId
     ? source.match(new RegExp(`(?:FILE_)?BOUNDARY\\s+${escapedRegexText(workItemId)}\\s*:\\s*([^\\r\\n]+)`, "i"))
     : null;
+  if (workItemId && !marker) return [];
   const searchable = marker ? marker[1] : source;
   const matches = [];
   const regex = new RegExp("`([^`\\r\\n]+\\.(?:" + extensions + "))`", "gi");
@@ -3555,7 +3560,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
         : "External writer dispatch refused because no verified file boundary was available. Current Codex must scope or implement this narrow item.",
     };
   }
-  const maxWorkerMinutes = workerMinutesFor(manifest, complexityRank, resource.platform);
+  const maxWorkerMinutes = workerMinutesFor(manifest, complexityRank, resource.platform, readOnly);
   let action = "";
   let toolName = "";
 
@@ -3579,6 +3584,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
+      readOnly,
       maxResultBullets,
       start: true,
     });
@@ -3597,6 +3603,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
+      readOnly,
       maxResultBullets,
       start: true,
     });
@@ -3612,6 +3619,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
+      readOnly,
       maxResultBullets,
       start: true,
     });
@@ -6676,6 +6684,20 @@ function validateWorkerFileBoundary(args, gitOutcome) {
   return { ok: violations.length === 0, violations };
 }
 
+function validateWriterCompletion(args = {}, gitOutcome = {}, resultText = "") {
+  // Orchestration always passes an explicit boolean. Preserve compatibility
+  // for direct advanced provider jobs whose older payloads have no role flag.
+  if (args.readOnly !== false) return { ok: true, reason: "" };
+  const text = String(resultText || "");
+  if (/(?:^|\n)\s*(?:[-*#]+\s*)?(?:outcome\s*:\s*)?blocked\b|\bno (?:code|files?) (?:was |were )?changed\b/i.test(text)) {
+    return { ok: false, reason: "Writer reported a blocked/no-change outcome. Rescope the file boundary or implementation objective; do not accept this as completed code work." };
+  }
+  if (!(gitOutcome.changedDuringRun || []).length) {
+    return { ok: false, reason: "Writer produced no attributable file changes. Treat this as an insufficient result and rescope or fail over the bounded implementation lane." };
+  }
+  return { ok: true, reason: "" };
+}
+
 function cooldownMinutesForFailure(category) {
   return {
     "rate-limit": 30,
@@ -7554,14 +7576,15 @@ function runAgyJobWorker(args = {}) {
   const executionFailed = result.status !== 0 || Boolean(result.error);
   const resultText = compactResultText || summarizeFile(resultPath, resultCharacterLimit(args, 8));
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
   const observedModel = inferAgyObservedModel(stdout, args.model || "");
   const modelMismatch = Boolean(args.model && observedModel && normalizedModelText(args.model) !== normalizedModelText(observedModel));
-  const failed = executionFailed || !boundary.ok || !quality.ok;
+  const failed = executionFailed || !boundary.ok || !quality.ok || !writerCompletion.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`)
-      : !quality.ok ? "insufficient-result" : "";
+      : (!quality.ok || !writerCompletion.ok) ? "insufficient-result" : "";
   recordWorkerTelemetry(workspace, jobDir, {
     ...args,
     resourceId: args.resourceId || `antigravity:${args.model || "default"}`,
@@ -7590,6 +7613,8 @@ function runAgyJobWorker(args = {}) {
     ].filter(Boolean).join(" "),
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : !writerCompletion.ok
+        ? writerCompletion.reason
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Antigravity CLI exited non-zero.", 1000) : "",
@@ -8005,8 +8030,10 @@ function runClaudeJobWorker(args = {}) {
   const modelMismatch = !executionFailed && !claudeObservedModelMatches(dispatchModel, parsedOutput.observedModel);
   const tokenBudgetExceeded = Number.isFinite(parsedOutput.outputTokens) && parsedOutput.outputTokens > maxOutputTokens;
   const claudeBudgetError = claudeBudgetErrorSubtype(parsedOutput.errorSubtype);
-  const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(summarizeFile(resultPath, 8000), args);
-  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok;
+  const resultText = summarizeFile(resultPath, 8000);
+  const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
+  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok || !writerCompletion.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : modelMismatch
@@ -8015,7 +8042,7 @@ function runClaudeJobWorker(args = {}) {
       ? "budget-exceeded"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`)
-      : !quality.ok ? "insufficient-result" : "";
+      : (!quality.ok || !writerCompletion.ok) ? "insufficient-result" : "";
   recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "claude:sonnet" }, {
     provider: "claude",
     requestedModel: args.model || "sonnet",
@@ -8060,6 +8087,8 @@ function runClaudeJobWorker(args = {}) {
         ? `Claude reported a budget-exceeded error (${parsedOutput.errorSubtype}). Do not auto-fail over; inspect the bounded artifact or rescope.`
       : modelMismatch
         ? `Requested Claude model ${dispatchModel}, but the dominant observed model was ${parsedOutput.observedModel || "unknown"}.`
+      : !writerCompletion.ok
+        ? writerCompletion.reason
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Claude Code exited non-zero.", 1000) : "",
@@ -8239,13 +8268,15 @@ function runCursorJobWorker(args = {}) {
   const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error);
-  const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(summarizeFile(resultPath, 8000), args);
-  const failed = executionFailed || !boundary.ok || !quality.ok;
+  const resultText = summarizeFile(resultPath, 8000);
+  const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
+  const failed = executionFailed || !boundary.ok || !quality.ok || !writerCompletion.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`)
-      : !quality.ok ? "insufficient-result" : "";
+      : (!quality.ok || !writerCompletion.ok) ? "insufficient-result" : "";
   recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "cursor:agent" }, {
     provider: "cursor",
     requestedModel: args.model || "default",
@@ -8267,6 +8298,8 @@ function runCursorJobWorker(args = {}) {
     warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but the bridge cannot attribute concurrent edits to the review worker; no diff was accepted." : "",
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
+      : !writerCompletion.ok
+        ? writerCompletion.reason
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Cursor agent exited non-zero.", 1000) : "",
@@ -9172,7 +9205,13 @@ function runSelfTest() {
   ]), "overlapping bounded writers remain serialized");
   const defaultControls = normalizedRunControls({});
   assert(defaultControls.runDeadlineMinutes === 0 && defaultControls.capacityCheckpointMinutes === 20 && defaultControls.maxWorkerMinutes === 0 && defaultControls.maxClaudeOutputTokens === 12000, "projects default to continuous duration with rolling capacity checkpoints");
-  assert(workerMinutesFor(defaultControls, 4, "antigravity") === 60 && workerMinutesFor(defaultControls, 4, "claude") === 90 && workerMinutesFor({ ...defaultControls, maxWorkerMinutes: 25 }, 4, "claude") === 25, "worker leases adapt to complexity and honor only an explicit ceiling");
+  assert(workerMinutesFor(defaultControls, 4, "antigravity", false) === 60
+    && workerMinutesFor(defaultControls, 4, "antigravity", true) === 20
+    && workerMinutesFor(defaultControls, 4, "claude", false) === 90
+    && workerMinutesFor(defaultControls, 4, "claude", true) === 30
+    && workerMinutesFor({ ...defaultControls, maxWorkerMinutes: 25 }, 4, "claude", false) === 25
+    && workerMinutesFor({ ...defaultControls, maxWorkerMinutes: 7 }, 3, "antigravity", true) === 7,
+  "worker leases are shorter for read-only work, preserve writer complexity budgets, and honor an explicit lower ceiling");
   assert(defaultControls.maxClaudeBudgetUsd === 0, "maxClaudeBudgetUsd defaults to 0 so the auth-aware automatic budget policy applies");
   const subscriptionAuth = { checked: true, loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" };
   const unknownAuth = { checked: true, loggedIn: true, subscriptionType: "" };
@@ -9491,6 +9530,7 @@ function runSelfTest() {
   assert(runwayText.includes("CodexManagerReserve: 18%") && runwayText.includes("NativeCodexConcurrency: 1") && runwayText.includes("QuotaResetContinuity: durable run state persists"), "project-manager plans expose manager reserve, native concurrency, and reset continuity");
   const boundaryEvidence = "BOUNDARY writer-a: `scripts/ai-mobile-local-mcp.js`\nBOUNDARY writer-b: `README.md`";
   assert(inferFileBoundaryFromEvidence(pluginRoot, boundaryEvidence, "writer-a").join(",") === path.join("scripts", "ai-mobile-local-mcp.js"), "writer boundary parsing uses only the target's machine-readable boundary line");
+  assert(inferFileBoundaryFromEvidence(pluginRoot, "Observed `README.md` before proposing a correction.", "writer-a").length === 0, "writer boundaries never fall back to incidental backtick paths when the target marker is missing");
   const scopeCandidate = {
     id: "antigravity:gemini-3.5-flash-medium",
     platform: "antigravity",
@@ -9957,6 +9997,11 @@ function runSelfTest() {
   assert(JSON.stringify(pathsFromGitStatus(" M scripts/ai-mobile-local-mcp.js\r\n?? notes/new.md\n")) === JSON.stringify(["scripts/ai-mobile-local-mcp.js", "notes/new.md"]), "Git porcelain parsing preserves the first filename character after trimmed status output");
   assert(validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["scripts/worker.js"] }).ok, "writer changes inside an assigned file boundary pass");
   assert(!validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["README.md"] }).ok, "writer changes outside an assigned file boundary fail closed");
+  assert(validateWriterCompletion({ readOnly: true, mode: "review" }, { changedDuringRun: [] }, "- Current blocker was identified.").ok, "read-only workers may complete with useful evidence and no file changes");
+  assert(validateWriterCompletion({ mode: "fast" }, { changedDuringRun: [] }, "- Direct legacy analysis completed.").ok, "direct provider jobs without an explicit orchestration role preserve compatibility");
+  assert(!validateWriterCompletion({ readOnly: false, mode: "patch" }, { changedDuringRun: [] }, "- Outcome: BLOCKED, no code changed.").ok, "a blocked writer with no code changes is not accepted as completed implementation");
+  assert(!validateWriterCompletion({ readOnly: false, mode: "patch" }, { changedDuringRun: ["scripts/fix.js"] }, "- Outcome: BLOCKED pending a correct boundary.").ok, "a writer-declared blocked outcome remains failed even when a partial file changed");
+  assert(validateWriterCompletion({ readOnly: false, mode: "patch" }, { changedDuringRun: ["scripts/fix.js"] }, "- Implemented the bounded correction and focused tests passed.").ok, "a writer completes only with attributable changes and a non-blocked result");
   assert(compactResultBullets("- one\n- two\n- three", 2).split(/\r?\n/).length === 2, "worker result readback enforces a compact bullet limit");
   assert(!validateWorkerResult("I am currently running on Gemini 3.5 Flash (Medium).", { goal: "Review transport correctness" }).ok, "model identity alone cannot satisfy an assigned work item");
   assert(validateWorkerResult("- No transport defect found after reviewing both framing paths.\n- Verification covered initialization and tool listing.", { goal: "Review transport correctness", workItemKinds: ["architecture-review"] }).ok, "compact objective-specific review passes the result quality gate");

@@ -51,6 +51,6 @@ For each candidate compute capability fit, quality floor, available capacity, re
 
 Apply private local policy before scoring. Public defaults remain model-neutral; local allow/preference patterns and verified project outcomes can favor particular Codex, Claude, or Antigravity roles without exposing those preferences in the repository.
 
-Manual provider jobs default to 30 minutes. Orchestrated workers use the adaptive 10-90 minute lease policy unless the user supplies a ceiling.
+Manual provider jobs default to 30 minutes. Orchestrated read-only workers use shorter provider-aware 5-30 minute leases, while writers retain adaptive 10-90 minute leases unless the user supplies a lower ceiling.
 
 When Codex approaches its reserve, move remaining dependency-ready work to durable external jobs before the manager window is exhausted. The zero-model-token supervisor can continue those jobs from `.antigravity-bridge`; after reset, resume the same run instead of rebuilding its context.
