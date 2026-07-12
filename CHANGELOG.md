@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3 - 2026-07-13
+
+- Prevented automatic live-operation dependency injection from creating transitive cycles in multi-stage correction and release graphs.
+- Expanded work-graph integrity checks to report duplicate ids, missing dependencies, self-dependencies, and dependency cycles instead of showing an idle run as useful progress.
+
 ## 0.2.2 - 2026-07-13
 
 - Added a durable `bridge:verification` worker for command-complete read-only verification, so exact structured checks run without invoking Codex, Claude, Antigravity, or Cursor.

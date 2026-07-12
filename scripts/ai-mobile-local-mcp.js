@@ -2990,17 +2990,55 @@ function normalizeWorkItem(item, index, fallbackComplexity) {
   };
 }
 
+function dependencyPathExists(byId, startId, targetId, seen = new Set()) {
+  if (startId === targetId) return true;
+  if (seen.has(startId)) return false;
+  seen.add(startId);
+  const item = byId.get(startId);
+  return (item?.dependsOn || []).some((dependencyId) => dependencyPathExists(byId, dependencyId, targetId, seen));
+}
+
+function findDependencyCycle(items = []) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const visited = new Set();
+  const visiting = new Set();
+  const stack = [];
+  const visit = (id) => {
+    if (visiting.has(id)) {
+      const index = stack.indexOf(id);
+      return [...stack.slice(Math.max(0, index)), id];
+    }
+    if (visited.has(id) || !byId.has(id)) return null;
+    visiting.add(id);
+    stack.push(id);
+    for (const dependencyId of byId.get(id).dependsOn || []) {
+      const cycle = visit(dependencyId);
+      if (cycle) return cycle;
+    }
+    stack.pop();
+    visiting.delete(id);
+    visited.add(id);
+    return null;
+  };
+  for (const id of byId.keys()) {
+    const cycle = visit(id);
+    if (cycle) return cycle;
+  }
+  return [];
+}
+
 function injectLiveOperationDependencies(items) {
   const operations = items
     .filter((item) => item.externallyConsequential && item.executionClass === "operation")
     .sort((a, b) => b.priority - a.priority);
   if (!operations.length) return items;
+  const byId = new Map(items.map((item) => [item.id, item]));
   return items.map((item) => {
     if (item.externallyConsequential || item.dependsOn.length) return item;
     const liveDependent = /\b(live|current|runtime|throughput|candidate|submission|dashboard|health|operator|bottleneck|unattended|runner|watchdog)\b/i
       .test(`${item.kind} ${item.objective}`);
     if (!liveDependent) return item;
-    const operation = operations.find((candidate) => !(candidate.dependsOn || []).includes(item.id));
+    const operation = operations.find((candidate) => !dependencyPathExists(byId, candidate.id, item.id));
     return operation ? { ...item, dependsOn: [operation.id], dependencyPolicy: "live-operation-evidence" } : item;
   });
 }
@@ -5122,6 +5160,19 @@ function workGraphIntegrity(snapshot = {}) {
       reason: `placeholder objectives detected for ${placeholderItems.map((item) => item.id).join(",")}; an older caller lost title/description/class fields`,
     };
   }
+  const ids = workItems.map((item) => String(item.id || ""));
+  const duplicates = [...new Set(ids.filter((id, index) => id && ids.indexOf(id) !== index))];
+  if (duplicates.length) return { valid: false, reason: `duplicate work-item ids detected: ${duplicates.join(",")}` };
+  const known = new Set(ids);
+  const invalidDependency = workItems.find((item) => (item.dependsOn || []).some((dependencyId) => dependencyId === item.id || !known.has(dependencyId)));
+  if (invalidDependency) {
+    const bad = (invalidDependency.dependsOn || []).find((dependencyId) => dependencyId === invalidDependency.id || !known.has(dependencyId));
+    return { valid: false, reason: bad === invalidDependency.id
+      ? `self dependency detected for ${invalidDependency.id}`
+      : `missing dependency ${bad} referenced by ${invalidDependency.id}` };
+  }
+  const cycle = findDependencyCycle(workItems);
+  if (cycle.length) return { valid: false, reason: `dependency cycle detected: ${cycle.join(" -> ")}` };
   return { valid: true, reason: "canonical objectives retained" };
 }
 
@@ -10699,6 +10750,24 @@ function runSelfTest() {
     ],
   });
   assert(liveEvidenceGraph.find((item) => item.id === "runtime-analysis")?.dependsOn.includes("live-control"), "live-state analysis is automatically gated on verified operational evidence");
+  const transitiveOperationGraph = buildGoalWorkGraph({
+    goal: "Correct queue churn and refresh the runner safely",
+    workItems: [
+      { id: "scope", objective: "Inspect current queue source and identify a bounded correction", kind: "scope-discovery", executionClass: "analysis", readOnly: true },
+      { id: "correction", objective: "Implement the bounded correction", kind: "implementation", executionClass: "code", readOnly: false, dependsOn: ["scope"] },
+      { id: "refresh", objective: "Refresh the live runner after the correction", kind: "operation", executionClass: "operation", externallyConsequential: true, readOnly: false, dependsOn: ["correction"] },
+    ],
+  });
+  assert(transitiveOperationGraph.find((item) => item.id === "scope")?.dependsOn.length === 0
+    && findDependencyCycle(transitiveOperationGraph).length === 0,
+  "automatic live-operation dependencies refuse transitive cycles");
+  const cyclicIntegrity = workGraphIntegrity({
+    workItems: [
+      { id: "one", objective: "First", dependsOn: ["two"] },
+      { id: "two", objective: "Second", dependsOn: ["one"] },
+    ],
+  });
+  assert(cyclicIntegrity.valid === false && /dependency cycle detected/.test(cyclicIntegrity.reason), "work-graph integrity reports dependency cycles instead of idle progress");
   const dispatchAlternate = availableAlternateForItem({
     resources: [
       { id: "claude:haiku", dispatchable: true, state: "cooldown" },
