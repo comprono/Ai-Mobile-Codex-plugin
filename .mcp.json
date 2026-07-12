@@ -1,24 +1,24 @@
 {
   "mcpServers": {
     "ai-mobile-devtools": {
+      "cwd": ".",
       "command": "powershell.exe",
       "args": [
+        "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "& \"$env:USERPROFILE\\plugins\\ai-mobile\\scripts\\ai-mobile-devtools-mcp.ps1\""
+        "-File",
+        "./scripts/ai-mobile-devtools-mcp.ps1"
       ],
       "env": {
         "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1"
       }
     },
     "ai-mobile-local": {
-      "command": "powershell.exe",
+      "cwd": ".",
+      "command": "node",
       "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& node \"$env:USERPROFILE\\plugins\\ai-mobile\\scripts\\ai-mobile-local-mcp.js\""
+        "./scripts/ai-mobile-local-mcp.js"
       ]
     }
   }

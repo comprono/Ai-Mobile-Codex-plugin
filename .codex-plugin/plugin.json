@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Capacity-aware Codex control room for parallel native Codex, Claude Code, Antigravity, and optional Cursor workers on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -51,6 +51,7 @@
       "Pre-spawn native worker reservation",
       "Manager-only control room",
       "Goal-aware single-task continuity",
+      "Portable plugin-relative MCP launch",
       "Lean MCP tool surface",
       "Codex usage-window telemetry",
       "Protected Codex manager reserve",
@@ -88,6 +89,7 @@
       "Claude Code role contracts",
       "Structured Claude worker evidence",
       "Visible manager progress snapshots",
+      "Complete current-cycle evidence",
       "Seven-field CEO control-room monitoring",
       "Immutable continuous root objectives",
       "Same-run delivery cycles",

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - 2026-07-13
+
+- Replaced user-specific MCP paths with installation-relative entrypoints that work from the actual plugin directory.
+- Added a clean-copy MCP reliability test that initializes the local server from a temporary path containing spaces.
+- Added Windows CI for the portable MCP smoke test and the complete lifecycle suite.
+- Made manager status include every current-cycle worker result instead of only the newest completed worker.
+- Added an explicit `awaiting-acceptance` cycle display state and prevented already-prefixed cycle ids from becoming `c5-c5-*`.
+
 ## 0.1.9 - 2026-07-12
 
 - Persisted each external worker's read-only role and adaptive lease in durable orchestration state.

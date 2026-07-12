@@ -39,6 +39,8 @@ The call passively discovers installed workers/models, local Codex five-hour and
 
 Manager status is evidence-first and visible. The initial call returns assignments immediately; one `project-manager-status -WaitSeconds 120` call then returns early on a recorded transition or returns one two-minute activity checkpoint. Every status starts with a bounded `CEOControlRoom` brief: `Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`. `Objective` is the immutable root goal; progress distinguishes root state from the current cycle. Continuous cycles close with `cycleVerified`/`cycleVerificationFailed` and add `nextWorkItems` under the same run id, using the exact latest `RunId` and `ActiveCycleId` as fail-closed transition guards. The runtime rejects stale cycle requests and `projectVerified` for continuous management, so a retry or small read-only cycle cannot close the Codex Goal. Compact cycle evidence remains archived when the next cycle starts. Automations are created only when separately requested for timed reports.
 
+When all current-cycle workers finish, status reports `ActiveCycleState: awaiting-acceptance` and includes every current-cycle worker result needed for the decision. Older attempts remain compacted and are available through `read-job` only for diagnosis.
+
 The public PowerShell helper preserves nested work-item arrays at full depth, including `dependsOn`, `expectedFiles`, acceptance criteria, and verification checks. A scope worker succeeds only when every requested writer target has a valid `BOUNDARY <work-item-id>:` line; prose-only scope suggestions fail closed and can use bounded provider failover.
 
 ### Lean tool surface
@@ -96,6 +98,8 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 ```
 
 Restart Codex after installation so the skill and MCP tools are loaded. After that, mention `@ai-mobile` with the project goal; Codex should call `run-project-manager`, execute dependency-ready host/external actions, and avoid asking you to choose models manually.
+
+The MCP manifest resolves its scripts relative to the installed plugin root. It does not require the repository to remain at one developer-specific absolute path.
 
 Requirements:
 
@@ -234,6 +238,7 @@ This is a local bridge. It does not patch Antigravity internals, bypass model qu
 Before publishing:
 
 ```powershell
+node ".\scripts\reliability-e2e.js"
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
 git diff --check

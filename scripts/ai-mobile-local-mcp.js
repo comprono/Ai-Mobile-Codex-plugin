@@ -4920,6 +4920,12 @@ function controlRoomNextMove(snapshot = {}, progress = orchestrationProgress(sna
   return "inspect the recorded blocker and make one evidence-based management decision";
 }
 
+function displayCycleState(snapshot = {}) {
+  const state = String(snapshot.activeCycle?.state || "n/a");
+  if (snapshot.state === "ready-for-codex" && state === "running") return "awaiting-acceptance";
+  return state;
+}
+
 function formatCeoControlRoomBrief(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot), reportWait = {}) {
   const capacity = (snapshot.resources || []).length
     ? ["codex", "claude", "antigravity", "cursor"].map((platform) => platformCapacitySummary(snapshot, progress, platform)).join(" | ")
@@ -4930,7 +4936,7 @@ function formatCeoControlRoomBrief(snapshot = {}, progress = orchestrationProgre
     `Changed: ${controlRoomChangedSummary(snapshot, progress, graphIntegrity, reportWait)}`,
     `Team now: ${controlRoomTeamSummary(snapshot, progress)}`,
     `Capacity: ${capacity}; next review=${snapshot.nextCapacityCheckpointAt || "on refresh"}`,
-    `Progress: root=${isContinuousManagement(snapshot) ? "active" : snapshot.state || "unknown"}; cycle=${snapshot.activeCycle?.number || "n/a"}/${snapshot.activeCycle?.state || "n/a"}; verifiedCycles=${(snapshot.cycles || []).filter((cycle) => cycle.passed === true).length}; items=${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; pending=${progress.pending.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}`,
+    `Progress: root=${isContinuousManagement(snapshot) ? "active" : snapshot.state || "unknown"}; cycle=${snapshot.activeCycle?.number || "n/a"}/${displayCycleState(snapshot)}; verifiedCycles=${(snapshot.cycles || []).filter((cycle) => cycle.passed === true).length}; items=${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; pending=${progress.pending.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}`,
     `Blocker/Decision: ${controlRoomBlockerSummary(snapshot, progress, graphIntegrity, reportWait)}`,
     `Next: ${controlRoomNextMove(snapshot, progress, graphIntegrity)}`,
   ];
@@ -4989,6 +4995,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     orchestrated ? "AiMobileResourceOrchestrationRun:" : "AiMobileTeamRun:",
     orchestrated ? `RunId: ${snapshot.runId || "unknown"}` : null,
     orchestrated && isContinuousManagement(snapshot) ? `ActiveCycleId: ${activeCycleIdFrom(snapshot)}` : null,
+    orchestrated && isContinuousManagement(snapshot) ? `ActiveCycleState: ${displayCycleState(snapshot)}` : null,
     `State: ${snapshot.state}`,
     orchestrated ? `CompletionClaimAllowed: ${completionClaimAllowed}` : null,
     orchestrated ? `RequiredUserStatus: ${reportAddress ? `${reportAddress}, ` : ""}AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
@@ -5097,14 +5104,17 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
 
   const allJobs = snapshot.jobs || [];
   const activeJobStates = new Set(["queued", "running", "unknown"]);
+  const activeCycleItemIds = new Set(snapshot.activeCycle?.itemIds || []);
+  const currentCycleJobs = allJobs.filter((job) => (job.workItemIds || job.assignedTasks || []).some((id) => activeCycleItemIds.has(id)));
   const visibleJobs = graphIntegrity.valid
     ? [...new Map([
         ...allJobs.filter((job) => activeJobStates.has(job.state)),
+        ...currentCycleJobs,
         ...allJobs.filter((job) => ["failed", "cancelled"].includes(job.state)).slice(-2),
         ...allJobs.filter((job) => job.state === "completed").slice(-1),
       ].map((job) => [job.jobId, job])).values()]
       .sort((left, right) => allJobs.indexOf(left) - allJobs.indexOf(right))
-      .slice(-4)
+      .slice(-12)
     : [];
   if (allJobs.length > visibleJobs.length) lines.push(`- ${allJobs.length - visibleJobs.length} older or redundant worker attempts omitted; use read-job only for diagnosis.`);
   for (const job of visibleJobs) {
@@ -5769,11 +5779,12 @@ function applyProjectManagerUpdates(manifest, args = {}) {
 
 function nextCyclePlanningArgs(manifest, args, workspace) {
   const cycleNumber = Math.max(1, Number(manifest.cycleNumber || manifest.activeCycle?.number || 1)) + 1;
+  const cyclePrefix = `c${cycleNumber}-`;
   const idMap = new Map();
   const rawItems = (args.nextWorkItems || []).flat(1).filter((item) => item && typeof item === "object" && !Array.isArray(item));
   for (let index = 0; index < rawItems.length; index += 1) {
     const sourceId = normalizeTaskLane(rawItems[index].id || `work-${index + 1}`) || `work-${index + 1}`;
-    idMap.set(sourceId, `c${cycleNumber}-${sourceId}`);
+    idMap.set(sourceId, sourceId.startsWith(cyclePrefix) ? sourceId : `${cyclePrefix}${sourceId}`);
   }
   const workItems = rawItems.map((item, index) => {
     const sourceId = normalizeTaskLane(item.id || `work-${index + 1}`) || `work-${index + 1}`;
@@ -10005,6 +10016,10 @@ function runSelfTest() {
     ],
   }, pluginRoot);
   assert(renamedCycleArgs.workItems[0].id === "c2-inspect" && renamedCycleArgs.workItems[1].dependsOn[0] === "c2-inspect", "next cycle work receives collision-safe ids while preserving internal dependencies");
+  const alreadyPrefixedCycleArgs = nextCyclePlanningArgs(cycleVerified, {
+    nextWorkItems: [{ id: "c2-inspect", objective: "Inspect once", executionClass: "analysis" }],
+  }, pluginRoot);
+  assert(alreadyPrefixedCycleArgs.workItems[0].id === "c2-inspect", "next cycle ids are not double-prefixed when the caller already used the active cycle prefix");
   assert(dependencyEvidenceForItems({ ...projectCompleted, workspace: pluginRoot }, [{ dependsOn: ["live"] }]).includes("Runner and dashboard health"), "verified Codex dependency evidence is passed to downstream workers");
   assert([1, 2, 3, 4].map(resultBulletLimitForComplexity).join(",") === "5,6,8,10", "result bullet budgets scale with work-item complexity");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
@@ -10365,6 +10380,26 @@ function runSelfTest() {
       && !compactSnapshot.includes("Changed: NONE")
       && compactSnapshot.length < 2100,
     `aggregate readback exposes an idle CEO brief, omits no-op changed markers, and stays compact (${compactSnapshot.length} chars)`);
+    const cycleEvidenceSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      runId: "cycle-evidence-test",
+      completionPolicy: "continuous-management",
+      state: "ready-for-codex",
+      activeCycle: { id: "cycle-5", number: 5, state: "running", itemIds: ["c5-one", "c5-two"] },
+      workItems: [
+        { id: "c5-one", state: "completed", assignment: "codex-host:luna", assignedModel: "luna", dependsOn: [], readOnly: true },
+        { id: "c5-two", state: "completed", assignment: "codex-host:terra", assignedModel: "terra", dependsOn: [], readOnly: true },
+      ],
+      jobs: [
+        { jobId: "host-one", laneId: "first-cycle-result", transport: "host-subagent", state: "completed", assignedTasks: ["c5-one"], workItemIds: ["c5-one"], model: "luna", inlineEvidence: { summary: "FIRST_CURRENT_CYCLE_RESULT" } },
+        { jobId: "host-two", laneId: "second-cycle-result", transport: "host-subagent", state: "completed", assignedTasks: ["c5-two"], workItemIds: ["c5-two"], model: "terra", inlineEvidence: { summary: "SECOND_CURRENT_CYCLE_RESULT" } },
+      ],
+    }, 0);
+    assert(cycleEvidenceSnapshot.includes("ActiveCycleState: awaiting-acceptance")
+      && cycleEvidenceSnapshot.includes("cycle=5/awaiting-acceptance")
+      && cycleEvidenceSnapshot.includes("FIRST_CURRENT_CYCLE_RESULT")
+      && cycleEvidenceSnapshot.includes("SECOND_CURRENT_CYCLE_RESULT"),
+    "ready cycles expose an awaiting-acceptance state and every current-cycle worker result");
     const activeProgressSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       runId: "visible-progress-test",
