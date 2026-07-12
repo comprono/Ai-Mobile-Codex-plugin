@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Capacity-aware Codex control room for parallel native Codex, Claude Code, Antigravity, and optional Cursor workers on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",

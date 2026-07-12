@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9 - 2026-07-12
+
+- Persisted each external worker's read-only role and adaptive lease in durable orchestration state.
+- Added the active bridge step and elapsed/maximum lease to CEO control-room worker reporting so healthy work and stalls are distinguishable without opening provider UIs.
+- Clarified that an explicit continuous-management request creates or resumes one host Goal and must not create duplicate Codex tasks, Goals, runs, or automations.
+
 ## 0.1.8 - 2026-07-12
 
 - Fixed PowerShell `project-manager-status` serialization to preserve nested next-cycle arrays such as `dependsOn`, `expectedFiles`, acceptance criteria, and verification checks instead of silently flattening the dependency graph.

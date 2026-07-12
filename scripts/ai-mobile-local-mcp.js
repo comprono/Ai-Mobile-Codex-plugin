@@ -3673,6 +3673,8 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       state: summary.failed ? "failed" : summary.started ? "running" : "queued",
       failoverOf,
       failoverDepth: failoverOf ? 1 : 0,
+      readOnly,
+      leaseMinutes: maxWorkerMinutes,
     },
   };
 }
@@ -4786,6 +4788,27 @@ function elapsedWorkSeconds(snapshot = {}, item = {}) {
   return Number.isFinite(started) ? Math.max(0, Math.round((Date.now() - started) / 1000)) : null;
 }
 
+function workItemLeaseMinutes(snapshot = {}, item = {}) {
+  const job = jobForWorkItem(snapshot, item);
+  const recorded = Number(job?.leaseMinutes);
+  if (Number.isFinite(recorded) && recorded > 0) return recorded;
+  const resource = (snapshot.resources || []).find((candidate) => candidate.id === item.assignment) || {};
+  const rank = ({ low: 1, medium: 2, high: 3, critical: 4 })[String(item.complexity || "medium").toLowerCase()] || 2;
+  return workerMinutesFor(snapshot, rank, resourcePlatform(resource), item.readOnly === true);
+}
+
+function workItemActivitySummary(snapshot = {}, item = {}) {
+  const job = jobForWorkItem(snapshot, item);
+  const elapsedSeconds = elapsedWorkSeconds(snapshot, item);
+  const leaseMinutes = workItemLeaseMinutes(snapshot, item);
+  const elapsedMinutes = Number.isFinite(elapsedSeconds) ? Math.max(0, Math.ceil(elapsedSeconds / 60)) : null;
+  const lease = Number.isFinite(elapsedMinutes) && Number.isFinite(leaseMinutes)
+    ? `${elapsedMinutes}/${leaseMinutes}m lease`
+    : formatElapsed(elapsedSeconds);
+  const step = truncateText(String(job?.currentStep || "worker-active"), 60);
+  return `${step}; ${lease}`;
+}
+
 function formatElapsed(seconds) {
   if (!Number.isFinite(seconds)) return "elapsed unknown";
   if (seconds < 120) return `${seconds}s`;
@@ -4803,7 +4826,7 @@ function controlRoomTeamSummary(snapshot = {}, progress = orchestrationProgress(
     const resource = resources.get(item.assignment);
     const owner = resource?.team || item.assignment || "unassigned";
     const model = item.assignedModel || resource?.model || "default";
-    return `${item.id}->${owner}/${model} (${item.state}, ${formatElapsed(elapsedWorkSeconds(snapshot, item))})`;
+    return `${item.id}->${owner}/${model} (${item.state}; ${workItemActivitySummary(snapshot, item)})`;
   });
   if (progress.active.length > active.length) active.push(`+${progress.active.length - active.length} more`);
   return `Codex parent=CEO/manager in this existing control-room task; ${supervisor}; workers=${active.join("; ")}`;
@@ -4987,7 +5010,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
         : "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch.")
       : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid
-      ? "RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield until the next Goal continuation."
+      ? "RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield to this task's single active Goal; do not create another Codex task, Goal, run, or automation."
       : null,
     orchestrated && isContinuousManagement(snapshot) && snapshot.state === "ready-for-codex"
       ? (["verified", "failed"].includes(snapshot.activeCycle?.state)
@@ -10350,8 +10373,8 @@ function runSelfTest() {
       codexManagerReservePercent: 15,
       nextCapacityCheckpointAt: "2026-07-12T04:20:00.000Z",
       counts: { total: 1, completed: 0, running: 1, failed: 0 },
-      workItems: [{ id: "active-review", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [] }],
-      jobs: [{ jobId: compactJob.jobId, laneId: "active", state: "running", assignedTasks: ["active-review"], workItemIds: ["active-review"], model: "sonnet", startedAt: new Date(Date.now() - 30000).toISOString(), currentStep: "reviewing" }],
+      workItems: [{ id: "active-review", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [], readOnly: true, complexity: "medium" }],
+      jobs: [{ jobId: compactJob.jobId, laneId: "active", state: "running", assignedTasks: ["active-review"], workItemIds: ["active-review"], model: "sonnet", startedAt: new Date(Date.now() - 30000).toISOString(), currentStep: "reviewing", readOnly: true, leaseMinutes: 12 }],
       resources: [
         { id: "codex:current", platform: "codex", team: "Codex", model: "gpt-test", displayName: "GPT Test", state: "manager-reserve", remainingPercent: 12, resetAt: "2026-07-12T04:00:00.000Z", dispatchable: false },
         { id: "claude:sonnet", platform: "claude", team: "Claude Code CLI", model: "sonnet", displayName: "Claude Sonnet", state: "available", remainingPercent: 80, resetAt: "2026-07-12T05:00:00.000Z", dispatchable: true },
@@ -10362,6 +10385,7 @@ function runSelfTest() {
     assert(activeProgressSnapshot.includes("CEOControlRoom:")
       && activeProgressSnapshot.includes("Team now: Codex parent=CEO/manager")
       && activeProgressSnapshot.includes("active-review->Claude Code CLI/sonnet")
+      && activeProgressSnapshot.includes("reviewing; 1/12m lease")
       && activeProgressSnapshot.includes("Capacity: Codex=manager-reserve")
       && activeProgressSnapshot.includes("Claude=active")
       && activeProgressSnapshot.includes("Antigravity=available")
@@ -10375,6 +10399,7 @@ function runSelfTest() {
       && activeProgressSnapshot.includes("one existing Codex control-room task")
       && activeProgressSnapshot.includes("provider worker sessions/jobs are allowed and expected")
       && activeProgressSnapshot.includes("waitSeconds=120")
+      && activeProgressSnapshot.includes("single active Goal")
       && activeProgressSnapshot.includes("Activity: started=")
       && activeProgressSnapshot.length < 4000,
     `running manager snapshots expose a bounded seven-field CEO brief, root goal, owners, capacity, and one transition-aware wait (${activeProgressSnapshot.length} chars)`);

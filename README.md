@@ -25,6 +25,7 @@ The one-line form is sufficient only when the same task already has an active Go
 - **Manager runway:** 15% of shared Codex capacity is protected by default, and only one native Codex worker runs at once unless the caller explicitly raises the limit. Claude and Antigravity CLI workers retain independent parallelism.
 - **Writer boundaries:** up to two writers may run together when their workspace-relative file or directory boundaries are explicit and pairwise disjoint. Overlapping or unscoped writers remain serialized.
 - **Worker lease:** short read-only leases (5-30 minutes by provider/complexity) and longer bounded writer leases (10-90 minutes); a silent or dead call can fail over without ending the objective.
+- **Visible activity:** manager reports show each active worker's current bridge step and elapsed/maximum lease, so a healthy long-running worker is distinguishable from a stalled one without opening provider UIs or reading large logs.
 - **Utilization:** use every appropriate healthy resource when distinct dependency-ready work exists; never duplicate the same task merely to keep every model busy.
 - **Continuous management:** persistent control rooms use one immutable root objective and numbered delivery cycles. Finishing a review/fix cycle never completes the root Goal.
 
