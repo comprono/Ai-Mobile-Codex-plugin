@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Capacity-aware Codex project manager for native Codex workers, local Antigravity models, Claude Code, and optional Cursor on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -30,8 +30,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AI Mobile",
-    "shortDescription": "Run one Codex chat as a capacity-aware project manager across local AI workers.",
-    "longDescription": "AI Mobile turns one Codex chat into a manager-only project control room for Windows. It discovers native Codex models and supported efforts, local Codex capacity windows, Claude and Antigravity quotas, cooldowns, private user routing preferences, and recent outcomes; packages transcript-free project context; builds a dependency-aware work graph; and coordinates token-bound native Codex host agents with external CLI workers. A protected Codex manager reserve, bounded native concurrency, durable external jobs, and a zero-model-token supervisor preserve continuity across usage resets. Visible progress snapshots report completed, active, failed, and blocked work; missing writer boundaries trigger one bounded read-only scope worker instead of wasting provider failover. The manager chat plans, steers, monitors, asks for decisions, and reports while separate workers perform bounded project work. Objectives continue until verified, genuinely blocked, or explicitly stopped, with one-writer safety, acknowledged host cancellation, rolling capacity checkpoints, and bounded failover.",
+    "shortDescription": "Run one Codex task as a capacity-aware project manager across local AI workers.",
+    "longDescription": "AI Mobile turns one Codex task into a manager-only project control room for Windows. It discovers native Codex models and supported efforts, local Codex capacity windows, Claude and Antigravity quotas, cooldowns, private user routing preferences, and recent outcomes; packages transcript-free project context; builds a dependency-aware work graph; and coordinates token-bound native Codex host agents with external CLI workers. Goal-aware single-task continuity, a protected Codex manager reserve, bounded native concurrency, durable external jobs, and a zero-model-token supervisor preserve work across usage resets without creating recurring chats. Visible progress snapshots report completed, active, failed, and blocked work; missing writer boundaries trigger one bounded read-only scope worker instead of wasting provider failover. The manager plans, steers, monitors, asks for decisions, and reports while separate workers perform bounded project work. Objectives continue until verified, genuinely blocked, or explicitly stopped, with one-writer safety, acknowledged host cancellation, rolling capacity checkpoints, and bounded failover.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -50,6 +50,8 @@
       "Native Codex worker execution",
       "Pre-spawn native worker reservation",
       "Manager-only control room",
+      "Goal-aware single-task continuity",
+      "Lean MCP tool surface",
       "Codex usage-window telemetry",
       "Protected Codex manager reserve",
       "Bounded native Codex concurrency",

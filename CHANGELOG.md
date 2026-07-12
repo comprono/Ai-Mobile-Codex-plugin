@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 - 2026-07-12
+
+- Retried transient Windows `EPERM`, `EACCES`, and `EBUSY` lock-acquisition collisions so overlapping supervisor and manager-status checks do not fail while preserving exclusive state updates.
+- Replaced automatic heartbeat guidance with Goal-first continuity in one project task; capacity checkpoints remain local routing state, and automations now require a separate explicit timed-report request.
+- Reduced the default MCP discovery surface from 49 low-level tools to ten manager/setup tools while retaining every advanced bridge command through the CLI or `AI_MOBILE_EXPOSE_ADVANCED_TOOLS=1`.
+
 ## 0.1.2 - 2026-07-12
 
 - Made the manager return an immediate dispatch receipt, continue through short status polls, and expose mandatory progress fields with concrete active-worker elapsed time instead of ending on a generic `running` sentence.

@@ -28,7 +28,7 @@ Because native Codex workers consume that same shared pool, AI Mobile protects a
 
 ## Visible Progress And Scope Recovery
 
-`run-project-manager` returns initial assignments without a long silent wait. The manager follows with short `project-manager-status` polls and reports completed, active, failed/blocked, next-action, and next-check fields. For an explicitly continuous or 24/7 objective, a same-task heartbeat may perform compact status-only wakeups; the detached supervisor remains responsible for zero-token external progression.
+`run-project-manager` returns initial assignments without a long silent wait. The manager follows with short `project-manager-status` polls and reports completed, active, failed/blocked, next-action, and next-check fields. For a continuous objective, prefer one active Codex Goal in the same project task; the detached supervisor remains responsible for zero-token external progression. Automations are reserved for separately requested wall-clock reports and are never implied by a capacity checkpoint.
 
 An external writer still requires a verified file boundary. If discovery does not return one, the run inserts one bounded read-only scope-discovery item with a machine-readable `BOUNDARY <writer-id>:` contract. This is a scoping correction, not a provider failure: it does not consume the writer's failover allowance, and the original writer resumes only after exact existing files are recorded.
 
@@ -81,7 +81,7 @@ The default horizon is five hours because it captures the immediate work period 
 
 Provider snapshots are cached to avoid repeatedly calling local CLIs or the Antigravity language server. Codex local capacity is read from a recent event with a shorter freshness boundary. `refresh=true` or `-RefreshInventory true` forces a fresh provider probe when a quota change, outage, or reset makes the cache stale in practice.
 
-The nominal capacity checkpoint is 20 minutes, reduced to five minutes when Codex reaches or approaches the manager reserve. External CLI jobs and their dependency state are durable under `.antigravity-bridge`, so they can continue without parent-chat tokens; after a Codex reset, `project-manager-status` resumes the same run.
+The nominal capacity checkpoint is 20 minutes, reduced to five minutes when Codex reaches or approaches the manager reserve. It is an internal refresh deadline, not a recurring Codex task. External CLI jobs and their dependency state are durable under `.antigravity-bridge`, so they can continue without parent-task tokens; after a Codex reset, the same Goal/task calls `project-manager-status` and resumes the same run.
 
 ## Privacy Boundary
 

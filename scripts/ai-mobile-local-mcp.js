@@ -16,6 +16,13 @@ const {
 const { DEFAULT_PROFILE, modelPattern, normalizeProfile, readProfile, writeProfile } = require("./lib/orchestrator-profile");
 
 const pluginRoot = path.resolve(__dirname, "..");
+const pluginVersion = (() => {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8")).version || "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+})();
 const helperScript = path.join(pluginRoot, "scripts", "antigravity.ps1");
 const devToolsPortFile = path.join(process.env.APPDATA || "", "Antigravity", "DevToolsActivePort");
 const resourceCacheFile = path.join(process.env.LOCALAPPDATA || os.tmpdir(), "AI Mobile", "resource-cache.json");
@@ -793,6 +800,24 @@ const tools = [
     },
   },
 ];
+
+const defaultMcpToolNames = new Set([
+  "quick",
+  "setup",
+  "doctor",
+  "codex-usage",
+  "project-manager-plan",
+  "run-project-manager",
+  "project-manager-status",
+  "orchestrator-profile",
+  "resource-inventory",
+  "privacy",
+]);
+
+function exposedMcpTools(exposeAdvanced = process.env.AI_MOBILE_EXPOSE_ADVANCED_TOOLS) {
+  const advanced = /^(1|true|yes|on)$/i.test(String(exposeAdvanced || "").trim());
+  return advanced ? tools : tools.filter((tool) => defaultMcpToolNames.has(tool.name));
+}
 
 let transportMode = null;
 
@@ -4354,7 +4379,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     orchestrated ? `CapacityHorizon: rolling ${snapshot.horizonHours || 5}h forecast; nextReview=${snapshot.nextCapacityCheckpointAt || "on next status refresh"}; reviews=${snapshot.capacityCheckpointCount || 0}` : null,
     orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; claudeBudget=${describeClaudeBudgetPolicy(snapshot)}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
     orchestrated ? `CodexRunway: reserve=${snapshot.codexManagerReservePercent ?? 15}%; nativeConcurrency=${snapshot.maxConcurrentCodexWorkers ?? 1}; checkpointDelay=${capacityCheckpointDelayMinutes(snapshot)}m` : null,
-    orchestrated ? "Continuity: external CLI jobs and the low-RAM supervisor continue from durable state without parent-chat tokens; after a Codex reset, call project-manager-status to resume the same run." : null,
+    orchestrated ? "Continuity: durable external work survives Codex turns and resets; resume this run from the same Goal/task with project-manager-status." : null,
     orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
@@ -4363,9 +4388,9 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     orchestrated && progress.active.length ? `ActiveWork: ${compactWorkItemIds(progress.active)}` : null,
     orchestrated && (progress.failed.length || progress.blocked.length) ? `FailedOrBlockedWork: failed=${compactWorkItemIds(progress.failed)}; blocked=${compactWorkItemIds(progress.blocked)}` : null,
     orchestrated && progress.transitionText !== "none recorded" ? `LatestTransition: ${progress.transitionText}` : null,
-    orchestrated && snapshot.state === "running" ? "NextCheck: 20 seconds in this turn; otherwise the configured heartbeat or next status request." : null,
+    orchestrated && snapshot.state === "running" ? "NextCheck: 20s in this turn; then the same Goal/task or next status request. No automation unless timed reports were explicitly requested." : null,
     orchestrated ? "RequiredProgressReport: show Progress, Completed, Active, Failed/Blocked, Next, and Next check; never answer only \"running\"." : null,
-    orchestrated && snapshot.state === "running" ? "RequiredManagerAction: send the user the concrete assignments as a commentary update, then call project-manager-status with waitSeconds=20 until a meaningful transition is recorded or a two-minute activity heartbeat is due. Do not end immediately after dispatch." : null,
+    orchestrated && snapshot.state === "running" ? "RequiredManagerAction: report assignments, then poll project-manager-status (waitSeconds=20) until a transition or 2-minute activity update. Do not close on dispatch." : null,
     orchestrated ? "WorkGraph:" : null,
     ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary || item.hostEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
     ...(orchestrated && emittableHostDispatchItems.filter((item) => item.state === "host-dispatch-required").length
@@ -5250,6 +5275,10 @@ function sleepSync(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+function transientLockError(error) {
+  return ["EACCES", "EBUSY", "EEXIST", "EPERM"].includes(String(error?.code || "").toUpperCase());
+}
+
 function withFileLock(targetFile, callback, timeoutMs = 10000) {
   const lockFile = `${targetFile}.lock`;
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
@@ -5261,7 +5290,7 @@ function withFileLock(targetFile, callback, timeoutMs = 10000) {
       fs.writeFileSync(handle, `${process.pid}\n${utcStamp()}\n`, "utf8");
       break;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
+      if (!transientLockError(error)) throw error;
       try {
         const ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
         if (ageMs > 60000) fs.rmSync(lockFile, { force: true });
@@ -8176,6 +8205,10 @@ function runSelfTest() {
 
   const split = inferTaskSplit("ignored when explicit lanes exist", "UI, backend, testing");
   assert(split.join(",") === "ui,backend,testing", "explicit task split is preserved");
+  const defaultToolNames = exposedMcpTools("").map((tool) => tool.name);
+  assert(defaultToolNames.length === 10 && defaultToolNames.includes("run-project-manager") && defaultToolNames.includes("project-manager-status") && !defaultToolNames.includes("submit-agy-job"), "default MCP discovery exposes only the lean manager control surface");
+  assert(exposedMcpTools("true").length === tools.length, "advanced MCP discovery remains available through one explicit environment switch");
+  assert(/^\d+\.\d+\.\d+/.test(pluginVersion), "MCP server version follows the plugin manifest");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
@@ -8857,6 +8890,28 @@ function runSelfTest() {
     }
     assert(renameAttempts === 2 && readJsonFile(renameTarget, null)?.retained === true, "atomic JSON writes retry a transient Windows rename collision without weakening replacement atomicity");
 
+    const lockTarget = path.join(workspace, "transient-lock.json");
+    const lockFile = `${lockTarget}.lock`;
+    const originalOpenSync = fs.openSync;
+    let lockAttempts = 0;
+    fs.openSync = (target, flags, ...rest) => {
+      if (path.resolve(String(target)) === path.resolve(lockFile) && flags === "wx") {
+        lockAttempts += 1;
+        if (lockAttempts === 1) {
+          const error = new Error("transient Windows lock collision");
+          error.code = "EPERM";
+          throw error;
+        }
+      }
+      return originalOpenSync(target, flags, ...rest);
+    };
+    try {
+      assert(withFileLock(lockTarget, () => "acquired") === "acquired", "state locks recover from a transient Windows EPERM collision");
+    } finally {
+      fs.openSync = originalOpenSync;
+    }
+    assert(lockAttempts === 2 && !fs.existsSync(lockFile), "retried state locks preserve exclusive acquisition and release the lock file");
+
     const previousLocalAppData = process.env.LOCALAPPDATA;
     const profileRoot = path.join(workspace, "profile");
     try {
@@ -9091,7 +9146,7 @@ async function handleRequest(message) {
     sendResult(id, {
       protocolVersion: params?.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "ai-mobile-local", version: "0.1.0" },
+      serverInfo: { name: "ai-mobile-local", version: pluginVersion },
     });
     return;
   }
@@ -9101,7 +9156,7 @@ async function handleRequest(message) {
   }
 
   if (method === "tools/list") {
-    sendResult(id, { tools });
+    sendResult(id, { tools: exposedMcpTools() });
     return;
   }
 

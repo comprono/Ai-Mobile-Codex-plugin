@@ -2,13 +2,13 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for Windows. It turns one Codex chat into a project control room across native Codex workers, local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers. A workflow can start from the ChatGPT mobile app and continue through Codex on the linked PC.
+AI Mobile is a community Codex MCP plugin for Windows. It turns one Codex task into a project control room across native Codex workers, local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers. A workflow can start from the ChatGPT mobile app and continue through Codex on the linked PC.
 
 The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players. The current Codex chat stays manager-only: it discovers models, effort levels, and quota windows; plans and monitors work; asks for decisions; and reports verified outcomes. Separate native Codex agents and external workers perform bounded project discovery, implementation, and tests.
 
 ## Core Flow
 
-For a nontrivial goal, mention `@ai-mobile` in the project chat. The skill calls the primary project-manager tool, detects whether native Codex workers are callable, and executes the returned dependency stages:
+For a nontrivial goal, use one Codex project task, start a Codex Goal when you want durable repeated continuation, and mention `@ai-mobile`. The skill reuses that Goal and the workspace's active run, detects whether native Codex workers are callable, and executes the returned dependency stages:
 
 ```text
 @ai-mobile orchestrate this project goal using current capacity and CLI-first workers.
@@ -29,9 +29,13 @@ PowerShell fallback:
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<complete outcome>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 0
 ```
 
-The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. Project duration is continuous by default: the objective stays available until verified, genuinely blocked, or explicitly stopped. A lightweight detached Node.js supervisor advances sequential external stages and rolling capacity checkpoints without model-token use. When Codex capacity approaches its reserve, unstarted work is routed to durable external CLI jobs so progress can continue; after the Codex window resets, the manager resumes the same persisted run through `project-manager-status` instead of replaying the project.
+The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. Project duration is continuous by default: the objective stays available until verified, genuinely blocked, or explicitly stopped. A lightweight detached Node.js supervisor advances sequential external stages and rolling capacity checkpoints without model-token use. A capacity checkpoint is internal routing state, not a schedule or a new chat. When Codex capacity approaches its reserve, unstarted work is routed to durable external CLI jobs so progress can continue; after the Codex window resets, the same Goal/task resumes the persisted run through `project-manager-status` instead of replaying the project.
 
-Manager status is evidence-first and visible: every snapshot reports completed, active, failed/blocked, and pending work, plus the latest transition and exact next action. The initial call returns assignments immediately, then the skill uses short status polls rather than ending with a generic `running` message. If discovery omits a safe writer file map, AI Mobile launches one read-only scope worker to return exact machine-readable boundaries and resumes the writer without spending provider failover. Explicit 24/7 requests may use a same-task Codex heartbeat for periodic compact reports; the detached local supervisor, not the heartbeat, advances eligible external work without model tokens.
+Manager status is evidence-first and visible: every snapshot reports completed, active, failed/blocked, and pending work, plus the latest transition and exact next action. The initial call returns assignments immediately, then the skill uses short status polls rather than ending with a generic `running` message. If discovery omits a safe writer file map, AI Mobile launches one read-only scope worker to return exact machine-readable boundaries and resumes the writer without spending provider failover. Continuous work prefers a Codex Goal in the same project task; automations are created only when the user separately asks for timed reports. The detached local supervisor advances eligible external work without model tokens.
+
+### Lean tool surface
+
+AI Mobile exposes ten manager/setup MCP tools by default instead of loading all 49 low-level bridge schemas into every Codex task. Normal work uses `run-project-manager` and `project-manager-status`; setup, capacity, profile, diagnostics, and privacy remain available. All low-level commands still work through `scripts/antigravity.ps1`. Set `AI_MOBILE_EXPOSE_ADVANCED_TOOLS=1` before starting Codex only when debugging requires the full MCP surface.
 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 
