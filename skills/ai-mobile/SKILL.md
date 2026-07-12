@@ -57,8 +57,8 @@ Examples requiring immediate interruption include: "do not access email", "stop"
 - Objective lifetime: continuous until verified, genuinely blocked, or explicitly stopped.
 - Capacity horizon: rolling five-hour forecast for model selection, never a countdown.
 - Capacity checkpoint: default 20 minutes, accelerating to five minutes near the protected Codex manager reserve, or on the next status call; refresh resources without interrupting active workers.
-- Manager runway: reserve 15% of shared Codex capacity and default to one active native Codex worker; external CLI providers retain independent parallelism.
-- Writer concurrency: allow up to two simultaneous writers only when every pair has explicit, disjoint workspace-relative file or directory boundaries. Overlapping or unscoped writers remain serialized.
+- Manager runway: reserve 15% of shared Codex capacity and allow up to three Codex workers while measured headroom is healthy, scaling down to two, one, then zero as capacity approaches the reserve; external CLI providers retain independent parallelism.
+- Writer concurrency: allow up to three simultaneous writers only when every pair has explicit, disjoint workspace-relative file or directory boundaries. Peer-owned changes are recorded separately from each worker's attributable files; overlapping, unscoped, or unexplained changes still fail closed.
 - Worker lease: role-aware provider-call watchdog (5-30 minutes for read-only work, 10-90 minutes for writers), not a project deadline.
 - Utilization: keep appropriate healthy resources working on distinct dependency-ready items; never duplicate work just to use every model.
 - Persistent control room: set `completionPolicy=continuous-management`. Worker completion closes only the current numbered cycle; the root objective and Codex Goal remain active.

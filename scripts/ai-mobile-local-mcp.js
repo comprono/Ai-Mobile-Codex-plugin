@@ -7522,7 +7522,32 @@ function claudeObservedModelMatches(requested, observed) {
   return family ? observedText.includes(family) : observedText.includes(requestedText);
 }
 
-function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
+function concurrentPeerBoundariesFromManifest(manifest = {}, jobId = "", args = {}) {
+  const activeCycleIds = new Set(manifest.activeCycle?.itemIds || []);
+  const workItems = (manifest.workItems || []).filter((item) => !activeCycleIds.size || activeCycleIds.has(item.id));
+  const byId = new Map(workItems.map((item) => [item.id, item]));
+  const currentJob = (manifest.jobs || []).find((job) => job.jobId === jobId);
+  const ownIds = new Set(currentJob?.workItemIds || currentJob?.assignedTasks || []);
+  const ownWriters = [...ownIds].map((id) => byId.get(id)).filter((item) => item && item.readOnly === false);
+  const stageMemo = new Map();
+  const peers = workItems.filter((item) => {
+    if (item.readOnly !== false || ownIds.has(item.id)) return false;
+    if (!ownWriters.length) {
+      return (args.readOnly === true || String(args.mode || "").toLowerCase() === "review")
+        && ["running", "host-running", "completed", "failed"].includes(item.state);
+    }
+    return ownWriters.every((own) => topologicalStage(own, byId, stageMemo) === topologicalStage(item, byId, stageMemo)
+      && writerItemsAreDisjoint(own, item));
+  });
+  return [...new Set(peers.flatMap((item) => item.expectedFiles || []).filter(Boolean))];
+}
+
+function concurrentPeerBoundaries(workspace, jobId, args = {}) {
+  const manifest = readJsonFile(lastTeamRunJsonPath(workspace), null);
+  return manifest ? concurrentPeerBoundariesFromManifest(manifest, jobId, args) : [];
+}
+
+function finalizeWorkerGitArtifacts(workspace, jobDir, mode, args = {}) {
   const current = collectGitState(workspace);
   const baseline = readJsonFile(path.join(jobDir, "git-baseline.json"), null);
   const currentHash = crypto.createHash("sha256").update(current.diff).digest("hex");
@@ -7531,16 +7556,26 @@ function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
   const allPaths = [...new Set([...baselinePaths, ...currentPaths])];
   const baselineFingerprints = baseline?.pathFingerprints || {};
   const currentFingerprints = collectPathFingerprints(workspace, allPaths);
-  const changedDuringRun = allPaths.filter((file) => {
+  const allChangedDuringRun = allPaths.filter((file) => {
     if (Object.prototype.hasOwnProperty.call(baselineFingerprints, file)) {
       return fingerprintChanged(baselineFingerprints[file], currentFingerprints[file]);
     }
     return !baselinePaths.has(file) && currentPaths.has(file);
   });
+  const jobId = path.basename(jobDir);
+  const peerBoundaries = concurrentPeerBoundaries(workspace, jobId, { ...args, mode });
+  const concurrentPeerChanges = allChangedDuringRun.filter((file) => peerBoundaries.some((boundary) => pathMatchesBoundary(file, boundary)));
+  const changedDuringRun = allChangedDuringRun.filter((file) => !concurrentPeerChanges.includes(file));
   const reviewMutationDetected = String(mode || "").toLowerCase() === "review"
     && current.available
     && baseline?.available
-    && (changedDuringRun.length > 0 || baseline.status !== current.status || baseline.diffHash !== currentHash);
+    && (changedDuringRun.length > 0 || (!concurrentPeerChanges.length && (baseline.status !== current.status || baseline.diffHash !== currentHash)));
+
+  fs.writeFileSync(
+    path.join(jobDir, "concurrent-peer-changes.txt"),
+    concurrentPeerChanges.length ? `${concurrentPeerChanges.join("\n")}\n` : "NONE\n",
+    "utf8",
+  );
 
   if (String(mode || "").toLowerCase() === "review") {
     fs.writeFileSync(
@@ -7549,11 +7584,11 @@ function finalizeWorkerGitArtifacts(workspace, jobDir, mode) {
       "utf8",
     );
     fs.writeFileSync(path.join(jobDir, "diff.patch"), "", "utf8");
-    return { reviewMutationDetected, reviewWorkspaceChanged: reviewMutationDetected, changedDuringRun };
+    return { reviewMutationDetected, reviewWorkspaceChanged: reviewMutationDetected, changedDuringRun, allChangedDuringRun, concurrentPeerChanges };
   }
   const preExistingDirty = changedDuringRun.filter((file) => baselinePaths.has(file));
   writeWorkerGitArtifacts(workspace, jobDir, changedDuringRun, preExistingDirty);
-  return { reviewMutationDetected, changedDuringRun, preExistingDirty };
+  return { reviewMutationDetected, changedDuringRun, allChangedDuringRun, concurrentPeerChanges, preExistingDirty };
 }
 
 async function runWorkerFailClosed(worker, args, runner) {
@@ -8397,7 +8432,7 @@ function runAgyJobWorker(args = {}) {
   const compactResultText = compactResultArtifact(resultPath, args, 8);
 
   writeAuthoritativeExecutionSummary(jobDir, "antigravity-cli", result, stderr);
-  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode, args);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error);
   const resultText = compactResultText || summarizeFile(resultPath, resultCharacterLimit(args, 8));
@@ -8631,7 +8666,7 @@ function runCodexJobWorker(args = {}) {
   );
   const compactCodexResult = compactResultArtifact(resultPath, args, 8);
   writeAuthoritativeExecutionSummary(jobDir, "codex-cli", result, stderr);
-  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode, args);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error) || parsed.turnFailed || parsed.parsedEvents === 0;
   const resultText = summarizeFile(resultPath, 8000);
@@ -9105,7 +9140,7 @@ function runClaudeJobWorker(args = {}) {
   const compactClaudeResult = compactResultArtifact(resultPath, args, 8);
 
   writeAuthoritativeExecutionSummary(jobDir, "claude-code", result, stderr);
-  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, mode);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, mode, args);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error) || parsedOutput.isError;
   const modelMismatch = !executionFailed && !claudeObservedModelMatches(dispatchModel, parsedOutput.observedModel);
@@ -9358,7 +9393,7 @@ function runCursorJobWorker(args = {}) {
   const compactCursorResult = compactResultArtifact(resultPath, args, 8);
 
   writeAuthoritativeExecutionSummary(jobDir, "cursor-agent", result, stderr);
-  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode);
+  const gitOutcome = finalizeWorkerGitArtifacts(workspace, jobDir, args.mode, args);
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error);
   const resultText = summarizeFile(resultPath, 8000);
@@ -11212,6 +11247,17 @@ function runSelfTest() {
   assert(JSON.stringify(pathsFromGitStatus(" M scripts/ai-mobile-local-mcp.js\r\n?? notes/new.md\n")) === JSON.stringify(["scripts/ai-mobile-local-mcp.js", "notes/new.md"]), "Git porcelain parsing preserves the first filename character after trimmed status output");
   assert(validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["scripts/worker.js"] }).ok, "writer changes inside an assigned file boundary pass");
   assert(!validateWorkerFileBoundary({ expectedFiles: ["scripts"] }, { changedDuringRun: ["README.md"] }).ok, "writer changes outside an assigned file boundary fail closed");
+  const concurrentBoundaryManifest = {
+    activeCycle: { itemIds: ["writer-a", "writer-b", "integration"] },
+    workItems: [
+      { id: "writer-a", readOnly: false, state: "running", dependsOn: [], expectedFiles: ["src/a"] },
+      { id: "writer-b", readOnly: false, state: "host-running", dependsOn: [], expectedFiles: ["src/b"] },
+      { id: "integration", readOnly: false, state: "pending", dependsOn: ["writer-a", "writer-b"], expectedFiles: ["src/a", "src/b"] },
+    ],
+    jobs: [{ jobId: "job-a", workItemIds: ["writer-a"] }, { jobId: "job-b", workItemIds: ["writer-b"] }],
+  };
+  assert(JSON.stringify(concurrentPeerBoundariesFromManifest(concurrentBoundaryManifest, "job-a", { readOnly: false })) === JSON.stringify(["src/b"]), "a writer ignores only same-stage explicitly disjoint peer boundaries, not downstream integration paths");
+  assert(JSON.stringify(concurrentPeerBoundariesFromManifest(concurrentBoundaryManifest, "review-job", { readOnly: true })) === JSON.stringify(["src/a", "src/b"]), "a read-only worker ignores workspace mutations owned by active bounded writers");
   assert(validateWriterCompletion({ readOnly: true, mode: "review" }, { changedDuringRun: [] }, "- Current blocker was identified.").ok, "read-only workers may complete with useful evidence and no file changes");
   assert(validateWriterCompletion({ mode: "fast" }, { changedDuringRun: [] }, "- Direct legacy analysis completed.").ok, "direct provider jobs without an explicit orchestration role preserve compatibility");
   assert(!validateWriterCompletion({ readOnly: false, mode: "patch" }, { changedDuringRun: [] }, "- Outcome: BLOCKED, no code changed.").ok, "a blocked writer with no code changes is not accepted as completed implementation");

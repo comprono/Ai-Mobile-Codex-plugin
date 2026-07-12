@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7 - 2026-07-13
+
+- Prevented concurrent disjoint writers from being failed for peer-owned files by excluding only same-cycle, same-stage, explicitly disjoint peer boundaries from each worker's attributable change set.
+- Preserved fail-closed behavior for changes outside both the worker boundary and every verified concurrent peer boundary, and recorded peer changes separately for diagnosis.
+- Aligned the operating-frame documentation with the headroom-scaled three-worker and three-writer policy introduced in 0.2.6.
+
 ## 0.2.6 - 2026-07-13
 
 - Changed the Codex reserve from a conservative one-worker default into a 15% floor with up to three concurrent Codex workers, scaled down only as measured headroom approaches the reserve.
