@@ -26,6 +26,12 @@ Codex capacity windows currently apply to the shared Codex agent pool unless the
 
 Because native Codex workers consume that same shared pool, AI Mobile protects a configurable manager reserve (15% by default), penalizes native dispatch as headroom shrinks, and stops new native workers at the reserve. Default native concurrency is one. Claude and Antigravity CLI workers use independent capacity and can continue in parallel through the durable supervisor.
 
+## Visible Progress And Scope Recovery
+
+`run-project-manager` returns initial assignments without a long silent wait. The manager follows with short `project-manager-status` polls and reports completed, active, failed/blocked, next-action, and next-check fields. For an explicitly continuous or 24/7 objective, a same-task heartbeat may perform compact status-only wakeups; the detached supervisor remains responsible for zero-token external progression.
+
+An external writer still requires a verified file boundary. If discovery does not return one, the run inserts one bounded read-only scope-discovery item with a machine-readable `BOUNDARY <writer-id>:` contract. This is a scoping correction, not a provider failure: it does not consume the writer's failover allowance, and the original writer resumes only after exact existing files are recorded.
+
 ## Claude Quota Windows
 
 Claude `/usage` can expose several overlapping windows:

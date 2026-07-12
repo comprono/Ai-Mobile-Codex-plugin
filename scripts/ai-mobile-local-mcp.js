@@ -284,7 +284,7 @@ const tools = [
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns a dry plan.", default: true },
-        waitSeconds: { type: "number", description: "Short bounded wait before returning resumable status.", default: 5 },
+        waitSeconds: { type: "number", description: "Initial dispatch receipt wait. Keep 0 so the manager can report assignments immediately, then poll project-manager-status in short visible intervals.", default: 0 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes before assignment.", default: false },
         includePlan: { type: "boolean", description: "Include detailed decisions. Keep false for token-efficient operation.", default: false },
       },
@@ -3168,11 +3168,20 @@ function pathIsInside(root, candidate) {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-function inferFileBoundaryFromEvidence(workspace, evidence) {
+function escapedRegexText(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function inferFileBoundaryFromEvidence(workspace, evidence, workItemId = "") {
   const extensions = "py|js|jsx|ts|tsx|json|md|html|css|scss|ps1|sh|yml|yaml|toml|sql|go|rs|java|cs|php|rb";
+  const source = String(evidence || "");
+  const marker = workItemId
+    ? source.match(new RegExp(`(?:FILE_)?BOUNDARY\\s+${escapedRegexText(workItemId)}\\s*:\\s*([^\\r\\n]+)`, "i"))
+    : null;
+  const searchable = marker ? marker[1] : source;
   const matches = [];
   const regex = new RegExp("`([^`\\r\\n]+\\.(?:" + extensions + "))`", "gi");
-  for (const match of String(evidence || "").matchAll(regex)) matches.push(match[1]);
+  for (const match of searchable.matchAll(regex)) matches.push(match[1]);
   const result = [];
   for (const candidate of matches) {
     const cleaned = candidate.trim().replace(/^[./\\]+/, "").replace(/\\/g, path.sep).replace(/\//g, path.sep);
@@ -3194,6 +3203,93 @@ function downstreamWriterNeedsBoundary(manifest, completedItems) {
   return (manifest.workItems || []).some((item) => !item.readOnly
     && !(item.expectedFiles || []).length
     && (item.dependsOn || []).some((id) => dependencyIds.has(id)));
+}
+
+function boundaryScopeRecoveryId(item) {
+  const base = normalizeTaskLane(item?.id || "writer").slice(0, 42) || "writer";
+  const digest = crypto.createHash("sha256").update(String(item?.id || "writer")).digest("hex").slice(0, 8);
+  return normalizeTaskLane(`scope-${base}-${digest}`);
+}
+
+function isBoundaryScopeBlocker(value) {
+  return /writer dispatch refused because no verified file boundary/i.test(String(value || ""));
+}
+
+function scopeRecoveryResource(manifest, item) {
+  const localProfile = process.env.AI_MOBILE_SELF_TEST === "1" ? neutralLocalRoutingProfile() : readProfile();
+  const routingArgs = { ...capacityArgsFromManifest(manifest), localProfile };
+  return rankResourcesForWorkItem(manifest.resources || [], item, routingArgs, manifest.primaryWriterId || "")
+    .map((row) => row.candidate)
+    .find((candidate) => candidate.platform !== "codex"
+      && candidate.dispatchMode !== "host-subagent"
+      && candidate.dispatchable
+      && candidate.state === "available") || null;
+}
+
+function addBoundaryScopeRecovery(manifest, writerItems) {
+  let next = manifest;
+  const additions = [];
+  const handledWorkItemIds = [];
+  for (const writer of writerItems.filter((item) => item && !item.readOnly && !(item.expectedFiles || []).length)) {
+    const scopeId = boundaryScopeRecoveryId(writer);
+    const existing = (next.workItems || []).find((item) => item.id === scopeId);
+    if (existing && !["completed", "failed", "blocked"].includes(existing.state)) {
+      handledWorkItemIds.push(writer.id);
+      continue;
+    }
+    if (Number(writer.scopeRecoveryCount || 0) >= 1 || existing) continue;
+    const scopeItemBase = normalizeWorkItem({
+      id: scopeId,
+      objective: `Identify the exact existing workspace-relative files that writer ${writer.id} may edit for: ${writer.objective}. Inspect only enough source structure and dependency evidence to produce a disjoint, minimal ownership boundary. Return exactly one line beginning BOUNDARY ${writer.id}: followed only by backtick-wrapped file paths.`,
+      kind: "scope-discovery",
+      complexity: "low",
+      readOnly: true,
+      dependsOn: writer.dependsOn || [],
+      acceptanceCriteria: [`A machine-readable BOUNDARY ${writer.id}: line names only exact existing files`],
+      verification: ["No directories, globs, shorthand, or project edits"],
+      priority: Math.min(100, Number(writer.priority || 50) + 1),
+    }, (next.workItems || []).length + additions.length, "low");
+    const resource = scopeRecoveryResource(next, scopeItemBase);
+    if (!resource) continue;
+    const ranked = rankResourcesForWorkItem(next.resources || [], scopeItemBase, {
+      ...capacityArgsFromManifest(next),
+      localProfile: process.env.AI_MOBILE_SELF_TEST === "1" ? neutralLocalRoutingProfile() : readProfile(),
+    }, next.primaryWriterId || "");
+    const scopeItem = {
+      ...scopeItemBase,
+      scopeFor: writer.id,
+      assignment: resource.id,
+      assignedModel: resource.model,
+      alternates: selectAlternateResourceIds(ranked, resource, 3),
+      decisionReason: `Automatic read-only scope recovery for writer ${writer.id}; provider failover was not consumed.`,
+    };
+    additions.push(scopeItem);
+    handledWorkItemIds.push(writer.id);
+    next = {
+      ...next,
+      workItems: (next.workItems || []).map((item) => item.id === writer.id
+        ? {
+            ...item,
+            state: "pending",
+            dependsOn: [...new Set([...(item.dependsOn || []), scopeId])],
+            scopeRecoveryCount: Number(item.scopeRecoveryCount || 0) + 1,
+            failoverCount: Math.max(0, Number(item.failoverCount || 0) - (isBoundaryScopeBlocker(item.blocker) ? 1 : 0)),
+            failureCategory: "",
+            blocker: "",
+            activeJobId: "",
+          }
+        : item),
+    };
+    next = appendOrchestrationDecision(next, {
+      type: "writer-scope-recovery",
+      workItemId: writer.id,
+      scopeWorkItemId: scopeId,
+      resourceId: resource.id,
+      reason: "missing writer boundary triggered bounded read-only discovery instead of provider failover",
+    });
+  }
+  if (additions.length) next = { ...next, workItems: [...(next.workItems || []), ...additions] };
+  return { manifest: next, added: additions, handledWorkItemIds };
 }
 
 function resultBulletLimitForComplexity(complexityRank) {
@@ -3225,6 +3321,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const projectAcceptance = boundedTextList(manifest.acceptanceCriteria, 12, 400);
   const projectVerification = boundedTextList(manifest.verification, 12, 400);
   const boundaryEvidenceNeeded = readOnly && downstreamWriterNeedsBoundary(manifest, items);
+  const scopeTargets = items.map((item) => item.scopeFor).filter(Boolean);
   const goal = [
     manifest.goal,
     "",
@@ -3252,10 +3349,14 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
     `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
     readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
     boundaryEvidenceNeeded ? "Your result must name each proposed writer file as an exact workspace-relative path wrapped in backticks; these paths become the enforced write boundary." : null,
+    scopeTargets.length ? `Return exactly one line per target using this format: ${scopeTargets.map((target) => `BOUNDARY ${target}: \`path/to/existing-file.ext\`, \`path/to/another-file.ext\``).join(" | ")}.` : null,
+    scopeTargets.length ? "Do not return directories, globs, '+' shorthand, or prose in place of exact file paths." : null,
     `State assumptions and blockers explicitly. Stop immediately if the task conflicts with an active constraint. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria, verified dependency evidence, and verification checks.`,
   ].filter(Boolean).join(" ");
   let expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
-  if (!readOnly && !expectedFiles.length) expectedFiles = inferFileBoundaryFromEvidence(workspace, dependencyEvidence);
+  if (!readOnly && !expectedFiles.length) {
+    expectedFiles = [...new Set(items.flatMap((item) => inferFileBoundaryFromEvidence(workspace, dependencyEvidence, item.id)))];
+  }
   if (!readOnly && !expectedFiles.length) {
     return {
       launched: false,
@@ -3867,6 +3968,15 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     }
     return resource;
   });
+  const existingBoundaryFailures = (manifest.workItems || [])
+    .filter((item) => item.state === "failed" && isBoundaryScopeBlocker(item.blocker));
+  if (existingBoundaryFailures.length && manifest.managerOnly === true) {
+    const recovery = addBoundaryScopeRecovery(manifest, existingBoundaryFailures);
+    if (recovery.handledWorkItemIds.length) {
+      manifest = recovery.manifest;
+      changed = true;
+    }
+  }
   const newlyFailedJobs = (manifest.jobs || [])
     .filter((job) => ["failed", "cancelled"].includes(job.state) && failoverAllowed(job.failureCategory) && !job.cooldownApplied && job.resourceId);
   if (newlyFailedJobs.length) {
@@ -4029,6 +4139,14 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
     const failedItemJob = [...(manifest.jobs || [])].reverse().find((job) => items.some((item) => (job.workItemIds || []).includes(item.id)) && job.state === "failed");
     const launch = launchGroup(manifest, resource, items, failedItemJob?.jobId || "");
     if (!launch.launched) {
+      if (manifest.managerOnly === true && isBoundaryScopeBlocker(launch.blocker)) {
+        const recovery = addBoundaryScopeRecovery(manifest, items);
+        if (recovery.handledWorkItemIds.length) {
+          manifest = recovery.manifest;
+          changed = true;
+          continue;
+        }
+      }
       if (launch.codexTakeover) {
         manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
           ? {
@@ -4052,7 +4170,7 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
         continue;
       }
       manifest.workItems = manifest.workItems.map((item) => items.some((candidate) => candidate.id === item.id)
-        ? { ...item, state: "failed", blocker: launch.blocker || "Worker launch failed.", failureCategory: "worker-failure" }
+        ? { ...item, state: "failed", blocker: launch.blocker || "Worker launch failed.", failureCategory: isBoundaryScopeBlocker(launch.blocker) ? "scope-boundary" : "worker-failure" }
         : item);
       changed = true;
       continue;
@@ -4135,6 +4253,9 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null, lockHeld = f
         : "",
       observedModel: String(telemetry?.observedModel || repair.status.observedModel || job.observedModel || ""),
       workerPid: repair.status.workerPid || job.workerPid || null,
+      createdAt: repair.status.createdAt || job.createdAt || "",
+      startedAt: repair.status.startedAt || job.startedAt || "",
+      completedAt: repair.status.completedAt || job.completedAt || "",
       jobUpdatedAt: repair.status.updatedAt || "",
     };
   });
@@ -4169,8 +4290,45 @@ async function waitForTeamRun(workspace, waitSeconds = 0, suppliedManifest = nul
   return snapshot;
 }
 
+function compactWorkItemIds(items, limit = 4) {
+  const ids = (items || []).map((item) => item.id).filter(Boolean);
+  return ids.length > limit ? `${ids.slice(0, limit).join(",")} (+${ids.length - limit})` : (ids.join(",") || "none");
+}
+
+function orchestrationProgress(snapshot) {
+  const workItems = snapshot.workItems || [];
+  const activeStates = new Set(["running", "codex", "host-dispatch-required", "host-reserved", "host-running", "host-cancel-required"]);
+  const completed = workItems.filter((item) => item.state === "completed");
+  const active = workItems.filter((item) => activeStates.has(item.state));
+  const failed = workItems.filter((item) => item.state === "failed");
+  const blocked = workItems.filter((item) => item.state === "blocked");
+  const pending = workItems.filter((item) => ["pending", "codex-pending", "host-pending"].includes(item.state));
+  const transition = [
+    ...(snapshot.decisions || []).filter((entry) => entry?.at),
+    ...(snapshot.jobs || []).map((job) => ({
+      at: job.completedAt || job.jobUpdatedAt || job.startedAt || job.createdAt || "",
+      type: `worker-${job.state || "unknown"}`,
+      workItemIds: job.workItemIds || job.assignedTasks || [],
+      resourceId: job.resourceId || job.laneId || "",
+    })).filter((entry) => entry.at),
+  ].sort((a, b) => Date.parse(String(b.at || "")) - Date.parse(String(a.at || "")))[0] || null;
+  const transitionItem = transition?.workItemId || (transition?.workItemIds || []).join(",") || transition?.scopeWorkItemId || "none";
+  return {
+    total: workItems.length,
+    completed,
+    active,
+    failed,
+    blocked,
+    pending,
+    transitionText: transition
+      ? `${transition.at}; type=${transition.type || "unknown"}; item=${transitionItem}; resource=${transition.resourceId || transition.to || "none"}`
+      : "none recorded",
+  };
+}
+
 function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
   const orchestrated = Number(snapshot.version || 1) >= 2;
+  const progress = orchestrationProgress(snapshot);
   // Native Codex workers share the manager's five-hour pool. Bound concurrent host actions even when
   // several read-only items are ready; external CLI workers keep their independent parallelism.
   const maxConcurrentHostWorkers = Math.max(1, Math.min(3, Number(snapshot.maxConcurrentCodexWorkers || 1)));
@@ -4200,6 +4358,14 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
     `WaitedSeconds: ${waitedSeconds}`,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
+    orchestrated ? `WorkProgress: ${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}; pending=${progress.pending.length}` : null,
+    orchestrated && progress.completed.length ? `CompletedWork: ${compactWorkItemIds(progress.completed)}` : null,
+    orchestrated && progress.active.length ? `ActiveWork: ${compactWorkItemIds(progress.active)}` : null,
+    orchestrated && (progress.failed.length || progress.blocked.length) ? `FailedOrBlockedWork: failed=${compactWorkItemIds(progress.failed)}; blocked=${compactWorkItemIds(progress.blocked)}` : null,
+    orchestrated && progress.transitionText !== "none recorded" ? `LatestTransition: ${progress.transitionText}` : null,
+    orchestrated && snapshot.state === "running" ? "NextCheck: 20 seconds in this turn; otherwise the configured heartbeat or next status request." : null,
+    orchestrated ? "RequiredProgressReport: show Progress, Completed, Active, Failed/Blocked, Next, and Next check; never answer only \"running\"." : null,
+    orchestrated && snapshot.state === "running" ? "RequiredManagerAction: send the user the concrete assignments as a commentary update, then call project-manager-status with waitSeconds=20 until a meaningful transition is recorded or a two-minute activity heartbeat is due. Do not end immediately after dispatch." : null,
     orchestrated ? "WorkGraph:" : null,
     ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary || item.hostEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
     ...(orchestrated && emittableHostDispatchItems.filter((item) => item.state === "host-dispatch-required").length
@@ -4300,6 +4466,11 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     if (job.blocker && !supersededByCodex) lines.push(`   Blocker: ${truncateText(job.blocker, 300)}`);
     if (job.warning && !supersededBySuccess && !supersededByCodex) lines.push(`   Warning: ${truncateText(job.warning, 300)}`);
     if (telemetry) lines.push(`   Telemetry: model=${telemetry.observedModel || "unknown"}; durationSec=${Number.isFinite(Number(telemetry.durationMs)) ? Math.round(Number(telemetry.durationMs) / 1000) : "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; category=${telemetry.failureCategory || "none"}`);
+    if (["queued", "running", "unknown"].includes(job.state)) {
+      const started = Date.parse(String(job.startedAt || job.createdAt || ""));
+      const elapsed = Number.isFinite(started) ? Math.max(0, Math.round((Date.now() - started) / 1000)) : "unknown";
+      lines.push(`   Activity: started=${job.startedAt || job.createdAt || "unknown"}; elapsedSec=${elapsed}; step=${job.currentStep || "worker-active"}`);
+    }
     if (supersededBySuccess) lines.push("   Recovered: a later failover completed this work item; use read-job only if the failed attempt needs diagnosis.");
     if (supersededByCodex) lines.push("   Recovered: the current Codex session explicitly took over and completed this work item with recorded evidence.");
     if (result && !supersededBySuccess && !supersededByCodex) lines.push(`   Result: ${result.replace(/\s*\n\s*/g, " ")}`);
@@ -4474,7 +4645,7 @@ async function runProjectManager(args = {}) {
   let effectiveArgs = normalizeManagerOnly({
     ...args,
     workspace,
-    waitSeconds: args.waitSeconds === undefined ? 5 : args.waitSeconds,
+    waitSeconds: args.waitSeconds === undefined ? 0 : args.waitSeconds,
     includePlan: args.includePlan === true,
   });
   const prior = readJsonFile(lastTeamRunJsonPath(workspace), null);
@@ -8346,6 +8517,47 @@ function runSelfTest() {
   assert(capacityCheckpointDelayMinutes({ ...normalizedRunControls({}), resources: reserveDecision.candidates }) === 5, "capacity reviews accelerate to five minutes when the Codex manager reserve is active");
   const runwayText = projectManagerRunwayLines(normalizedRunControls({ codexManagerReservePercent: 18, maxConcurrentCodexWorkers: 1 }), reserveContext, reserveDecision.candidates).join("\n");
   assert(runwayText.includes("CodexManagerReserve: 18%") && runwayText.includes("NativeCodexConcurrency: 1") && runwayText.includes("QuotaResetContinuity: durable run state persists"), "project-manager plans expose manager reserve, native concurrency, and reset continuity");
+  const boundaryEvidence = "BOUNDARY writer-a: `scripts/ai-mobile-local-mcp.js`\nBOUNDARY writer-b: `README.md`";
+  assert(inferFileBoundaryFromEvidence(pluginRoot, boundaryEvidence, "writer-a").join(",") === path.join("scripts", "ai-mobile-local-mcp.js"), "writer boundary parsing uses only the target's machine-readable boundary line");
+  const scopeCandidate = {
+    id: "antigravity:gemini-3.5-flash-medium",
+    platform: "antigravity",
+    team: "Antigravity CLI",
+    model: "gemini-3.5-flash-medium",
+    displayName: "Gemini 3.5 Flash Medium",
+    dispatchable: true,
+    state: "available",
+    evidence: "self-test",
+    remainingPercent: 80,
+    resetAt: "",
+    capabilities: ["general-reasoning", "discovery", "review", "docs", "fast-analysis"],
+    quality: 74,
+    speed: 90,
+    cost: 95,
+    premium: false,
+  };
+  const boundaryWriter = {
+    ...normalizeWorkItem({ id: "writer-needing-scope", objective: "Implement a bounded change", kind: "implementation", complexity: "high", readOnly: false, dependsOn: ["discovery"] }, 1, "high"),
+    state: "failed",
+    assignment: "claude:sonnet",
+    assignedModel: "sonnet",
+    failoverCount: 1,
+    blocker: "External writer dispatch refused because no verified file boundary was available. Manager-only mode will not inspect or implement the item; rescope it through one bounded discovery worker.",
+    failureCategory: "worker-failure",
+  };
+  const scopeRecovery = addBoundaryScopeRecovery({
+    version: 2,
+    runId: "scope-recovery-test",
+    workspace: pluginRoot,
+    goal: "Test automatic writer scope recovery",
+    managerOnly: true,
+    resources: [scopeCandidate],
+    workItems: [{ ...normalizeWorkItem({ id: "discovery", objective: "Discover scope", kind: "discovery", readOnly: true }, 0, "low"), state: "completed" }, boundaryWriter],
+    decisions: [],
+  }, [boundaryWriter]);
+  const recoveredWriter = scopeRecovery.manifest.workItems.find((item) => item.id === boundaryWriter.id);
+  const scopeWorker = scopeRecovery.manifest.workItems.find((item) => item.scopeFor === boundaryWriter.id);
+  assert(recoveredWriter?.state === "pending" && recoveredWriter.failoverCount === 0 && scopeWorker?.readOnly === true && scopeWorker.assignment === scopeCandidate.id, "missing writer boundaries launch one read-only scope worker without consuming provider failover");
   const filteredClaude = buildResourceCandidates({ localProfile: privateRoutingProfile }, fakeContext).filter((candidate) => candidate.platform === "claude");
   assert(!filteredClaude.some((candidate) => /haiku/i.test(candidate.id)) && filteredClaude.some((candidate) => /sonnet/i.test(candidate.id)), "private Claude policy excludes Haiku while retaining Sonnet");
   const terraResource = nativeCodexDecision.candidates.find((candidate) => candidate.id === "codex-host:gpt-5.6-terra");
@@ -8724,7 +8936,17 @@ function runSelfTest() {
       workItems: [{ id: "compact", state: "completed", assignment: "self-test", assignedModel: "none", dependsOn: [] }],
       jobs: [{ jobId: compactJob.jobId, laneId: "compact", state: "completed", assignedTasks: ["compact"], model: "none" }],
     }, 0);
-    assert(!compactSnapshot.includes("Changed: NONE") && compactSnapshot.length < 1800, "aggregate readback omits no-op changed markers and stays compact");
+    assert(!compactSnapshot.includes("Changed: NONE") && compactSnapshot.length < 1800, `aggregate readback omits no-op changed markers and stays compact (${compactSnapshot.length} chars)`);
+    const activeProgressSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      runId: "visible-progress-test",
+      state: "running",
+      counts: { total: 1, completed: 0, running: 1, failed: 0 },
+      workItems: [{ id: "active-review", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [] }],
+      jobs: [{ jobId: compactJob.jobId, laneId: "active", state: "running", assignedTasks: ["active-review"], workItemIds: ["active-review"], model: "sonnet", startedAt: new Date(Date.now() - 30000).toISOString(), currentStep: "reviewing" }],
+      decisions: [{ at: utcStamp(), type: "worker-start", workItemId: "active-review", resourceId: "claude:sonnet" }],
+    }, 20);
+    assert(activeProgressSnapshot.includes("WorkProgress: 0/1 completed; active=1") && activeProgressSnapshot.includes("RequiredProgressReport:") && activeProgressSnapshot.includes("RequiredManagerAction:") && activeProgressSnapshot.includes("NextCheck:") && activeProgressSnapshot.includes("Activity: started="), "running manager snapshots expose visible progress, activity, and mandatory continuation fields");
     const supersededJob = createJob({ goal: "superseded failure self-test", workspace, mode: "review", worker: "self-test" });
     fs.writeFileSync(path.join(supersededJob.jobDir, "result.md"), "- SUPERSEDED_DETAIL_SHOULD_NOT_BE_REPEATED\n", "utf8");
     fs.writeFileSync(path.join(supersededJob.jobDir, "test-output-summary.md"), "Result: failed\n", "utf8");

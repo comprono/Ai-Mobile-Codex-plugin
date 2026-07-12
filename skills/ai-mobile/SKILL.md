@@ -28,6 +28,14 @@ Examples requiring immediate interruption include: "do not access email", "stop"
 - Worker lease: adaptive 10-90 minute provider-call watchdog, not a project deadline.
 - Utilization: keep appropriate healthy resources working on distinct dependency-ready items; never duplicate work just to use every model.
 
+## Visible Progress Loop
+
+The initial `run-project-manager` result is a dispatch receipt, not a user closeout. Pass `waitSeconds=0`, immediately tell the user which exact work items were assigned to which recorded resources, then call `project-manager-status` with `waitSeconds=20` in short intervals. Do not end the manager turn with only "running", "workers dispatched", or "next checkpoint".
+
+Continue the short polling loop until one of these occurs: a work item completes or fails, a blocker/user-boundary action appears, a native Codex reservation/action appears, or two minutes pass with no transition. At two minutes, report the exact active item, provider/model, elapsed time, completed/failed counts, and next check; never invent a percentage. Every user-facing progress report must contain `Progress`, `Completed`, `Active`, `Failed/Blocked`, `Next`, and `Next check`.
+
+When the user explicitly asks for continuous, proactive, unattended, or 24/7 management, the detached supervisor keeps eligible external work moving, but it cannot push a new chat message after the Codex turn ends. If the Codex app heartbeat automation tool is exposed, create or update one heartbeat attached to the same task at the capacity-checkpoint interval (20 minutes by default) with a status-only prompt: call `project-manager-status`, execute only returned manager/host lifecycle actions, and report deltas using the required progress fields. Do not create a heartbeat for an ordinary one-shot task, and do not imply proactive chat updates exist when the heartbeat tool is unavailable.
+
 ## Default Workflow
 
 For a nontrivial project goal:
@@ -35,7 +43,7 @@ For a nontrivial project goal:
 1. Understand the outcome, constraints, risk, current state, acceptance criteria, and focused verification.
    In manager-only mode, derive this from the user's request and existing AI Mobile run state. Do not pre-read project files, search implementation memory, or run health commands before dispatch; make project discovery a bounded work item.
 2. Look for the normalized direct MCP tool `mcp__ai_mobile_local__run_project_manager` and the native host tool `multi_agent_v1__spawn_agent`. Do not declare AI Mobile or native Codex workers unavailable until exposed tool names have been searched for those exact prefixes. Pass `hostCodexAvailable=true` only when the spawn tool is actually callable.
-3. Call `run-project-manager` once with `goal`, `workspace`, `managerOnly=true`, measured caller-visible Codex state when available, `hostCodexAvailable`, `horizonHours=5`, `runDeadlineMinutes=0`, `capacityCheckpointMinutes=20`, `codexManagerReservePercent=15`, `maxConcurrentCodexWorkers=1`, `maxWorkerMinutes=0`, `maxClaudeOutputTokens=12000`, `start=true`, and a dependency-aware `workItems` graph only when the goal genuinely needs one. Zero project deadline means continuous until verified, blocked, or explicitly stopped; zero worker cap means complexity-adaptive safety leases. Pass top-level `constraints`, `acceptanceCriteria`, and `verification`; keep `includePlan=false` unless debugging routing. In a complex default graph, discovery completes before implementation so verified evidence can establish the writer's file boundary.
+3. Call `run-project-manager` once with `goal`, `workspace`, `managerOnly=true`, measured caller-visible Codex state when available, `hostCodexAvailable`, `horizonHours=5`, `runDeadlineMinutes=0`, `capacityCheckpointMinutes=20`, `codexManagerReservePercent=15`, `maxConcurrentCodexWorkers=1`, `maxWorkerMinutes=0`, `maxClaudeOutputTokens=12000`, `waitSeconds=0`, `start=true`, and a dependency-aware `workItems` graph only when the goal genuinely needs one. Zero project deadline means continuous until verified, blocked, or explicitly stopped; zero worker cap means complexity-adaptive safety leases. Pass top-level `constraints`, `acceptanceCriteria`, and `verification`; keep `includePlan=false` unless debugging routing. In a complex default graph, discovery completes before implementation so verified evidence can establish the writer's file boundary.
 4. Do not read `project-manager-plan.json`, reconstruct submit commands, or manually call provider workers after a successful run call. The orchestrator dispatches eligible CLI work and returns `HostCodexActions` plus non-delegable `ManagerBoundaryActions` directly.
 5. For every returned `HostCodexReservationAction`, first acknowledge `reserved` through `project-manager-status.hostWorkerEvents` with the exact run id, work item id, attempt id, and dispatch token. Only if the next status response still returns the exact `HostCodexAction`, call `multi_agent_v1__spawn_agent` with its bounded model, effort, role, and message. Immediately acknowledge the returned agent id as `started`; completion or failure uses the same attempt and token. Never mark native output as parent-chat Codex evidence.
 6. While workers run, stay in the control room. Use `project-manager-status` and native host wait/close tools to monitor, steer, and report. Perform a returned manager-boundary action only when it is an authorization, protected live-state check, externally consequential operation, or other non-delegable user boundary. Do not fill worker idle time with repository exploration or implementation.
@@ -135,7 +143,7 @@ Call `orchestrator-profile` when a local communication or model policy is needed
 If no `mcp__ai_mobile_local__*` tool is exposed after an actual tool-name search, use:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
+powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 0
 ```
 
 Continue with `project-manager-status`, not manual JSON or provider-command reconstruction. Tool discovery failure is a route change, not permission to guess.

@@ -25,6 +25,8 @@
 - Keep the low-RAM supervisor active only while external stages can advance autonomously. It uses no model tokens and exits when Codex action, verification, a blocker, replacement, or stop is required.
 - Give individual provider calls complexity-adaptive safety leases from 10 to 90 minutes. A dead-call timeout may rescope/fail over the item once; it never terminates the overall objective.
 - Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
+- Treat the initial run result as a dispatch receipt. Report exact assignments, then poll status in 20-second intervals until a meaningful transition or a two-minute activity heartbeat; every report names completed, active, failed/blocked, next action, and next check.
+- For an explicitly continuous or 24/7 objective, use one same-task heartbeat automation when that Codex app capability exists. The heartbeat performs compact status/steering only; it does not replace the detached supervisor or duplicate project work.
 - Mark completed or blocked current-Codex items through `project-manager-status`; completion requires a matching compact evidence entry so dependent CLI work advances from verified state.
 - A worker that requires live/current runtime truth depends on the Codex live-control item and receives its evidence. Git status is not runtime evidence.
 - Manager-only mode never replaces a failed worker by editing locally. Rescope or reassign the bounded item; `takeoverCodexItems` is available only when the user explicitly disables manager-only mode.
@@ -34,6 +36,7 @@
 - On new user steering or withdrawn permission, interrupt running workers first, persist the new constraint, and replan. Never let stale workers finish against superseded instructions.
 - Treat `ready-for-codex` as active and refuse a replacement run when an old worker process cannot be confirmed stopped.
 - Do not dispatch an external writer without an explicit or evidence-inferred file boundary.
+- If a writer boundary is missing, insert one read-only scope-discovery item with exact `BOUNDARY <writer-id>:` file output. Do not classify this as provider failure or spend the writer's bounded failover.
 - Keep externally consequential operations with the current Codex session even when external workers are healthier or cheaper.
 - Keep live session, login, account, cookie, profile, credential, OAuth, email/SMS, and CAPTCHA checks with the current Codex session. Bounded source review about those systems may still be delegated.
 

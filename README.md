@@ -26,10 +26,12 @@ For a nontrivial goal, mention `@ai-mobile` in the project chat. The skill calls
 PowerShell fallback:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<complete outcome>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<complete outcome>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 0
 ```
 
 The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. Project duration is continuous by default: the objective stays available until verified, genuinely blocked, or explicitly stopped. A lightweight detached Node.js supervisor advances sequential external stages and rolling capacity checkpoints without model-token use. When Codex capacity approaches its reserve, unstarted work is routed to durable external CLI jobs so progress can continue; after the Codex window resets, the manager resumes the same persisted run through `project-manager-status` instead of replaying the project.
+
+Manager status is evidence-first and visible: every snapshot reports completed, active, failed/blocked, and pending work, plus the latest transition and exact next action. The initial call returns assignments immediately, then the skill uses short status polls rather than ending with a generic `running` message. If discovery omits a safe writer file map, AI Mobile launches one read-only scope worker to return exact machine-readable boundaries and resumes the writer without spending provider failover. Explicit 24/7 requests may use a same-task Codex heartbeat for periodic compact reports; the detached local supervisor, not the heartbeat, advances eligible external work without model tokens.
 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 

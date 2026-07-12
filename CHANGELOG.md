@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 - 2026-07-12
+
+- Made the manager return an immediate dispatch receipt, continue through short status polls, and expose mandatory progress fields with concrete active-worker elapsed time instead of ending on a generic `running` sentence.
+- Added automatic machine-readable writer-boundary recovery: a missing file map launches one low-cost read-only scope worker, assigns exact target-specific files, resumes the original writers, and does not consume provider failover.
+- Documented optional same-task heartbeat reporting for explicitly continuous or 24/7 objectives; the zero-token supervisor keeps eligible CLI work moving while the heartbeat only wakes Codex for compact status and steering.
+
 ## 0.1.1 - 2026-07-12
 
 - Protected the parent manager from shared Codex exhaustion with a configurable 15% reserve, default one-worker native Codex concurrency, capacity-headroom scoring, five-minute near-reserve checkpoints, durable external handoff, and same-run resume after a Codex reset.
