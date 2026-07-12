@@ -42,7 +42,7 @@ Manager status is evidence-first and visible. The initial call returns assignmen
 
 When all current-cycle workers finish, status reports `ActiveCycleState: awaiting-acceptance` and includes every current-cycle worker result needed for the decision. Older attempts remain compacted and are available through `read-job` only for diagnosis.
 
-The public PowerShell helper preserves nested work-item arrays at full depth, including `dependsOn`, `expectedFiles`, acceptance criteria, and verification checks. A scope worker succeeds only when every requested writer target has a valid `BOUNDARY <work-item-id>:` line; prose-only scope suggestions fail closed and can use bounded provider failover.
+The public PowerShell helper preserves nested work-item arrays at full depth, including `dependsOn`, `expectedFiles`, acceptance criteria, and verification checks. A scope worker succeeds only when every requested writer target has a valid `BOUNDARY <work-item-id>:` line; explicitly declared markers remain mandatory even when writers already have `expectedFiles`, and compact readback preserves them. Prose-only scope suggestions fail closed and can use bounded provider failover.
 
 ### Lean tool surface
 
@@ -55,7 +55,7 @@ $items = '[{"id":"architecture","objective":"Review the design and risks","execu
 & "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<complete outcome>" -Workspace "<path>" -WorkItemsJson $items
 ```
 
-AI Mobile prefers the official standalone Codex CLI when it is installed and `codex login status` confirms ChatGPT-plan authentication. It runs an isolated, ephemeral `codex exec` worker with stdin prompt transport, the selected catalog model/effort, bounded sandboxing, measured usage, and the same manager reserve as the parent. It does not create another user-visible Codex task and refuses unknown/API-style auth to avoid unexpected separate billing. When that lane is unavailable, the active skill can use token-bound host-native actions through `project-manager-status`. Existing external orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
+AI Mobile prefers the official standalone Codex CLI when it is installed and `codex login status` confirms ChatGPT-plan authentication. It runs an isolated, ephemeral `codex exec` worker with stdin prompt transport, the selected catalog model/effort, bounded sandboxing, measured usage, and the same manager reserve as the parent. Read-only workers use `read-only`; bounded writers request `workspace-write` and do not inherit the parent task's internal permission profile or thread identity. If the effective CLI sandbox still rejects a write, AI Mobile records that transport capability for the current CLI version, keeps CLI reviews available, and routes later writers to host-native Codex or another healthy provider instead of repeating the failed call. It does not create another user-visible Codex task and refuses unknown/API-style auth to avoid unexpected separate billing. When that lane is unavailable, the active skill can use token-bound host-native actions through `project-manager-status`. Existing external orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
@@ -139,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 # Explicitly permit Antigravity CLI for this run (it may require browser sign-in)
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -AllowAntigravityCli $true
 
-# Unattended Antigravity: sandboxed tool prompts are pre-approved; authentication and external-effect gates remain blocked
+# Unattended Antigravity: sandboxed tool prompts are pre-approved; readers use plan mode, writers use accept-edits; authentication and external-effect gates remain blocked
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -AllowAntigravityCli $true -UnattendedMode $true -AllowAntigravityPermissionBypass $true
 
 # Plan-only routing diagnostic
@@ -171,7 +171,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 
 ## Operating Rules
 
-- Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity.
+- Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity. An authorized unattended CLI job uses explicit `plan` or `accept-edits` mode; any remaining authentication or workspace-trust prompt triggers one failover instead of repeated UI popups.
 - Use `run-project-manager` once for a root objective. Finite objectives may use a bounded replacement after a real contract change. Active `continuous-management` objectives reject rephrased or reduced replacement prompts; routine corrections and new work graphs must use `project-manager-status` cycle fields under the same run id. Explicit user steering or stop instructions terminate workers first. Persisted constraints and root gates carry across an intentional restart so safety boundaries are not silently lost.
 - `ready-for-codex` is still active until final verification or explicit termination. A changed goal stops that run first, and a replacement is refused if any old worker process cannot be confirmed stopped.
 - For `continuous-management`, `ready-for-codex` is only a cycle boundary. `projectVerified` is rejected; the manager records cycle evidence and supplies the next bounded cycle under the same run id.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 - 2026-07-13
+
+- Enforced every explicitly requested `BOUNDARY <work-item-id>:` scope contract before releasing dependent writers, even when those writers already declare expected files, and preserved boundary lines during compact result readback.
+- Isolated standalone Codex CLI workers from parent Codex task permission and thread variables, detected effective `workspace-write` rejection as a transport capability failure, and routed later writers to host-native Codex or another provider until the CLI version changes or the retry window expires.
+- Added explicit Antigravity `plan` and `accept-edits` execution modes while retaining sandboxed permission auto-approval for authorized unattended runs, reducing repeated tool-permission dialogs without bypassing authentication or external-action gates.
+
 ## 0.2.4 - 2026-07-13
 
 - Allowed an invalid continuous cycle with no active worker to fail atomically, archive its malformed evidence, and accept a corrected next-cycle graph under the same run id.

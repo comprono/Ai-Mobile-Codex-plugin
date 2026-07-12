@@ -1719,6 +1719,24 @@ function compactOutcome(outcome = {}) {
   };
 }
 
+function codexCliWriterCapability(writerTransport = {}, currentVersion = "") {
+  const recordedVersion = String(writerTransport.version || "");
+  const version = String(currentVersion || "");
+  if (recordedVersion && version && recordedVersion !== version) {
+    return { state: "unknown", supported: true, reason: "Codex CLI version changed; writer capability will be re-evaluated." };
+  }
+  const retryAt = Date.parse(String(writerTransport.retryAt || ""));
+  if (writerTransport.state === "blocked" && (!Number.isFinite(retryAt) || retryAt > Date.now())) {
+    return {
+      state: "blocked",
+      supported: false,
+      reason: String(writerTransport.reason || "Codex CLI workspace-write was rejected by its effective sandbox."),
+      retryAt: String(writerTransport.retryAt || ""),
+    };
+  }
+  return { state: writerTransport.state === "available" ? "available" : "unknown", supported: true, reason: "" };
+}
+
 function compactAntigravityQuickSnapshot(report = {}) {
   return {
     GeneratedAtUtc: String(report.GeneratedAtUtc || ""),
@@ -1860,6 +1878,7 @@ async function getTeamCapacityContext(args = {}) {
     codexCliCommand: String(codexCli.command || ""),
     codexCliVersion: String(codexCli.version || ""),
     codexCliAuth: codexCli.auth || { checked: false, loggedIn: null, authMode: "unknown" },
+    codexCliWriterCapability: codexCliWriterCapability(cache.codex?.writerTransport || {}, codexCli.version),
     quickError,
     capacityProbe: liveProbe.live
       ? `${antigravityQuotaEvidence} Antigravity quota, Claude usage windows, and local CLI/auth evidence`
@@ -2187,6 +2206,7 @@ function buildNativeCodexCandidates(args = {}, context = {}) {
     && context.codexCliAuth?.loggedIn === true
     && context.codexCliAuth?.authMode === "chatgpt";
   const transportReady = cliReady || args.hostCodexAvailable === true;
+  const cliWriterCapable = context.codexCliWriterCapability?.supported !== false;
   const effectiveRemainingPercent = Number.isFinite(context.codexRemainingPercent)
     ? context.codexRemainingPercent
     : Number.isFinite(context.codexTelemetry?.effectiveRemainingPercent)
@@ -2200,16 +2220,17 @@ function buildNativeCodexCandidates(args = {}, context = {}) {
   return buildHostCodexCandidates(context.codexCatalog || {}, effectiveTelemetry, {
     includePattern: modelPattern(localProfile),
     hostCapabilityVerified: transportReady,
-  }).map((candidate) => {
+  }).flatMap((candidate) => {
     const id = cliReady ? `codex-cli:${candidate.model}` : candidate.id;
     const reserveBlocked = ["low", "critical", "exhausted"].includes(context.codexBudget?.state)
       || (Number.isFinite(candidate.remainingPercent) && candidate.remainingPercent <= controls.codexManagerReservePercent);
     const dispatchable = transportReady && candidate.state === "available" && !reserveBlocked;
-    return {
+    const selected = {
       ...candidate,
       id,
       team: cliReady ? "Codex CLI worker" : candidate.team,
       dispatchMode: cliReady ? "codex-cli" : "host-subagent",
+      writerCapable: cliReady ? cliWriterCapable : true,
       bridgeDispatchable: cliReady,
       hostDispatchable: !cliReady && candidate.hostDispatchable && !reserveBlocked,
       hostCapabilityVerified: !cliReady && candidate.hostCapabilityVerified,
@@ -2226,6 +2247,28 @@ function buildNativeCodexCandidates(args = {}, context = {}) {
       outcome: compactOutcome(outcomes[id] || {}),
       platformReliability: platformReliabilitySummary(outcomes, "codex", args.horizonHours || 5),
     };
+    if (!cliReady || cliWriterCapable || args.hostCodexAvailable !== true) return [selected];
+    const hostOutcome = compactOutcome(outcomes[candidate.id] || {});
+    return [
+      selected,
+      {
+        ...candidate,
+        writerCapable: true,
+        dispatchMode: "host-subagent",
+        bridgeDispatchable: false,
+        hostDispatchable: candidate.hostDispatchable && !reserveBlocked,
+        hostCapabilityVerified: candidate.hostCapabilityVerified,
+        managerReservePercent: controls.codexManagerReservePercent,
+        capacityHeadroomPercent: Number.isFinite(candidate.remainingPercent)
+          ? candidate.remainingPercent - controls.codexManagerReservePercent
+          : null,
+        dispatchable: candidate.hostDispatchable && candidate.state === "available" && !reserveBlocked,
+        state: candidate.state === "available" && reserveBlocked ? "manager-reserve" : candidate.state,
+        evidence: candidate.evidence,
+        outcome: hostOutcome,
+        platformReliability: platformReliabilitySummary(outcomes, "codex", args.horizonHours || 5),
+      },
+    ];
   });
 }
 
@@ -2238,7 +2281,7 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     `HorizonHours: ${horizonHours}`,
     `Evidence: ${context.capacityProbe}`,
     "Software:",
-    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; cli=${context.codexCliFound === true}; cli-version=${context.codexCliVersion || "unknown"}; cli-auth=${context.codexCliAuth?.authMode || "unknown"}; local-capacity=${context.codexTelemetry?.found === true}; fresh=${context.codexTelemetry?.fresh === true}; plan=${context.codexTelemetry?.planType || "unknown"}`,
+    `- Codex: catalog=${context.codexCatalog?.found === true}; client=${context.codexCatalog?.clientVersion || "unknown"}; cli=${context.codexCliFound === true}; cli-version=${context.codexCliVersion || "unknown"}; cli-auth=${context.codexCliAuth?.authMode || "unknown"}; cli-writer=${context.codexCliWriterCapability?.state || "unknown"}; local-capacity=${context.codexTelemetry?.found === true}; fresh=${context.codexTelemetry?.fresh === true}; plan=${context.codexTelemetry?.planType || "unknown"}`,
     `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}; efforts=${context.claudeEfforts?.join(",") || "unknown"}`,
     `- Antigravity: cli=${context.agyFound}; cli-version=${context.agyVersion || "unknown"}; desktop-live=${context.antigravityLiveReady}; live-models=${(context.rawLimits?.Models || []).filter((model) => model.DisplayName).length}`,
     `- Cursor: ui=${context.cursorUiFound}; headless-agent=${context.cursorHeadlessFound}; version=${String(context.cursorUiVersion || "unknown").split(/\r?\n/)[0]}`,
@@ -3185,6 +3228,7 @@ function premiumCapacityOpportunity(candidate, item, args = {}) {
 
 function scoreResourceForWorkItem(candidate, item, args = {}, primaryWriterId = "") {
   if (!candidate.dispatchable || candidate.state !== "available") return Number.NEGATIVE_INFINITY;
+  if (!item.readOnly && candidate.writerCapable === false) return Number.NEGATIVE_INFINITY;
   const localProfile = args.localProfile || neutralLocalRoutingProfile();
   const availableCapabilities = new Set(candidate.capabilities || []);
   const required = item.requiredCapabilities || [];
@@ -3641,6 +3685,23 @@ function validateBoundaryEvidenceContract(args = {}, resultText = "") {
     : { ok: true, reason: "", missing: [] };
 }
 
+function explicitBoundaryTargets(items = []) {
+  const targets = [];
+  for (const item of items) {
+    const contractText = [
+      item.objective || "",
+      ...(item.acceptanceCriteria || []),
+      ...(item.verification || []),
+    ].join("\n");
+    const regex = /(?:FILE_)?BOUNDARY\s+([a-z0-9][a-z0-9._-]{0,80})\s*:/gi;
+    for (const match of contractText.matchAll(regex)) {
+      const target = normalizeTaskLane(match[1]);
+      if (target && !targets.includes(target)) targets.push(target);
+    }
+  }
+  return targets.slice(0, 12);
+}
+
 function downstreamWriterNeedsBoundary(manifest, completedItems) {
   const dependencyIds = new Set((completedItems || []).map((item) => item.id));
   return (manifest.workItems || []).some((item) => !item.readOnly
@@ -3858,7 +3919,8 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const activeConstraints = boundedTextList(manifest.constraints, 20, 600);
   const projectAcceptance = boundedTextList(manifest.acceptanceCriteria, 12, 400);
   const projectVerification = boundedTextList(manifest.verification, 12, 400);
-  const boundaryEvidenceNeeded = readOnly && downstreamWriterNeedsBoundary(manifest, items);
+  const declaredBoundaryTargets = readOnly ? explicitBoundaryTargets(items) : [];
+  const boundaryEvidenceNeeded = readOnly && (declaredBoundaryTargets.length > 0 || downstreamWriterNeedsBoundary(manifest, items));
   const scopeTargets = items.map((item) => item.scopeFor).filter(Boolean);
   const dependencyIds = new Set(items.map((item) => item.id));
   const downstreamBoundaryTargets = boundaryEvidenceNeeded
@@ -3868,7 +3930,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
         && (item.dependsOn || []).some((id) => dependencyIds.has(id)))
       .map((item) => item.id)
     : [];
-  const boundaryTargets = [...new Set([...scopeTargets, ...downstreamBoundaryTargets])];
+  const boundaryTargets = [...new Set([...scopeTargets, ...declaredBoundaryTargets, ...downstreamBoundaryTargets])];
   const goal = [
     manifest.goal,
     "",
@@ -3979,6 +4041,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       printTimeout: `${maxWorkerMinutes}m`,
       sandbox: true,
       autoApprovePermissions: manifest.unattendedMode === true && manifest.allowAntigravityPermissionBypass === true,
+      agyMode: readOnly ? "plan" : "accept-edits",
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
@@ -4040,6 +4103,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
 
 function failureCategoryFromText(value) {
   const text = String(value || "").toLowerCase();
+  if (/read-only sandbox|workspace is read-only|writing is blocked by read-only|sandbox rejected the write/.test(text)) return "sandbox-read-only";
   if (/budget[- ]exceeded|output budget|token budget|error_max_budget|max[_ ]budget[_ ]usd/.test(text)) return "budget-exceeded";
   if (/verification-failed|deterministic verification failed|bridge verification failed/.test(text)) return "verification-failed";
   if (/review-worker-modified|review-only.*changed/.test(text)) return "policy-violation";
@@ -4055,7 +4119,7 @@ function failureCategoryFromText(value) {
 }
 
 function failoverAllowed(category) {
-  return ["rate-limit", "quota", "timeout", "outage", "model-unavailable", "auth", "worker-failure", "insufficient-result"].includes(category);
+  return ["rate-limit", "quota", "timeout", "outage", "model-unavailable", "auth", "worker-failure", "insufficient-result", "sandbox-read-only"].includes(category);
 }
 
 function deriveOrchestrationState(manifest) {
@@ -7219,6 +7283,7 @@ function cooldownMinutesForFailure(category) {
     auth: 60,
     "worker-failure": 10,
     "insufficient-result": 10,
+    "sandbox-read-only": 60,
   }[category] || 0;
 }
 
@@ -7726,6 +7791,20 @@ function runWindowsFriendly(command, args = [], options = {}) {
   });
 }
 
+function isolatedCodexWorkerEnv(env = process.env) {
+  const workerEnv = { ...env };
+  for (const name of [
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "CODEX_PERMISSION_PROFILE",
+    "CODEX_SHELL",
+    "CODEX_THREAD_ID",
+  ]) {
+    delete workerEnv[name];
+  }
+  workerEnv.AI_MOBILE_CODEX_WORKER = "1";
+  return workerEnv;
+}
+
 function findCodexCli(options = {}) {
   for (const candidate of codexCliCandidates()) {
     const versionProbe = runWindowsFriendly(candidate, ["--version"], { timeout: 10000 });
@@ -8154,12 +8233,15 @@ function compactWorkerStdout(value, maxChars = 6000) {
 
 function compactResultBullets(value, maxBullets = 10, maxChars = 6000) {
   const text = String(value || "").trim();
-  const bullets = text
-    .split(/\r?\n/)
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const contractLines = lines.filter((line) => /^(?:[-*]\s+)?(?:FILE_)?BOUNDARY\s+[a-z0-9][a-z0-9._-]{0,80}\s*:/i.test(line));
+  const bullets = lines
     .map((line) => line.trim())
     .filter((line) => /^[-*]\s+\S/.test(line))
+    .filter((line) => !contractLines.includes(line))
     .slice(0, maxBullets);
-  return truncateText(bullets.length >= 2 ? bullets.join("\n") : text, maxChars);
+  const compact = [...contractLines, ...bullets].join("\n");
+  return truncateText(contractLines.length || bullets.length >= 2 ? compact : text, maxChars);
 }
 
 function compactResultArtifact(resultPath, args = {}, fallbackBullets = 8) {
@@ -8218,6 +8300,9 @@ function buildAgyCliArgs(prompt, args = {}) {
   if (args.project) cliArgs.push("--project", safeAgyFlag(args.project, "project"));
   if (args.conversation) cliArgs.push("--conversation", safeAgyFlag(args.conversation, "conversation"));
   if (args.continueLatest) cliArgs.push("--continue");
+  const executionMode = String(args.agyMode || (args.readOnly === true || String(args.mode || "").toLowerCase() === "review" ? "plan" : "accept-edits")).trim().toLowerCase();
+  if (!["plan", "accept-edits"].includes(executionMode)) throw new Error("Antigravity CLI mode must be plan or accept-edits.");
+  cliArgs.push("--mode", executionMode);
   if (args.autoApprovePermissions === true && args.sandbox === false) {
     throw new Error("Antigravity permission auto-approval requires sandbox=true.");
   }
@@ -8265,6 +8350,7 @@ function runAgyJobWorker(args = {}) {
     agyVersion: status.version,
     agyModel: args.model || "",
     agyPermissionMode: args.autoApprovePermissions === true ? "sandboxed-auto-approve" : "interactive",
+    agyExecutionMode: String(args.agyMode || (args.readOnly === true || String(args.mode || "").toLowerCase() === "review" ? "plan" : "accept-edits")),
   });
 
   const startedMs = Date.now();
@@ -8507,6 +8593,7 @@ function runCodexJobWorker(args = {}) {
   const startedMs = Date.now();
   const result = runWindowsFriendly(status.command, cliArgs, {
     cwd: workspace,
+    env: isolatedCodexWorkerEnv(),
     input: prompt,
     timeout: maxMinutes * 60 * 1000,
     maxBuffer: 8 * 1024 * 1024,
@@ -8530,6 +8617,8 @@ function runCodexJobWorker(args = {}) {
   const boundary = validateWorkerFileBoundary(args, gitOutcome);
   const executionFailed = result.status !== 0 || Boolean(result.error) || parsed.turnFailed || parsed.parsedEvents === 0;
   const resultText = summarizeFile(resultPath, 8000);
+  const sandboxWriteBlocked = args.readOnly === false
+    && failureCategoryFromText(`${resultText} ${stderr} ${parsed.errors.join(" ")}`) === "sandbox-read-only";
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
   const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
@@ -8539,7 +8628,9 @@ function runCodexJobWorker(args = {}) {
     : verificationRunner.skip(jobDir, args);
   const verificationFailed = preVerificationOk && deterministicVerification.required && deterministicVerification.passed !== true;
   const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
-  const failureCategory = !boundary.ok
+  const failureCategory = sandboxWriteBlocked
+    ? "sandbox-read-only"
+    : !boundary.ok
     ? "scope-violation"
     : verificationFailed
       ? "verification-failed"
@@ -8562,6 +8653,21 @@ function runCodexJobWorker(args = {}) {
     sessionId: parsed.threadId,
     numTurns: 1,
   });
+  if (args.readOnly === false && (sandboxWriteBlocked || !failed)) {
+    updateSafeResourceCache({
+      codex: {
+        writerTransport: sandboxWriteBlocked
+          ? {
+              state: "blocked",
+              version: status.version,
+              checkedAt: utcStamp(),
+              retryAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+              reason: "The effective Codex CLI sandbox rejected a bounded workspace-write job. Use host-native Codex or another writer until the CLI version changes or the retry window expires.",
+            }
+          : { state: "available", version: status.version, checkedAt: utcStamp(), retryAt: "", reason: "" },
+      },
+    });
+  }
   updateJobStatus(workspace, jobId, {
     state: failed ? "failed" : "completed",
     currentStep: failed ? "codex-cli-failed" : "codex-cli-completed",
@@ -10160,6 +10266,10 @@ function runSelfTest() {
   assert(parseCodexLoginStatus("Logged in using ChatGPT", "").authMode === "chatgpt", "Codex CLI discovery distinguishes included ChatGPT-plan authentication");
   const codexArgs = buildCodexExecArgs({ workspace: pluginRoot, model: "gpt-5.6-luna", effort: "low", readOnly: true });
   assert(codexArgs.includes("--ignore-user-config") && codexArgs.includes("read-only") && codexArgs[codexArgs.length - 1] === "-", "Codex CLI worker uses isolated JSONL stdin transport and a read-only sandbox");
+  const codexWriterArgs = buildCodexExecArgs({ workspace: pluginRoot, model: "gpt-5.6-sol", effort: "high", readOnly: false });
+  assert(codexWriterArgs.includes("workspace-write") && !codexWriterArgs.includes("read-only"), "Codex CLI writers receive an explicit workspace-write sandbox");
+  const codexWorkerEnv = isolatedCodexWorkerEnv({ PATH: process.env.PATH, CODEX_HOME: process.env.CODEX_HOME || "test-home", CODEX_PERMISSION_PROFILE: ":read-only", CODEX_SHELL: "1", CODEX_THREAD_ID: "parent-thread", CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "Codex Desktop" });
+  assert(codexWorkerEnv.CODEX_HOME && codexWorkerEnv.AI_MOBILE_CODEX_WORKER === "1" && !codexWorkerEnv.CODEX_PERMISSION_PROFILE && !codexWorkerEnv.CODEX_SHELL && !codexWorkerEnv.CODEX_THREAD_ID, "standalone Codex workers do not inherit a parent task's permission profile or thread identity");
   const parsedCodex = parseCodexJsonl([
     JSON.stringify({ type: "thread.started", thread_id: "codex-thread-test" }),
     JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "- Verified bounded routing.\n- Focused test passed." } }),
@@ -10186,6 +10296,17 @@ function runSelfTest() {
   };
   const cliCandidates = buildNativeCodexCandidates({ localProfile: neutralLocalRoutingProfile(), codexManagerReservePercent: 15 }, cliCandidateContext);
   assert(cliCandidates.length === 3 && cliCandidates.every((candidate) => candidate.dispatchMode === "codex-cli" && candidate.dispatchable), "ChatGPT-authenticated Codex CLI replaces duplicate host candidates with durable workers");
+  const blockedWriterContext = {
+    ...cliCandidateContext,
+    codexCliWriterCapability: { state: "blocked", supported: false, reason: "verified workspace-write rejection" },
+  };
+  const blockedWriterCandidates = buildNativeCodexCandidates({ localProfile: neutralLocalRoutingProfile(), codexManagerReservePercent: 15, hostCodexAvailable: true }, blockedWriterContext);
+  const blockedCliWriter = blockedWriterCandidates.find((candidate) => candidate.id === "codex-cli:gpt-5.6-sol");
+  const fallbackHostWriter = blockedWriterCandidates.find((candidate) => candidate.id === "codex-host:gpt-5.6-sol");
+  const writerProbeItem = normalizeWorkItem({ id: "writer-probe", objective: "Implement a bounded patch", kind: "implementation", readOnly: false, expectedFiles: ["probe.txt"] }, 0, "high");
+  assert(blockedCliWriter?.writerCapable === false && !Number.isFinite(scoreResourceForWorkItem(blockedCliWriter, writerProbeItem)) && Number.isFinite(scoreResourceForWorkItem(fallbackHostWriter, writerProbeItem)), "a verified standalone Codex sandbox failure preserves CLI reviews but routes writers to host-native Codex");
+  assert(codexCliWriterCapability({ state: "blocked", version: "codex-cli 1", retryAt: "2999-01-01T00:00:00.000Z" }, "codex-cli 1").supported === false
+    && codexCliWriterCapability({ state: "blocked", version: "codex-cli 1", retryAt: "2999-01-01T00:00:00.000Z" }, "codex-cli 2").supported === true, "Codex CLI writer blocks persist for one client version and reset after an upgrade");
   const reserveCliCandidates = buildNativeCodexCandidates({ localProfile: neutralLocalRoutingProfile(), codexManagerReservePercent: 15 }, { ...cliCandidateContext, codexRemainingPercent: 12, codexTelemetry: { ...cliCandidateContext.codexTelemetry, effectiveRemainingPercent: 12 } });
   assert(reserveCliCandidates.every((candidate) => candidate.state === "manager-reserve" && candidate.dispatchable === false), "standalone Codex workers share the manager reserve with the parent task");
   const criticalHostAction = chooseHostCodexAction(hostCandidates.filter((candidate) => candidate.model === "gpt-5.6-sol"), { objective: "Review an irreversible architecture migration", kind: "architecture-risk", complexity: "critical", requiredCapabilities: ["frontier-reasoning"] });
@@ -10559,6 +10680,7 @@ function runSelfTest() {
   assert(inferFileBoundaryFromEvidence(pluginRoot, "Observed `README.md` before proposing a correction.", "writer-a").length === 0, "writer boundaries never fall back to incidental backtick paths when the target marker is missing");
   assert(!validateBoundaryEvidenceContract({ workspace: pluginRoot, boundaryTargets: ["writer-a"] }, "Proposed `README.md` in prose only.").ok, "boundary discovery without the required target marker fails its result contract");
   assert(validateBoundaryEvidenceContract({ workspace: pluginRoot, boundaryTargets: ["writer-a", "writer-b"] }, boundaryEvidence).ok, "boundary discovery passes only when every requested target has a valid machine-readable path");
+  assert(explicitBoundaryTargets([{ objective: "Return BOUNDARY phase0: exact paths.", acceptanceCriteria: ["Return BOUNDARY phase1: exact paths."] }]).join(",") === "phase0,phase1", "scope contracts enforce every explicitly declared boundary target");
   const scopeCandidate = {
     id: "antigravity:gemini-3.5-flash-medium",
     platform: "antigravity",
@@ -11016,6 +11138,7 @@ function runSelfTest() {
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex-pending" }] }) === "running", "dependency-gated Codex actions keep the project run active until they become ready");
   assert(deriveOrchestrationState({ workItems: [{ state: "blocked" }, { state: "failed" }] }) === "blocked", "dependency blocks remain distinct from worker failure");
   assert(failureCategoryFromText("429 rate limit exceeded") === "rate-limit", "retryable resource failures are classified for bounded failover");
+  assert(failureCategoryFromText("writing is blocked by read-only sandbox") === "sandbox-read-only" && failoverAllowed("sandbox-read-only"), "Codex workspace-write rejection is a transport capability failure with bounded failover");
   assert(failureCategoryFromText("Claude output budget exceeded") === "budget-exceeded" && !failoverAllowed("budget-exceeded"), "worker budget exhaustion stops instead of doubling cost through failover");
   assert(failureCategoryFromText("error_max_budget_usd") === "budget-exceeded", "Claude's error_max_budget_usd subtype text normalizes to budget-exceeded");
   const parsedBudgetError = parseClaudeJsonOutput(JSON.stringify({ is_error: true, subtype: "error_max_budget_usd", result: "Claude Code spend limit reached." }));
@@ -11067,13 +11190,17 @@ function runSelfTest() {
   assert(!validateWriterCompletion({ readOnly: false, mode: "patch" }, { changedDuringRun: ["scripts/fix.js"] }, "- Outcome: BLOCKED pending a correct boundary.").ok, "a writer-declared blocked outcome remains failed even when a partial file changed");
   assert(validateWriterCompletion({ readOnly: false, mode: "patch" }, { changedDuringRun: ["scripts/fix.js"] }, "- Implemented the bounded correction and focused tests passed.").ok, "a writer completes only with attributable changes and a non-blocked result");
   assert(compactResultBullets("- one\n- two\n- three", 2).split(/\r?\n/).length === 2, "worker result readback enforces a compact bullet limit");
+  const compactBoundaryEvidence = compactResultBullets("- one\n- two\nBOUNDARY writer-a: `README.md`\nBOUNDARY writer-b: `scripts/ai-mobile-local-mcp.js`\n- three", 2);
+  assert(compactBoundaryEvidence.includes("BOUNDARY writer-a:") && compactBoundaryEvidence.includes("BOUNDARY writer-b:"), "result compaction preserves machine-readable boundary contracts");
   assert(!validateWorkerResult("I am currently running on Gemini 3.5 Flash (Medium).", { goal: "Review transport correctness" }).ok, "model identity alone cannot satisfy an assigned work item");
   assert(validateWorkerResult("- No transport defect found after reviewing both framing paths.\n- Verification covered initialization and tool listing.", { goal: "Review transport correctness", workItemKinds: ["architecture-review"] }).ok, "compact objective-specific review passes the result quality gate");
   assert(inferAgyObservedModel("I am currently running on **Gemini 3.5 Flash (Medium)**.", "gemini-3.5-flash-low") === "gemini-3.5-flash-medium", "Antigravity telemetry records a self-reported model instead of the requested alias");
   const agyPrintArgs = buildAgyCliArgs("EXECUTE-THIS-PROMPT", { model: "gemini-3.5-flash-low", printTimeout: "1m" });
-  assert(agyPrintArgs[0] === "--print" && agyPrintArgs[1] === "EXECUTE-THIS-PROMPT", "Antigravity CLI receives the task through the verified long-form print argument");
+  assert(agyPrintArgs[0] === "--print" && agyPrintArgs[1] === "EXECUTE-THIS-PROMPT" && agyPrintArgs.includes("accept-edits"), "Antigravity CLI receives the task through the verified long-form print argument with an explicit writer mode");
+  const agyReviewArgs = buildAgyCliArgs("REVIEW", { model: "gemini-3.5-flash-low", readOnly: true });
+  assert(agyReviewArgs.includes("--mode") && agyReviewArgs.includes("plan"), "read-only Antigravity work uses explicit plan mode");
   const unattendedAgyArgs = buildAgyCliArgs("UNATTENDED", { model: "gemini-3.5-flash-low", sandbox: true, autoApprovePermissions: true });
-  assert(unattendedAgyArgs.includes("--sandbox") && unattendedAgyArgs.includes("--dangerously-skip-permissions"), "sandboxed unattended Antigravity jobs use the CLI's explicit permission auto-approval flag");
+  assert(unattendedAgyArgs.includes("--sandbox") && unattendedAgyArgs.includes("--dangerously-skip-permissions") && unattendedAgyArgs.includes("accept-edits"), "sandboxed unattended Antigravity jobs use explicit edit mode and permission auto-approval");
   let unsafeAgyAutoApproveRejected = false;
   try { buildAgyCliArgs("UNSAFE", { sandbox: false, autoApprovePermissions: true }); } catch { unsafeAgyAutoApproveRejected = true; }
   assert(unsafeAgyAutoApproveRejected, "Antigravity permission auto-approval is refused without the sandbox");
