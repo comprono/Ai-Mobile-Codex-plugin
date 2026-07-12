@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 - 2026-07-13
+
+- Allowed an invalid continuous cycle with no active worker to fail atomically, archive its malformed evidence, and accept a corrected next-cycle graph under the same run id.
+- Kept the repair fail-closed when any provider or host worker is actually running, reserved, or awaiting confirmed cancellation.
+
 ## 0.2.3 - 2026-07-13
 
 - Prevented automatic live-operation dependency injection from creating transitive cycles in multi-stage correction and release graphs.

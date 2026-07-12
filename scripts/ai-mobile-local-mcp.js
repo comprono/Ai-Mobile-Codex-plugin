@@ -6157,7 +6157,31 @@ function applyProjectManagerUpdates(manifest, args = {}) {
     }
     if (!alreadyRecorded) {
       const cycleIds = new Set(activeCycle.itemIds || next.workItems.map((item) => item.id));
-      const cycleItems = next.workItems.filter((item) => cycleIds.has(item.id));
+      let cycleItems = next.workItems.filter((item) => cycleIds.has(item.id));
+      const graphIntegrity = workGraphIntegrity({ ...next, workItems: cycleItems });
+      const activeCycleJobs = (next.jobs || []).filter((job) => ["queued", "running", "unknown"].includes(job.state)
+        && (job.workItemIds || job.assignedTasks || []).some((id) => cycleIds.has(id)));
+      const malformedCycleCanAbort = !passed
+        && graphIntegrity.valid === false
+        && activeCycleJobs.length === 0
+        && cycleItems.every((item) => !["running", "host-running", "host-reserved", "host-cancel-required"].includes(item.state));
+      if (malformedCycleCanAbort) {
+        next.workItems = next.workItems.map((item) => cycleIds.has(item.id) && item.state !== "completed"
+          ? {
+              ...item,
+              state: "blocked",
+              blocker: `Malformed work graph aborted before dispatch: ${graphIntegrity.reason}`,
+              failureCategory: "invalid-work-graph",
+              activeJobId: "",
+            }
+          : item);
+        cycleItems = next.workItems.filter((item) => cycleIds.has(item.id));
+        next = appendOrchestrationDecision(next, {
+          type: "malformed-cycle-abort",
+          cycleId: activeCycle.id,
+          reason: graphIntegrity.reason,
+        });
+      }
       const incomplete = cycleItems.filter((item) => passed
         ? item.state !== "completed"
         : ["running", "pending", "codex", "codex-pending", "host-pending", "host-running", "host-dispatch-required", "host-reserved", "host-cancel-required"].includes(item.state));
@@ -10920,6 +10944,20 @@ function runSelfTest() {
     workItems: continuousBase.workItems.map((item, index) => index === 0 ? { ...item, state: "failed", blocker: "bounded cycle failure" } : item),
   }, { cycleVerificationFailed: true, cycleVerificationSummary: "The bounded cycle failed and requires a correction, while the persistent root objective remains active." });
   assert(failedContinuousCycle.state === "ready-for-codex" && isActiveOrchestrationRun(failedContinuousCycle), "a failed continuous cycle remains an active same-run correction checkpoint");
+  const malformedPendingCycle = applyProjectManagerUpdates({
+    ...continuousBase,
+    runId: "malformed-pending-cycle-test",
+    jobs: [],
+    workItems: [
+      { id: "scope", objective: "Scope correction", state: "pending", assignment: "antigravity:flash", dependsOn: ["refresh"], readOnly: true },
+      { id: "refresh", objective: "Refresh runtime", state: "codex-pending", assignment: "codex:current", dependsOn: ["scope"], readOnly: false },
+    ],
+    activeCycle: { id: "cycle-1", number: 1, objective: "Malformed cycle", itemIds: ["scope", "refresh"], state: "running", startedAt: utcStamp() },
+  }, { cycleVerificationFailed: true, cycleVerificationSummary: "The malformed dependency cycle was detected before dispatch and must be replaced under the same run." });
+  assert(malformedPendingCycle.activeCycle?.state === "failed"
+    && malformedPendingCycle.workItems.every((item) => item.state === "blocked" && item.failureCategory === "invalid-work-graph")
+    && malformedPendingCycle.decisions.some((entry) => entry.type === "malformed-cycle-abort"),
+  "a zero-worker malformed continuous cycle can fail atomically for same-run repair");
   const readOnlyContinuousCycle = applyProjectManagerUpdates({
     version: 2,
     runId: "read-only-continuous-test",
