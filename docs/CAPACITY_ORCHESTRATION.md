@@ -8,7 +8,7 @@ The orchestrator preserves the source and freshness of every capacity fact:
 
 | Resource | Models | Capacity and reset evidence | Dispatch |
 | --- | --- | --- | --- |
-| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Separate native host agents; current Codex chat remains manager-only |
+| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Separate native host agents; parent Codex control-room task remains manager-only |
 | Claude Code | Installed aliases plus exact ids learned from CLI help or completed-run telemetry | Built-in `/usage` output, cached for 10 minutes | Headless CLI |
 | Antigravity CLI | `agy models` | CLI roster plus recent outcomes | Headless CLI |
 | Antigravity desktop | Full named model roster | Per-model remaining percentage and reset time while the local service is already running | UI only when visible project/chat state is required |
@@ -20,7 +20,7 @@ Evidence is classified as measured, observed, cached, caller-provided, or unknow
 
 The local reader scans only bounded tails of recent Codex JSONL session files and accepts only `event_msg` rows whose payload type is `token_count`. It normalizes current five-hour, seven-day, and future window shapes, plus numeric session token totals. Prompts, responses, file paths, and thread identifiers are discarded. Because this is an undocumented local event shape, stale or incompatible data fails closed.
 
-Host-native model ids and reasoning efforts come from the current spawn-agent schema when exposed, with the local model catalog as a passive fallback. The planner selects only an effort supported by that model. Maximum efforts are reserved for material criticality or risk; availability alone is not a reason to spend them. The parent chat never impersonates a selected Codex worker: it first records a token-bound reservation, exposes the exact spawn action while reserved, binds the returned agent id on `started`, and requires compact completion evidence.
+Host-native model ids and reasoning efforts come from the current spawn-agent schema when exposed, with the local model catalog as a passive fallback. The planner selects only an effort supported by that model. Maximum efforts are reserved for material criticality or risk; availability alone is not a reason to spend them. The parent control-room task never impersonates a selected Codex worker: it first records a token-bound reservation, exposes the exact spawn action while reserved, binds the returned agent id on `started`, and requires compact completion evidence.
 
 Codex capacity windows currently apply to the shared Codex agent pool unless the observed source explicitly identifies a model-specific window. A private local allow pattern can restrict eligible catalog models without hardcoding those names into the public plugin.
 
@@ -28,7 +28,9 @@ Because native Codex workers consume that same shared pool, AI Mobile protects a
 
 ## Visible Progress And Scope Recovery
 
-`run-project-manager` returns initial assignments without a long silent wait. The manager then makes one transition-aware `project-manager-status` call with `waitSeconds=120`; it returns early when recorded state changes. If no transition occurs, the response is one two-minute activity checkpoint rather than repeated 20-second reports. Runtime reporting honors the private local address/style and uses `Changed`, `Team now`, `Progress`, `Blocker`, and `Next`. For a continuous objective, prefer one active Codex Goal in the same project task; the detached supervisor remains responsible for zero-token external progression. Automations are reserved for separately requested wall-clock reports and are never implied by a capacity checkpoint.
+`run-project-manager` returns initial assignments without a long silent wait. The manager then makes one transition-aware `project-manager-status` call with `waitSeconds=120`; it returns early when recorded state changes. If no transition occurs, the response is one two-minute activity checkpoint rather than repeated 20-second reports. Runtime reporting honors the private local address/style and emits a six-field `CEOControlRoom` brief: `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`. It shows active owner/model/elapsed time and the current platform capacity/reset evidence. For a continuous objective, prefer one active Codex Goal in the same project task; the detached supervisor remains responsible for zero-token external progression. Automations are reserved for separately requested wall-clock reports and are never implied by a capacity checkpoint.
+
+"Do not create another chat" is intentionally not part of the runtime contract. The precise rule is: do not create another user-facing Codex control-room task/thread. Native Codex subagents and headless Claude Code, Antigravity, and optional Cursor worker sessions/jobs remain allowed and expected behind that one task.
 
 An external writer still requires a verified file boundary. If discovery does not return one, the run inserts one bounded read-only scope-discovery item with a machine-readable `BOUNDARY <writer-id>:` contract. This is a scoping correction, not a provider failure: it does not consume the writer's failover allowance, and the original writer resumes only after exact existing files are recorded.
 
@@ -62,7 +64,7 @@ The baseline family roles follow [Claude Code model configuration](https://code.
 7. Permit at most two simultaneous writers only when their verified workspace-relative file or directory boundaries are pairwise disjoint. Serialize overlaps, wildcards, missing boundaries, and shared integration surfaces; honor the separate native Codex concurrency ceiling.
 8. Record successful task affinity, failures, cooldowns, exact observed model ids, duration, and available token telemetry.
 9. On quota, outage, timeout, auth, model-unavailable, or insufficient output, fail over the narrow work item once to a provider-diverse alternate.
-10. Keep the parent Codex chat on planning, steering, evidence review, user decisions, and reporting; project execution belongs to separate native or CLI workers.
+10. Keep the parent Codex task on planning, assignment, steering, intervention, evidence review, user decisions, and reporting; project execution belongs to separate native or CLI workers.
 
 Claude jobs feature-detect the installed CLI instead of relying on a fixed version. On Windows the bridge prefers Claude's native executable for exact argument transport, uses isolated non-persistent sessions, assigns bounded scout/reviewer/verifier/writer contracts, and accepts structured final evidence when supported. A small optional Claude plugin with the same roles lives under `claude-plugin/`; bridge safe mode uses explicit equivalent role instructions because safe mode suppresses plugin components.
 

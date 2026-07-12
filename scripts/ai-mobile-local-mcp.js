@@ -272,13 +272,13 @@ const tools = [
         currentCodexModel: { type: "string", description: "Current caller model label when visible." },
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
-        managerOnly: { type: "boolean", description: "Plan the calling Codex chat as a management/reporting control room rather than an implementation worker.", default: true },
+        managerOnly: { type: "boolean", description: "Keep the calling Codex task as a management/reporting control room rather than an implementation worker.", default: true },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         unattendedMode: { type: "boolean", description: "Plan for no-human continuity. Interactive workers are excluded unless their separately authorized non-interactive policy is active.", default: false },
         allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
-        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager chat, steering, and failover. Native Codex workers stop dispatching at or below this percentage.", default: 15 },
+        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager task, steering, and failover. Native Codex workers stop dispatching at or below this percentage.", default: 15 },
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneously active native Codex workers. External CLI workers can still run in parallel.", default: 1 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
@@ -292,7 +292,7 @@ const tools = [
   },
   {
     name: "run-project-manager",
-    description: "Default AI Mobile control-room call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, and return one compact operating result. Manager-only mode is the default: the calling Codex chat manages, steers, reviews compact evidence, and reports instead of exploring the repository, running project diagnostics, editing files, or duplicating delegated work. Externally consequential and protected live-state boundaries remain with the current Codex session.",
+    description: "Default AI Mobile control-room call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, and return one compact operating result. Manager-only mode is the default: the calling Codex task manages, steers, reviews compact evidence, and reports instead of exploring the repository, running project diagnostics, editing files, or duplicating delegated work. Separate provider worker sessions/jobs remain allowed. Externally consequential and protected live-state boundaries remain with the current Codex session.",
     inputSchema: {
       type: "object",
       properties: {
@@ -308,7 +308,7 @@ const tools = [
         codexBudgetState: { type: "string", description: "Caller-visible Codex capacity state.", default: "unknown" },
         codexRemainingPercent: { type: "number", description: "Optional caller-visible Codex remaining percentage." },
         codexResetAt: { type: "string", description: "Optional caller-visible Codex reset time." },
-        hostCodexAvailable: { type: "boolean", description: "True only when the current Codex host exposes multi_agent_v1__spawn_agent. Enables separate native Codex worker lanes while the parent chat remains manager-only.", default: false },
+        hostCodexAvailable: { type: "boolean", description: "True only when the current Codex host exposes multi_agent_v1__spawn_agent. Enables separate native Codex worker lanes while the parent control-room task remains manager-only.", default: false },
         estimatedCodexInputTokens: { type: "number", description: "Rough direct-work cost used only as a routing signal.", default: 5000 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
         agyModel: { type: "string", description: "Optional Antigravity model override.", default: "auto" },
@@ -318,7 +318,7 @@ const tools = [
         unattendedMode: { type: "boolean", description: "Run without waiting for a person at the PC. Interactive resources must be excluded or explicitly pre-authorized.", default: false },
         allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
-        managerOnly: { type: "boolean", description: "Keep the calling Codex chat as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
+        managerOnly: { type: "boolean", description: "Keep the calling Codex task as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; native Codex workers stop at this threshold.", default: 15 },
@@ -478,7 +478,7 @@ const tools = [
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
-        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager chat, steering, and recovery.", default: 15 },
+        codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager task, steering, and recovery.", default: 15 },
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; external providers remain independently parallel.", default: 1 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
@@ -2419,7 +2419,7 @@ async function buildProjectManagerPlan(args = {}) {
           : resource?.platform === "cursor"
             ? { goal: prompt, workspace, mode, model: resource.model, start: true }
           : args.managerOnly
-            ? { action: "blocked-manager-only", reason: "No dispatchable worker satisfies this item; do not execute it in the control-room chat." }
+            ? { action: "blocked-manager-only", reason: "No dispatchable worker satisfies this item; do not execute it in the parent control-room task." }
             : { action: "current-codex", prompt };
     return {
       workItemId: item.id,
@@ -2634,7 +2634,7 @@ function normalizedRunConstraints(args = {}) {
   return boundedTextList([
     ...defaultOperationalBoundaries(),
     ...(args.managerOnly === true
-      ? ["Manager-only control room: the current Codex chat may steer, approve user-boundary actions, review compact evidence, and report, but must not explore project files, run project diagnostics or tests, edit source, or duplicate worker execution."]
+      ? ["Manager-only control room: the parent Codex task may steer, approve user-boundary actions, review compact evidence, and report, but must not explore project files, run project diagnostics or tests, edit source, or duplicate worker execution. Provider worker sessions/jobs remain allowed."]
       : []),
     ...(args.unattendedMode === true
       ? ["Unattended mode: continue only through non-interactive CLI/host workers. Tool-permission auto-approval never authorizes OAuth, login, CAPTCHA, email/SMS verification, external submissions, destructive actions, or work outside the assigned boundary."]
@@ -4578,6 +4578,151 @@ function workGraphIntegrity(snapshot = {}) {
   return { valid: true, reason: "canonical objectives retained" };
 }
 
+function resourcePlatform(resource = {}) {
+  const explicit = String(resource.platform || "").trim().toLowerCase();
+  if (explicit) return explicit;
+  const prefix = String(resource.id || "").split(":")[0].toLowerCase();
+  return prefix === "codex-host" ? "codex" : prefix;
+}
+
+function latestOrchestrationTransition(snapshot = {}) {
+  return [
+    ...(snapshot.decisions || []).filter((entry) => entry?.at),
+    ...(snapshot.jobs || []).map((job) => ({
+      at: job.completedAt || job.jobUpdatedAt || job.startedAt || job.createdAt || "",
+      type: `worker-${job.state || "unknown"}`,
+      workItemIds: job.workItemIds || job.assignedTasks || [],
+      resourceId: job.resourceId || job.laneId || "",
+    })).filter((entry) => entry.at),
+  ].sort((left, right) => Date.parse(String(right.at || "")) - Date.parse(String(left.at || "")))[0] || null;
+}
+
+function jobForWorkItem(snapshot = {}, item = {}) {
+  return [...(snapshot.jobs || [])].reverse().find((job) => {
+    const ids = job.workItemIds || job.assignedTasks || [];
+    return ids.includes(item.id);
+  }) || null;
+}
+
+function elapsedWorkSeconds(snapshot = {}, item = {}) {
+  const job = jobForWorkItem(snapshot, item);
+  const started = Date.parse(String(job?.startedAt || job?.createdAt || item.startedAt || ""));
+  return Number.isFinite(started) ? Math.max(0, Math.round((Date.now() - started) / 1000)) : null;
+}
+
+function formatElapsed(seconds) {
+  if (!Number.isFinite(seconds)) return "elapsed unknown";
+  if (seconds < 120) return `${seconds}s`;
+  return `${Math.round(seconds / 60)}m`;
+}
+
+function controlRoomTeamSummary(snapshot = {}, progress = orchestrationProgress(snapshot)) {
+  const supervisor = orchestrationSupervisorHealthy(snapshot) ? "supervisor=running" : "supervisor=idle";
+  if (!progress.active.length) {
+    const waiting = progress.pending.length ? `; waiting=${compactWorkItemIds(progress.pending)}` : "";
+    return `Codex parent=CEO/manager in this existing control-room task; ${supervisor}; workers=none active${waiting}`;
+  }
+  const resources = new Map((snapshot.resources || []).map((resource) => [resource.id, resource]));
+  const active = progress.active.slice(0, 4).map((item) => {
+    const resource = resources.get(item.assignment);
+    const owner = resource?.team || item.assignment || "unassigned";
+    const model = item.assignedModel || resource?.model || "default";
+    return `${item.id}->${owner}/${model} (${item.state}, ${formatElapsed(elapsedWorkSeconds(snapshot, item))})`;
+  });
+  if (progress.active.length > active.length) active.push(`+${progress.active.length - active.length} more`);
+  return `Codex parent=CEO/manager in this existing control-room task; ${supervisor}; workers=${active.join("; ")}`;
+}
+
+function platformCapacitySummary(snapshot = {}, progress = orchestrationProgress(snapshot), platform = "codex") {
+  const labels = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", cursor: "Cursor" };
+  const resources = (snapshot.resources || []).filter((resource) => resourcePlatform(resource) === platform);
+  if (!resources.length) return `${labels[platform] || platform}=not recorded`;
+
+  const activeAssignments = new Set(progress.active.map((item) => item.assignment).filter(Boolean));
+  const active = resources.filter((resource) => activeAssignments.has(resource.id));
+  const statePriority = { available: 6, active: 6, "manager-reserve": 5, constrained: 4, cooldown: 3, exhausted: 2, unavailable: 1 };
+  const ranked = [...resources].sort((left, right) => {
+    const activeDelta = Number(activeAssignments.has(right.id)) - Number(activeAssignments.has(left.id));
+    if (activeDelta) return activeDelta;
+    const stateDelta = Number(statePriority[right.state] || 0) - Number(statePriority[left.state] || 0);
+    if (stateDelta) return stateDelta;
+    return Number(right.quality || 0) - Number(left.quality || 0);
+  });
+  const selected = active[0]
+    || (platform === "codex" ? resources.find((resource) => resource.id === "codex:current") : null)
+    || ranked[0];
+  const modelNames = [...new Set((active.length ? active : [selected])
+    .map((resource) => resource.displayName || resource.model || resource.id)
+    .filter(Boolean))].slice(0, 2);
+  const availableCount = resources.filter((resource) => resource.state === "available" && resource.dispatchable !== false).length;
+  const remainingValue = selected?.remainingPercent;
+  const remaining = remainingValue !== null && remainingValue !== undefined && remainingValue !== "" && Number.isFinite(Number(remainingValue))
+    ? `${Number(remainingValue)}%`
+    : "unknown";
+  const reset = selected?.resetAt ? `, reset=${selected.resetAt}` : "";
+  const state = active.length ? "active" : (selected?.state || "unknown");
+  const reserve = platform === "codex" ? `, reserve=${snapshot.codexManagerReservePercent ?? selected?.managerReservePercent ?? 15}%` : "";
+  return `${labels[platform] || platform}=${state}, model=${modelNames.join("+") || "unknown"}, remaining=${remaining}${reset}${reserve}, available=${availableCount}/${resources.length}`;
+}
+
+function controlRoomChangedSummary(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot), reportWait = {}) {
+  if (!graphIntegrity.valid) return `work graph rejected: ${graphIntegrity.reason}`;
+  if (reportWait.refreshError) return `status refresh warning; showing last verified snapshot (${reportWait.refreshError})`;
+  if (Number(reportWait.requestedSeconds || 0) > 0 && !reportWait.transitionDetected) {
+    return `no recorded transition during ${reportWait.elapsedSeconds || 0}s; active owners and leases are shown below`;
+  }
+  const transition = latestOrchestrationTransition(snapshot);
+  if (!transition) return `run state is ${snapshot.state || "unknown"}; no transition recorded yet`;
+  const item = transition.workItemId || (transition.workItemIds || []).join(",") || transition.scopeWorkItemId || "run";
+  return `${transition.type || "state-change"}: ${item}; owner=${transition.resourceId || transition.to || "none"}; at=${transition.at}`;
+}
+
+function controlRoomBlockerSummary(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot), reportWait = {}) {
+  if (!graphIntegrity.valid) return "manager intervention required: replace the malformed graph; no user decision is needed unless an old worker cannot be stopped";
+  if (reportWait.refreshError) return "monitoring evidence is stale; do not infer completion";
+  if (Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0) return "worker cancellation is unconfirmed; replacement is forbidden";
+  if (snapshot.finalVerification?.passed === false) return `verification failed: ${truncateText(snapshot.finalVerification.summary || "recorded gate failure", 220)}`;
+  const managerBoundary = (snapshot.workItems || []).filter((item) => item.state === "codex");
+  if (managerBoundary.length) return `manager/user boundary pending: ${compactWorkItemIds(managerBoundary)}`;
+  if (progress.failed.length || progress.blocked.length) {
+    return `failed=${compactWorkItemIds(progress.failed)}; blocked=${compactWorkItemIds(progress.blocked)}`;
+  }
+  if (snapshot.state === "blocked") return "run is blocked; inspect only the narrow failed evidence";
+  if (snapshot.state === "ready-for-codex") return "CEO acceptance decision and final verification are pending";
+  if (!progress.active.length && progress.pending.length) return `no worker is active while ${progress.pending.length} item(s) wait for dependency or dispatch`;
+  return "none recorded";
+}
+
+function controlRoomNextMove(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot)) {
+  if (!graphIntegrity.valid) return "stop the damaged contract and call run-project-manager once with canonical objectives, classes, boundaries, and real dependencies";
+  if (Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0) return "close and acknowledge the old host worker before any replacement";
+  if ((snapshot.workItems || []).some((item) => ["host-dispatch-required", "host-reserved"].includes(item.state))) {
+    return "execute the token-bound native Codex reservation/spawn action; keep the parent task manager-only";
+  }
+  if (snapshot.finalVerification?.passed === false) return "assign the smallest correction for the failed gate, then re-verify";
+  if (snapshot.state === "ready-for-codex") return "review compact evidence once, request one bounded correction if needed, then record final verification";
+  if (snapshot.state === "completed") return "objective verified; report completion and stop creating work";
+  if (progress.failed.length || progress.blocked.length) return "rescope or reassign the narrow failed lane; ask the user only for a real authorization or irreversible decision";
+  if (progress.active.length) return "monitor the existing workers once; intervene on a recorded stall, failure, capacity change, or dependency release without spawning duplicates";
+  if (progress.pending.length) return "dispatch the next dependency-ready lane or resolve its recorded dependency";
+  return "inspect the recorded blocker and make one evidence-based management decision";
+}
+
+function formatCeoControlRoomBrief(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot), reportWait = {}) {
+  const capacity = (snapshot.resources || []).length
+    ? ["codex", "claude", "antigravity", "cursor"].map((platform) => platformCapacitySummary(snapshot, progress, platform)).join(" | ")
+    : "resource snapshot not recorded; refresh before assigning new work";
+  return [
+    "CEOControlRoom:",
+    `Changed: ${controlRoomChangedSummary(snapshot, progress, graphIntegrity, reportWait)}`,
+    `Team now: ${controlRoomTeamSummary(snapshot, progress)}`,
+    `Capacity: ${capacity}; next review=${snapshot.nextCapacityCheckpointAt || "on refresh"}`,
+    `Progress: ${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; pending=${progress.pending.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}`,
+    `Blocker/Decision: ${controlRoomBlockerSummary(snapshot, progress, graphIntegrity, reportWait)}`,
+    `Next: ${controlRoomNextMove(snapshot, progress, graphIntegrity)}`,
+  ];
+}
+
 function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportProfileOverride = null) {
   const orchestrated = Number(snapshot.version || 1) >= 2;
   const progress = orchestrationProgress(snapshot);
@@ -4632,28 +4777,18 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     `State: ${snapshot.state}`,
     orchestrated ? `CompletionClaimAllowed: ${snapshot.state === "completed"}` : null,
     orchestrated ? `RequiredUserStatus: ${reportAddress ? `${reportAddress}, ` : ""}AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
+    orchestrated ? "ControlRoomScope: one existing Codex control-room task; provider worker sessions/jobs are allowed and expected; never create Codex tasks/threads for workers." : null,
+    ...(orchestrated ? formatCeoControlRoomBrief(snapshot, progress, graphIntegrity, reportWait) : []),
     orchestrated && snapshot.state !== "completed" ? `RequiredClaimBoundary: do not say done or successful; report the exact ${snapshot.state} state and only the workers actually recorded below.` : null,
     `Workspace: ${workspace}`,
-    orchestrated ? `ProjectDuration: ${snapshot.deadlineAt ? `optional deadline ${snapshot.deadlineAt}` : "continuous until verified, blocked, or explicitly stopped"}` : null,
-    orchestrated ? `CapacityHorizon: rolling ${snapshot.horizonHours || 5}h forecast; nextReview=${snapshot.nextCapacityCheckpointAt || "on next status refresh"}; reviews=${snapshot.capacityCheckpointCount || 0}` : null,
-    orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; claudeBudget=${describeClaudeBudgetPolicy(snapshot)}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
-    orchestrated ? `CodexRunway: reserve=${snapshot.codexManagerReservePercent ?? 15}%; nativeConcurrency=${snapshot.maxConcurrentCodexWorkers ?? 1}; checkpointDelay=${capacityCheckpointDelayMinutes(snapshot)}m` : null,
     orchestrated && !graphIntegrity.valid ? `WorkGraphIntegrity: invalid; ${graphIntegrity.reason}` : null,
-    orchestrated ? "Continuity: durable external work survives Codex turns and resets; resume this run from the same Goal/task with project-manager-status." : null,
-    orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
-    `WaitedSeconds: ${reportWait.elapsedSeconds}`,
     orchestrated && reportWait.requestedSeconds > 0
       ? `StatusChange: ${reportWait.transitionDetected ? "recorded transition detected; report the change now" : `none during ${reportWait.elapsedSeconds}s; report one activity checkpoint without repeating unchanged history`}`
       : null,
     orchestrated && reportWait.refreshError ? `StatusRefreshWarning: ${reportWait.refreshError}; returning the last verified snapshot. Do not infer a terminal state.` : null,
-    `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
-    orchestrated ? `WorkProgress: ${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}; pending=${progress.pending.length}` : null,
-    orchestrated && progress.completed.length ? `CompletedWork: ${compactWorkItemIds(progress.completed)}` : null,
-    orchestrated && progress.active.length ? `ActiveWork: ${compactWorkItemIds(progress.active)}` : null,
-    orchestrated && (progress.failed.length || progress.blocked.length) ? `FailedOrBlockedWork: failed=${compactWorkItemIds(progress.failed)}; blocked=${compactWorkItemIds(progress.blocked)}` : null,
-    orchestrated && progress.transitionText !== "none recorded" ? `LatestTransition: ${progress.transitionText}` : null,
+    !orchestrated ? `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}` : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid ? "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop and no automation unless explicitly requested." : null,
-    orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Report only Changed, Team now, Progress, Blocker, and Next. Omit unchanged boilerplate and never answer only \"running\".` : null,
+    orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Relay CEOControlRoom exactly: Changed, Team now, Capacity, Progress, Blocker/Decision, Next. Do not freeform, omit owners/capacity, repeat history, or answer only \"running\".` : null,
     orchestrated && !graphIntegrity.valid && snapshot.state !== "completed"
       ? "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch."
       : null,
@@ -4787,7 +4922,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     : "Next: this run is stopped. Apply the latest user constraints and start a new objective run only if the user still wants continuation.");
   else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker and continue or re-verify this objective; completion is not allowed.");
   else if (snapshot.state === "ready-for-codex") lines.push((snapshot.workItems || []).some((item) => ["host-dispatch-required", "host-reserved"].includes(item.state))
-    ? "Next: acknowledge HostCodexReservationActions before spawning. Spawn only the returned HostCodexActions, then bind the returned agent id with hostWorkerEvents. The manager chat must not perform those tasks itself."
+    ? "Next: acknowledge HostCodexReservationActions before spawning. Spawn only the returned HostCodexActions, then bind the returned agent id with hostWorkerEvents. The parent control-room task must not perform those tasks itself."
     : snapshot.managerOnly === true
       ? "Next: the manager must review the compact artifacts and recorded verification evidence, request one bounded correction if needed, then call project-manager-status with projectVerified=true. Do not rerun project work in this chat."
       : "Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
@@ -8529,6 +8664,12 @@ function runSelfTest() {
   assert(defaultToolNames.length === 10 && defaultToolNames.includes("run-project-manager") && defaultToolNames.includes("project-manager-status") && !defaultToolNames.includes("submit-agy-job"), "default MCP discovery exposes only the lean manager control surface");
   assert(exposedMcpTools("true").length === tools.length, "advanced MCP discovery remains available through one explicit environment switch");
   assert(/^\d+\.\d+\.\d+/.test(pluginVersion), "MCP server version follows the plugin manifest");
+  const managerSkill = fs.readFileSync(path.join(pluginRoot, "skills", "ai-mobile", "SKILL.md"), "utf8");
+  assert(managerSkill.includes("do not create another Codex control-room task")
+    && managerSkill.includes("Provider worker sessions/jobs are not Codex control-room tasks and remain allowed")
+    && managerSkill.includes("Never use `create_thread` to create a worker")
+    && managerSkill.includes("`Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`"),
+  "skill distinguishes one Codex control-room task from allowed provider workers and requires the six-field CEO brief");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
@@ -9401,17 +9542,45 @@ function runSelfTest() {
       workItems: [{ id: "compact", state: "completed", assignment: "self-test", assignedModel: "none", dependsOn: [] }],
       jobs: [{ jobId: compactJob.jobId, laneId: "compact", state: "completed", assignedTasks: ["compact"], model: "none" }],
     }, 0);
-    assert(!compactSnapshot.includes("Changed: NONE") && compactSnapshot.length < 1800, `aggregate readback omits no-op changed markers and stays compact (${compactSnapshot.length} chars)`);
+    assert(compactSnapshot.includes("CEOControlRoom:")
+      && compactSnapshot.includes("workers=none active")
+      && !compactSnapshot.includes("Changed: NONE")
+      && compactSnapshot.length < 1800,
+    `aggregate readback exposes an idle CEO brief, omits no-op changed markers, and stays compact (${compactSnapshot.length} chars)`);
     const activeProgressSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       runId: "visible-progress-test",
       state: "running",
+      codexManagerReservePercent: 15,
+      nextCapacityCheckpointAt: "2026-07-12T04:20:00.000Z",
       counts: { total: 1, completed: 0, running: 1, failed: 0 },
       workItems: [{ id: "active-review", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [] }],
       jobs: [{ jobId: compactJob.jobId, laneId: "active", state: "running", assignedTasks: ["active-review"], workItemIds: ["active-review"], model: "sonnet", startedAt: new Date(Date.now() - 30000).toISOString(), currentStep: "reviewing" }],
+      resources: [
+        { id: "codex:current", platform: "codex", team: "Codex", model: "gpt-test", displayName: "GPT Test", state: "manager-reserve", remainingPercent: 12, resetAt: "2026-07-12T04:00:00.000Z", dispatchable: false },
+        { id: "claude:sonnet", platform: "claude", team: "Claude Code CLI", model: "sonnet", displayName: "Claude Sonnet", state: "available", remainingPercent: 80, resetAt: "2026-07-12T05:00:00.000Z", dispatchable: true },
+        { id: "antigravity:flash", platform: "antigravity", team: "Antigravity CLI", model: "flash", displayName: "Gemini Flash", state: "available", remainingPercent: 65, resetAt: "2026-07-12T06:00:00.000Z", dispatchable: true },
+      ],
       decisions: [{ at: utcStamp(), type: "worker-start", workItemId: "active-review", resourceId: "claude:sonnet" }],
     }, 120, { ...DEFAULT_PROFILE, address: "My Lord", updateStyle: "concise-executive" });
-    assert(activeProgressSnapshot.includes("WorkProgress: 0/1 completed; active=1") && activeProgressSnapshot.includes("RequiredUserStatus: My Lord") && activeProgressSnapshot.includes("Changed, Team now, Progress, Blocker, and Next") && activeProgressSnapshot.includes("waitSeconds=120") && activeProgressSnapshot.includes("Activity: started="), "running manager snapshots enforce private address, executive progress fields, and one transition-aware wait");
+    assert(activeProgressSnapshot.includes("CEOControlRoom:")
+      && activeProgressSnapshot.includes("Team now: Codex parent=CEO/manager")
+      && activeProgressSnapshot.includes("active-review->Claude Code CLI/sonnet")
+      && activeProgressSnapshot.includes("Capacity: Codex=manager-reserve")
+      && activeProgressSnapshot.includes("Claude=active")
+      && activeProgressSnapshot.includes("Antigravity=available")
+      && activeProgressSnapshot.includes("remaining=12%")
+      && activeProgressSnapshot.includes("reserve=15%")
+      && activeProgressSnapshot.includes("Progress: 0/1 completed; active=1")
+      && activeProgressSnapshot.includes("Blocker/Decision:")
+      && activeProgressSnapshot.includes("RequiredUserStatus: My Lord")
+      && activeProgressSnapshot.includes("Changed, Team now, Capacity, Progress, Blocker/Decision, Next")
+      && activeProgressSnapshot.includes("one existing Codex control-room task")
+      && activeProgressSnapshot.includes("provider worker sessions/jobs are allowed and expected")
+      && activeProgressSnapshot.includes("waitSeconds=120")
+      && activeProgressSnapshot.includes("Activity: started=")
+      && activeProgressSnapshot.length < 3800,
+    `running manager snapshots expose a bounded six-field CEO brief, owners, capacity, and one transition-aware wait (${activeProgressSnapshot.length} chars)`);
     const refreshWarningSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       runId: "refresh-warning-test",
@@ -9431,7 +9600,13 @@ function runSelfTest() {
       workItems: [{ id: "safe-ready-recovery", objective: "Complete work item 2", state: "completed", assignment: "antigravity:gemini-3.5-flash-medium", assignedModel: "gemini-3.5-flash-medium", dependsOn: [], executionClass: "analysis", readOnly: true }],
       jobs: [],
     }, 0);
-    assert(malformedGraphSnapshot.includes("WorkGraphIntegrity: invalid") && malformedGraphSnapshot.includes("Call run-project-manager once") && malformedGraphSnapshot.includes("do not integrate, verify") && !malformedGraphSnapshot.includes("NextCheck: one project-manager-status"), "persisted placeholder graphs require safe canonical replacement instead of integration or repeated polling");
+    assert(malformedGraphSnapshot.includes("WorkGraphIntegrity: invalid")
+      && malformedGraphSnapshot.includes("Blocker/Decision: manager intervention required: replace the malformed graph")
+      && malformedGraphSnapshot.includes("Next: stop the damaged contract and call run-project-manager once")
+      && malformedGraphSnapshot.includes("Call run-project-manager once")
+      && malformedGraphSnapshot.includes("do not integrate, verify")
+      && !malformedGraphSnapshot.includes("NextCheck: one project-manager-status"),
+    "persisted placeholder graphs surface a CEO intervention and safe canonical replacement instead of integration or repeated polling");
     const supersededJob = createJob({ goal: "superseded failure self-test", workspace, mode: "review", worker: "self-test" });
     fs.writeFileSync(path.join(supersededJob.jobDir, "result.md"), "- SUPERSEDED_DETAIL_SHOULD_NOT_BE_REPEATED\n", "utf8");
     fs.writeFileSync(path.join(supersededJob.jobDir, "test-output-summary.md"), "Result: failed\n", "utf8");

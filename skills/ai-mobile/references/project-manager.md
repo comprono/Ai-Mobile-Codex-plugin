@@ -16,8 +16,9 @@
 - Keep depth at one. Workers do not create workers.
 - Prefer direct execution for a single perspective.
 - Fan out only distinct independent work with no ordering dependency or shared writer state.
-- The current Codex chat owns goals, capacity decisions, steering, user-boundary decisions, compact evidence review, and reporting. In manager-only mode it does not inspect files, run project commands, edit source, or duplicate worker execution.
-- Manager-only applies only to the control-room chat. It must not suppress separate native Codex workers when the host tool is exposed and capacity remains above reserve.
+- Keep exactly one user-facing Codex control-room task/thread per project. Do not use `create_thread` for workers.
+- The parent Codex task owns goals, workstreams, capacity decisions, owner/model assignments, dependencies, risks, intervention, user-boundary decisions, compact evidence review, and reporting. In manager-only mode it does not inspect files, run project commands, edit source, or duplicate worker execution.
+- Manager-only applies only to the control-room task. Native Codex subagents and headless Claude, Antigravity, and Cursor sessions/jobs are allowed and expected when eligible.
 - Do not add a paraphrasing meta-router. Pass the capsule and source artifacts directly; merge once.
 - Launch later stages only after dependencies complete.
 - For a complex default graph, make implementation depend on discovery so the writer receives verified evidence and a narrow file boundary.
@@ -27,7 +28,8 @@
 - Give individual provider calls complexity-adaptive safety leases from 10 to 90 minutes. A dead-call timeout may rescope/fail over the item once; it never terminates the overall objective.
 - Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
 - Treat the initial run result as a dispatch receipt. Report exact assignments, then make one transition-aware status call with `waitSeconds=120`; it returns early on a transition. If unchanged, report one two-minute activity checkpoint and yield until the next Goal continuation.
-- Honor `RequiredUserStatus` and `RequiredProgressReport`. Reports contain only `Changed`, `Team now`, `Progress`, `Blocker`, and `Next`, use the private local address/style, and omit unchanged boilerplate.
+- Honor `CEOControlRoom`, `RequiredUserStatus`, and `RequiredProgressReport`. Relay exactly `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`; include active owner/model/elapsed time and current platform capacity/reset evidence.
+- A CEO continuation is a management decision, not merely a poll. If the status records a stall, failure, quota transition, weak result, or released dependency, rescope, correct, reassign, cool down, fail over, or dispatch the next ready lane before reporting.
 - For an explicitly continuous or 24/7 objective, prefer one active Goal in the same task. Create an automation only when the user separately requests wall-clock reporting.
 - Mark completed or blocked current-Codex items through `project-manager-status`; completion requires a matching compact evidence entry so dependent CLI work advances from verified state.
 - A worker that requires live/current runtime truth depends on the Codex live-control item and receives its evidence. Git status is not runtime evidence.
@@ -66,6 +68,8 @@ When a result is close but incomplete, send one narrow correction. When failure 
 | "One more external reviewer is safer" | Keep low-complexity review of direct operational evidence with Codex |
 | "The five-hour horizon is nearly over" | It is a rolling forecast; refresh capacity and continue the objective |
 | "Codex reset before I finished" | Resume the persisted run, inspect current external job state, and continue from the recorded dependency graph instead of replaying work |
+| "Do not create another chat" | Interpret this as no new Codex control-room task/thread; provider worker sessions/jobs remain allowed and required |
+| "The worker is still running" | Show owner, model, elapsed time, capacity, and the next intervention threshold; do not report only `running` |
 
 ## User Escalation
 

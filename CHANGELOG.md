@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5 - 2026-07-12
+
+- Replaced the ambiguous "do not create another chat" rule with an explicit single Codex control-room task contract; native Codex subagents and headless Claude, Antigravity, and Cursor worker sessions/jobs remain allowed and expected.
+- Added a bounded six-field `CEOControlRoom` status brief with changed state, active owners/models/elapsed time, per-platform capacity and reset evidence, progress, blocker or decision, and the next management intervention.
+- Strengthened the manager skill from passive polling into active CEO behavior: maintain workstreams and owners, intervene on stalls/failures/quota transitions, reconsider underused eligible resources, and accept evidence before final verification.
+- Added the short default trigger `@ai-mobile Manage this project as my CEO control room.` and aligned runtime schemas, README, Pages, and operating references with the same semantics.
+
 ## 0.1.4 - 2026-07-12
 
 - Fixed defensive work-item normalization so `title`, `description`, and `class` aliases preserve the intended objective and analysis/code/integration execution class instead of collapsing work into generic read-only Flash tasks.
