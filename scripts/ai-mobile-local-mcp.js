@@ -99,6 +99,35 @@ const projectWorkItemSchema = {
   additionalProperties: false,
 };
 
+const PROACTIVE_REPORTING_MIN_MINUTES = 5;
+const PROACTIVE_REPORTING_MAX_MINUTES = 240;
+const PROACTIVE_REPORTING_DEFAULT_MINUTES = 20;
+const REQUIRED_CONTROL_ROOM_REPORT_FIELDS = Object.freeze([
+  "Objective",
+  "Changed",
+  "Team now",
+  "Capacity",
+  "Progress",
+  "Blocker/Decision",
+  "Next",
+]);
+const proactiveReportingSchema = {
+  type: "object",
+  description: "Explicitly request one host-managed heartbeat attached to the current control-room thread. The MCP server only emits an idempotent host action; it never creates an automation or invents a thread id.",
+  properties: {
+    enabled: { type: "boolean", description: "Enable or disable proactive same-thread reporting." },
+    intervalMinutes: {
+      type: "integer",
+      minimum: PROACTIVE_REPORTING_MIN_MINUTES,
+      maximum: PROACTIVE_REPORTING_MAX_MINUTES,
+      default: PROACTIVE_REPORTING_DEFAULT_MINUTES,
+      description: "Bounded heartbeat interval in minutes. The host must reuse one matching same-thread heartbeat.",
+    },
+  },
+  required: ["enabled"],
+  additionalProperties: false,
+};
+
 const tools = [
   {
     name: "quick",
@@ -313,6 +342,7 @@ const tools = [
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
         managerOnly: { type: "boolean", description: "Keep the calling Codex task as a management/reporting control room rather than an implementation worker.", default: true },
+        proactiveReporting: proactiveReportingSchema,
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         unattendedMode: { type: "boolean", description: "Plan for no-human continuity. Interactive workers are excluded unless their separately authorized non-interactive policy is active.", default: false },
         allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
@@ -363,6 +393,7 @@ const tools = [
         allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
         managerOnly: { type: "boolean", description: "Keep the calling Codex task as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
+        proactiveReporting: proactiveReportingSchema,
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; standalone and host-native Codex workers stop at this threshold.", default: 15 },
@@ -438,7 +469,7 @@ const tools = [
         cycleVerified: { type: "boolean", description: "Record the current continuous-management cycle as verified without completing the root objective or Codex Goal.", default: false },
         cycleVerificationFailed: { type: "boolean", description: "Record the current continuous-management cycle as failed so a bounded correction cycle can follow.", default: false },
         cycleVerificationSummary: { type: "string", description: "Required compact evidence when a continuous-management cycle is recorded as passed or failed." },
-        expectedRunId: { type: "string", description: "Exact RunId from the latest status. Required for cycle verification or nextWorkItems so delayed requests cannot mutate another run." },
+        expectedRunId: { type: "string", description: "Exact RunId from the latest status. Optional identity guard for heartbeat/status calls and required for cycle verification or nextWorkItems so delayed requests cannot mutate another run." },
         expectedCycleId: { type: "string", description: "Exact ActiveCycleId from the latest status. Required for cycle verification or nextWorkItems so retries cannot advance the wrong cycle." },
         nextCycleObjective: { type: "string", description: "Bounded objective for the next cycle in the same durable continuous-management run." },
         nextWorkItems: { type: "array", maxItems: 12, items: projectWorkItemSchema, description: "Dependency-aware work for the next cycle. Requires the prior cycle to be verified or failed; keeps the same run id and root goal." },
@@ -2483,6 +2514,7 @@ function topologicalStage(workItem, byId, memo = new Map(), stack = new Set()) {
 async function buildProjectManagerPlan(args = {}) {
   args = applyLocalRuntimePolicy(normalizeManagerOnly(args));
   const controls = normalizedRunControls(args);
+  const reporting = normalizedProactiveReporting(args);
   const workspace = safeWorkspacePath(args.workspace);
   const goal = String(args.goal || "").trim();
   if (!goal) throw new Error("project-manager-plan requires a non-empty goal.");
@@ -2695,6 +2727,12 @@ async function buildProjectManagerPlan(args = {}) {
       maxParallelWriters: controls.maxParallelWriters,
       crossResetContinuity: "durable-run-resume",
     },
+    reporting: {
+      ...reporting,
+      hostManaged: true,
+      sameThreadOnly: true,
+      requiredFields: REQUIRED_CONTROL_ROOM_REPORT_FIELDS,
+    },
     mainCodexRole: args.managerOnly
       ? [
           "Own the goal, lifecycle gates, resource decisions, and user communication.",
@@ -2732,6 +2770,10 @@ async function buildProjectManagerPlan(args = {}) {
     `HostCodex: available=${args.hostCodexAvailable === true}; eligibleModels=${host.filter((candidate) => candidate.state === "available").map((candidate) => candidate.model).join(",") || "none"}`,
     ...projectManagerRunwayLines(controls, context, candidates),
     `ControlRoomMode: ${args.managerOnly ? "manager-only" : "manager-and-integrator"}`,
+    `ProactiveReporting: enabled=${reporting.enabled}; intervalMinutes=${reporting.intervalMinutes}; hostManaged=true; sameThreadOnly=true`,
+    reporting.enabled
+      ? `ReportingHostBoundary: after a durable run starts, the host must ensure exactly one matching heartbeat on this current thread and relay ${REQUIRED_CONTROL_ROOM_REPORT_FIELDS.join(", ")}. This MCP plan creates no automation and contains no thread id.`
+      : "ReportingAutomation: none; proactive reporting was not explicitly requested.",
     `FanOutStageZero: ${plan.fanOutReadyStageZero}`,
     "Actions:",
   ];
@@ -2757,6 +2799,34 @@ async function buildProjectManagerPlan(args = {}) {
 // less-safe manager-and-integrator mode.
 function normalizeManagerOnly(args = {}) {
   return { ...args, managerOnly: args.managerOnly !== false };
+}
+
+function normalizedProactiveReporting(args = {}) {
+  const raw = args.proactiveReporting;
+  if (raw === undefined) {
+    return { enabled: false, intervalMinutes: PROACTIVE_REPORTING_DEFAULT_MINUTES };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("proactiveReporting must be an object with enabled and optional intervalMinutes fields.");
+  }
+  if (typeof raw.enabled !== "boolean") {
+    throw new Error("proactiveReporting.enabled must be true or false.");
+  }
+  const intervalMinutes = raw.intervalMinutes === undefined
+    ? PROACTIVE_REPORTING_DEFAULT_MINUTES
+    : Number(raw.intervalMinutes);
+  if (!Number.isInteger(intervalMinutes)
+    || intervalMinutes < PROACTIVE_REPORTING_MIN_MINUTES
+    || intervalMinutes > PROACTIVE_REPORTING_MAX_MINUTES) {
+    throw new Error(`proactiveReporting.intervalMinutes must be an integer from ${PROACTIVE_REPORTING_MIN_MINUTES} to ${PROACTIVE_REPORTING_MAX_MINUTES}.`);
+  }
+  return { enabled: raw.enabled, intervalMinutes };
+}
+
+function proactiveReportingFromManifest(manifest = {}) {
+  return manifest.reporting === undefined
+    ? normalizedProactiveReporting({})
+    : normalizedProactiveReporting({ proactiveReporting: manifest.reporting });
 }
 
 function applyLocalRuntimePolicy(args = {}) {
@@ -4385,6 +4455,7 @@ function runContractChanges(manifest, args = {}) {
 function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
   const next = { ...effectiveArgs };
   if (rawArgs.completionPolicy === undefined) next.completionPolicy = completionPolicyFrom(manifest);
+  if (rawArgs.proactiveReporting === undefined) next.proactiveReporting = proactiveReportingFromManifest(manifest);
   for (const key of ["runDeadlineMinutes", "capacityCheckpointMinutes", "codexManagerReservePercent", "maxConcurrentCodexWorkers", "maxParallelWriters", "maxWorkerMinutes", "maxClaudeOutputTokens", "maxClaudeBudgetUsd"]) {
     if (rawArgs[key] === undefined && manifest[key] !== undefined) next[key] = manifest[key];
   }
@@ -4397,6 +4468,33 @@ function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
   next.verification = boundedTextList([...(manifest.verification || []), ...(Array.isArray(rawArgs.verification) ? rawArgs.verification : [])], 12, 400);
   if ((!Array.isArray(rawArgs.workItems) || !rawArgs.workItems.length) && !String(rawArgs.taskSplit || "").trim()) next.workItems = manifest.workItems || [];
   return next;
+}
+
+function updateActiveRunReporting(workspace, manifest, rawArgs = {}) {
+  if (!Object.prototype.hasOwnProperty.call(rawArgs, "proactiveReporting")) return manifest;
+  const requested = normalizedProactiveReporting(rawArgs);
+  const current = proactiveReportingFromManifest(manifest);
+  if (manifest.reporting !== undefined && JSON.stringify(requested) === JSON.stringify(current)) return manifest;
+
+  let updated = manifest;
+  withFileLock(lastTeamRunJsonPath(workspace), () => {
+    const latest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), manifest), true);
+    if (String(latest.runId || "") !== String(manifest.runId || "")) {
+      throw new Error(`Reporting configuration changed run identity from ${manifest.runId || "<unknown>"} to ${latest.runId || "<unknown>"}; refresh status instead of mutating another run.`);
+    }
+    const latestReporting = proactiveReportingFromManifest(latest);
+    if (latest.reporting !== undefined && JSON.stringify(requested) === JSON.stringify(latestReporting)) {
+      updated = latest;
+      return;
+    }
+    updated = appendOrchestrationDecision({ ...latest, reporting: requested }, {
+      type: "reporting-config",
+      enabled: requested.enabled,
+      intervalMinutes: requested.intervalMinutes,
+    });
+    writeTeamRunManifest(workspace, updated);
+  });
+  return updated;
 }
 
 function capacityCheckpointDue(manifest, now = Date.now()) {
@@ -5441,6 +5539,61 @@ function formatCeoControlRoomBrief(snapshot = {}, progress = orchestrationProgre
   ];
 }
 
+function sameThreadHeartbeatDedupeKey(workspace) {
+  const normalized = process.platform === "win32" ? path.resolve(workspace).toLowerCase() : path.resolve(workspace);
+  return `ai-mobile-control-room-${crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16)}`;
+}
+
+function sameThreadHeartbeatAction(workspace, snapshot = {}) {
+  const reporting = proactiveReportingFromManifest(snapshot);
+  if (!reporting.enabled) return null;
+  const active = isActiveOrchestrationRun(snapshot);
+  const runId = String(snapshot.runId || "").trim();
+  return {
+    schemaVersion: 1,
+    action: active ? "ensure" : "disable",
+    kind: "same-thread-heartbeat",
+    executor: "host",
+    sameThread: true,
+    cardinality: 1,
+    dedupeKey: sameThreadHeartbeatDedupeKey(workspace),
+    intervalMinutes: reporting.intervalMinutes,
+    runId,
+    resumeExistingGoal: active,
+    statusCall: active ? {
+      tool: "project-manager-status",
+      arguments: { workspace, expectedRunId: runId, waitSeconds: 120 },
+    } : null,
+    transitionFirst: true,
+    neverSilent: true,
+    requiredReportingFields: REQUIRED_CONTROL_ROOM_REPORT_FIELDS,
+    unchangedCheckpointFields: ["State", "Team now", "Elapsed", "Next intervention"],
+    constraints: {
+      reuseMatchingHeartbeat: true,
+      createDetachedChat: false,
+      createGoal: false,
+      createRun: false,
+    },
+  };
+}
+
+function proactiveReportingStatusLines(workspace, snapshot = {}) {
+  const reporting = proactiveReportingFromManifest(snapshot);
+  if (!reporting.enabled) {
+    return ["ReportingAutomation: none; No automation is authorized because proactive reporting was not explicitly requested."];
+  }
+  const lines = [
+    `ProactiveReporting: enabled=true; intervalMinutes=${reporting.intervalMinutes}; persisted=true`,
+    `RequiredReportingFields: ${JSON.stringify(REQUIRED_CONTROL_ROOM_REPORT_FIELDS)}`,
+  ];
+  lines.push(
+    `SameThreadHeartbeatAction: ${JSON.stringify(sameThreadHeartbeatAction(workspace, snapshot))}`,
+    "ReportingHostBoundary: execute the action in the host only; this MCP server created no automation and supplied no thread id.",
+    "ReportingDelivery: report a recorded transition with all required fields; otherwise emit one concise unchanged checkpoint and never silently yield.",
+  );
+  return lines;
+}
+
 function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportProfileOverride = null) {
   const orchestrated = Number(snapshot.version || 1) >= 2;
   const progress = orchestrationProgress(snapshot);
@@ -5448,6 +5601,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
   const reportProfile = reportProfileOverride || (process.env.AI_MOBILE_SELF_TEST === "1" ? DEFAULT_PROFILE : readProfile());
   const reportAddress = truncateText(String(reportProfile.address || "").trim(), 80);
   const reportStyle = truncateText(String(reportProfile.updateStyle || "concise-executive").trim(), 40);
+  const reporting = proactiveReportingFromManifest(snapshot);
   const reportWait = snapshot.reportWait || {
     requestedSeconds: waitedSeconds,
     elapsedSeconds: waitedSeconds,
@@ -5499,6 +5653,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     orchestrated ? `CompletionClaimAllowed: ${completionClaimAllowed}` : null,
     orchestrated ? `RequiredUserStatus: ${reportAddress ? `${reportAddress}, ` : ""}AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
     orchestrated ? "ControlRoomScope: one existing Codex control-room task; provider worker sessions/jobs are allowed and expected; never create Codex tasks/threads for workers." : null,
+    ...(orchestrated ? proactiveReportingStatusLines(workspace, snapshot) : []),
     ...(orchestrated ? formatCeoControlRoomBrief(snapshot, progress, graphIntegrity, reportWait) : []),
     orchestrated && !completionClaimAllowed ? `RequiredClaimBoundary: do not say the root objective or Codex Goal is done; report the exact ${snapshot.state} state and only the workers actually recorded below.` : null,
     `Workspace: ${workspace}`,
@@ -5508,7 +5663,11 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
       : null,
     orchestrated && reportWait.refreshError ? `StatusRefreshWarning: ${reportWait.refreshError}; returning the last verified snapshot. Do not infer a terminal state.` : null,
     !orchestrated ? `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}` : null,
-    orchestrated && snapshot.state === "running" && graphIntegrity.valid ? "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop and no automation unless explicitly requested." : null,
+    orchestrated && snapshot.state === "running" && graphIntegrity.valid
+      ? (reporting.enabled
+        ? `NextCheck: the host must reuse the one same-thread heartbeat at ${reporting.intervalMinutes}m; each firing makes the exact project-manager-status call in SameThreadHeartbeatAction and never creates another chat, Goal, run, or heartbeat.`
+        : "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop. No automation is authorized unless explicitly requested.")
+      : null,
     orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Relay CEOControlRoom exactly: Objective, Changed, Team now, Capacity, Progress, Blocker/Decision, Next. Do not freeform, omit the root objective/owners/capacity, repeat history, or answer only \"running\".` : null,
     orchestrated && !graphIntegrity.valid && snapshot.state !== "completed"
       ? (isContinuousManagement(snapshot)
@@ -5516,7 +5675,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
         : "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch.")
       : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid
-      ? "RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield to this task's single active Goal; do not create another Codex task, Goal, run, or automation."
+      ? `RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield to this task's single active Goal; do not create another Codex task, Goal, or run${reporting.enabled ? ", and reuse only the heartbeat identified by SameThreadHeartbeatAction" : ", or any automation"}.`
       : null,
     orchestrated && isContinuousManagement(snapshot) && snapshot.state === "ready-for-codex"
       ? (["verified", "failed"].includes(snapshot.activeCycle?.state)
@@ -5696,6 +5855,7 @@ async function orchestrateProject(args = {}) {
   const verification = boundedTextList(args.verification, 12, 400);
   const routingPolicy = routingPolicyFromArgs(args);
   const completionPolicy = completionPolicyFrom(args);
+  const reporting = normalizedProactiveReporting(args);
 
   if (args.start === false) {
     return [
@@ -5763,6 +5923,7 @@ async function orchestrateProject(args = {}) {
     goal,
     rootGoal: goal,
     completionPolicy,
+    reporting,
     cycleNumber: initialCycleId ? 1 : 0,
     cycles: [],
     activeCycle: initialCycleId ? cycleContract(args, workItems, 1) : null,
@@ -5813,6 +5974,7 @@ async function orchestrateProject(args = {}) {
     `RunId: ${runId}`,
     `Goal: ${goal}`,
     `CompletionPolicy: ${completionPolicy}`,
+    `ProactiveReporting: enabled=${reporting.enabled}; intervalMinutes=${reporting.intervalMinutes}`,
     `CapacityProbe: ${context.capacityProbe}`,
     `WorkItems: ${workItems.length}`,
     `ExternalResourcesSelected: ${[...new Set(workItems.filter((item) => !["codex:current", "resource:unavailable"].includes(item.assignment)).map((item) => item.assignment))].length}`,
@@ -5845,10 +6007,11 @@ async function runProjectManager(args = {}) {
     return await orchestrateProject(effectiveArgs);
   } catch (error) {
     if (!/already has active orchestration run/i.test(String(error?.message || ""))) throw error;
-    const existing = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+    let existing = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
     const goalChanged = String(existing.goal || "").trim() !== String(effectiveArgs.goal || "").trim();
     const expired = runDeadlineExpired(existing);
     if (!goalChanged) {
+      existing = updateActiveRunReporting(workspace, existing, args);
       effectiveArgs = carryForwardSameGoalContract(effectiveArgs, args, existing);
     }
     const contractChanges = goalChanged ? [] : runContractChanges(existing, effectiveArgs);
@@ -6451,6 +6614,12 @@ async function projectManagerStatus(args = {}) {
     cycleId: String(args.expectedCycleId || "").trim(),
   };
   let expectedCycleRevision = null;
+  if (!wantsCycleTransition && expectedCycleTransition.runId) {
+    const preview = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+    if (String(preview.runId || "") !== expectedCycleTransition.runId) {
+      throw new Error(`Status identity mismatch: expected run ${expectedCycleTransition.runId}, current run is ${preview.runId || "<unknown>"}. Do not resume or report a replacement run from this heartbeat.`);
+    }
+  }
   if (wantsCycleTransition) {
     const preview = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
     assertCycleTransitionIdentity(preview, expectedCycleTransition);
@@ -10251,6 +10420,7 @@ function runSelfTest() {
   const managerWorkItemSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties?.workItems?.items;
   assert(managerWorkItemSchema?.properties?.objective && managerWorkItemSchema?.properties?.description && managerWorkItemSchema?.properties?.executionClass && managerWorkItemSchema?.properties?.class && managerWorkItemSchema?.properties?.verificationCommands, "manager tool publishes canonical work-item fields, defensive aliases, and structured verification");
   const managerToolSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties;
+  const managerPlanSchema = tools.find((tool) => tool.name === "project-manager-plan")?.inputSchema?.properties;
   const managerStatusSchema = tools.find((tool) => tool.name === "project-manager-status")?.inputSchema?.properties;
   assert(managerToolSchema?.completionPolicy
     && managerToolSchema?.cycleObjective
@@ -10259,6 +10429,27 @@ function runSelfTest() {
     && managerStatusSchema?.expectedRunId
     && managerStatusSchema?.expectedCycleId,
   "manager tools expose continuous root-goal, identity-guarded, same-run cycle lifecycle fields");
+  assert(managerToolSchema?.proactiveReporting?.properties?.intervalMinutes?.minimum === PROACTIVE_REPORTING_MIN_MINUTES
+    && managerToolSchema?.proactiveReporting?.properties?.intervalMinutes?.maximum === PROACTIVE_REPORTING_MAX_MINUTES
+    && managerPlanSchema?.proactiveReporting === proactiveReportingSchema,
+  "manager run and plan schemas expose one bounded explicit proactive-reporting contract");
+  assert(JSON.stringify(normalizedProactiveReporting({ proactiveReporting: { enabled: true, intervalMinutes: 15 } })) === JSON.stringify({ enabled: true, intervalMinutes: 15 })
+    && normalizedProactiveReporting({}).enabled === false,
+  "proactive reporting is explicit and normalizes to a bounded durable configuration");
+  for (const invalidReporting of [
+    { enabled: true, intervalMinutes: PROACTIVE_REPORTING_MIN_MINUTES - 1 },
+    { enabled: true, intervalMinutes: PROACTIVE_REPORTING_MAX_MINUTES + 1 },
+    { enabled: true, intervalMinutes: 10.5 },
+    { intervalMinutes: 20 },
+  ]) {
+    let rejected = false;
+    try {
+      normalizedProactiveReporting({ proactiveReporting: invalidReporting });
+    } catch {
+      rejected = true;
+    }
+    assert(rejected, `invalid proactive reporting is rejected: ${JSON.stringify(invalidReporting)}`);
+  }
   const defaultToolNames = exposedMcpTools("").map((tool) => tool.name);
   assert(defaultToolNames.length === 10 && defaultToolNames.includes("run-project-manager") && defaultToolNames.includes("project-manager-status") && !defaultToolNames.includes("submit-agy-job"), "default MCP discovery exposes only the lean manager control surface");
   assert(exposedMcpTools("true").length === tools.length, "advanced MCP discovery remains available through one explicit environment switch");
@@ -11699,6 +11890,83 @@ function runSelfTest() {
       && activeProgressSnapshot.includes("Activity: started=")
       && activeProgressSnapshot.length < 4000,
     `running manager snapshots expose a bounded seven-field CEO brief, root goal, owners, capacity, and one transition-aware wait (${activeProgressSnapshot.length} chars)`);
+    assert(activeProgressSnapshot.includes("ReportingAutomation: none; No automation is authorized")
+      && !activeProgressSnapshot.includes("SameThreadHeartbeatAction:"),
+    "legacy non-proactive runs explicitly advise no automation and emit no heartbeat action");
+
+    const proactiveManifest = {
+      version: 2,
+      runId: "proactive-reporting-test",
+      state: "running",
+      rootGoal: "Continuously deliver verified improvements.",
+      completionPolicy: "continuous-management",
+      reporting: { enabled: true, intervalMinutes: 15 },
+      activeCycle: { id: "cycle-1", number: 1, state: "running", itemIds: ["reporting-work"] },
+      workItems: [{ id: "reporting-work", objective: "Complete the current bounded improvement", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [], readOnly: true }],
+      jobs: [{ jobId: "proactive-worker", state: "running", workItemIds: ["reporting-work"], assignedTasks: ["reporting-work"], model: "sonnet", transport: "claude-cli", startedAt: utcStamp() }],
+      resources: [],
+      decisions: [],
+    };
+    const proactiveSnapshot = formatTeamRunSnapshot(workspace, proactiveManifest, 120);
+    const heartbeatLines = proactiveSnapshot.split(/\r?\n/).filter((line) => line.startsWith("SameThreadHeartbeatAction: "));
+    const heartbeatAction = JSON.parse(heartbeatLines[0].slice("SameThreadHeartbeatAction: ".length));
+    assert(heartbeatLines.length === 1
+      && heartbeatAction.action === "ensure"
+      && heartbeatAction.kind === "same-thread-heartbeat"
+      && heartbeatAction.executor === "host"
+      && heartbeatAction.sameThread === true
+      && heartbeatAction.cardinality === 1
+      && heartbeatAction.intervalMinutes === 15
+      && heartbeatAction.runId === proactiveManifest.runId
+      && heartbeatAction.statusCall.arguments.expectedRunId === proactiveManifest.runId
+      && heartbeatAction.statusCall.arguments.waitSeconds === 120
+      && heartbeatAction.neverSilent === true
+      && JSON.stringify(heartbeatAction.requiredReportingFields) === JSON.stringify(REQUIRED_CONTROL_ROOM_REPORT_FIELDS)
+      && !JSON.stringify(heartbeatAction).includes("threadId"),
+    "proactive status emits one exact host-owned same-thread heartbeat action without inventing a thread id");
+    const repeatedHeartbeatLine = formatTeamRunSnapshot(workspace, proactiveManifest, 0)
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("SameThreadHeartbeatAction: "));
+    assert(repeatedHeartbeatLine === heartbeatLines[0]
+      && proactiveSnapshot.includes("never silently yield")
+      && proactiveSnapshot.includes("RequiredReportingFields:"),
+    "repeated status renders the same dedupe action and proactive reporting never silently yields");
+    const stoppedProactiveSnapshot = formatTeamRunSnapshot(workspace, {
+      ...proactiveManifest,
+      state: "blocked",
+      termination: { category: "user-steering", reason: "continuous management stopped" },
+      workItems: proactiveManifest.workItems.map((item) => ({ ...item, state: "blocked" })),
+      jobs: [],
+    }, 0);
+    const disableHeartbeatAction = JSON.parse(stoppedProactiveSnapshot.split(/\r?\n/)
+      .find((line) => line.startsWith("SameThreadHeartbeatAction: "))
+      .slice("SameThreadHeartbeatAction: ".length));
+    assert(disableHeartbeatAction.action === "disable" && disableHeartbeatAction.statusCall === null, "terminal proactive status tells the host to disable the same heartbeat");
+
+    const reportingWorkspace = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-reporting-self-test-"));
+    const legacyReportingManifest = {
+      version: 2,
+      runId: "durable-reporting-test",
+      goal: "Keep one durable run.",
+      rootGoal: "Keep one durable run.",
+      state: "running",
+      managerOnly: true,
+      workItems: [{ id: "manager-boundary", objective: "Await the manager", state: "codex", assignment: "codex:current", assignedModel: "current", dependsOn: [], readOnly: true }],
+      jobs: [],
+      decisions: [],
+    };
+    writeTeamRunManifest(reportingWorkspace, legacyReportingManifest);
+    const reportingEnabled = updateActiveRunReporting(reportingWorkspace, legacyReportingManifest, { proactiveReporting: { enabled: true, intervalMinutes: 30 } });
+    const reportingResume = updateActiveRunReporting(reportingWorkspace, reportingEnabled, { proactiveReporting: { enabled: true, intervalMinutes: 30 } });
+    const persistedReporting = readJsonFile(lastTeamRunJsonPath(reportingWorkspace), null);
+    const carriedReporting = carryForwardSameGoalContract({ goal: legacyReportingManifest.goal }, {}, persistedReporting);
+    assert(reportingEnabled.runId === legacyReportingManifest.runId
+      && reportingResume.runId === legacyReportingManifest.runId
+      && JSON.stringify(persistedReporting.reporting) === JSON.stringify({ enabled: true, intervalMinutes: 30 })
+      && persistedReporting.decisions.filter((entry) => entry.type === "reporting-config").length === 1
+      && JSON.stringify(carriedReporting.proactiveReporting) === JSON.stringify(persistedReporting.reporting),
+    "reporting configuration persists across status/resume state and repeated enablement does not create another run or duplicate decision");
+    fs.rmSync(reportingWorkspace, { recursive: true, force: true });
     const refreshWarningSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       runId: "refresh-warning-test",
@@ -12212,7 +12480,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "verification-job-worker-cli", "list-jobs-cli", "read-job-cli", "verify-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test", "self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "verification-job-worker-cli", "list-jobs-cli", "read-job-cli", "verify-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -12226,6 +12494,7 @@ if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", 
   }
 
   const actions = {
+    "self-test": async () => runSelfTest(),
     "self-test-cli": async () => runSelfTest(),
     "orchestration-supervisor-cli": runOrchestrationSupervisor,
     "orchestration-plan-cli": buildOrchestrationPlan,

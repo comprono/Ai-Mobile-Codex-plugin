@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.8 - 2026-07-13
+
+- Defined a three-layer continuity contract that distinguishes the detached execution supervisor, the active Codex Goal, and at most one same-thread reporting heartbeat, with none of the layers restricting Codex or provider workers.
+- Authorized explicitly proactive/continuous/unattended/24-7 management requests to reuse or create exactly one same-thread reporting heartbeat without a separate timed-report request, while still forbidding detached or standalone chats and duplicate Goals, runs, or heartbeats.
+- Made reporting transition-first: heartbeat firings and Goal continuations relay the full seven-field `CEOControlRoom` block on recorded transitions and post one concise unchanged checkpoint otherwise, and each firing resumes the same Goal and run including pending native Codex handoffs.
+- Required the heartbeat to be disabled or removed when the user stops continuous management or the run terminates, and removed the contradictory guidance that any recurring report always needed a separate explicit request.
+
 ## 0.2.7 - 2026-07-13
 
 - Prevented concurrent disjoint writers from being failed for peer-owned files by excluding only same-cycle, same-stage, explicitly disjoint peer boundaries from each worker's attributable change set.
