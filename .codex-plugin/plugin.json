@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Capacity-aware Codex control room for parallel native Codex, Claude Code, Antigravity, and optional Cursor workers on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Run one Codex task as a capacity-aware CEO across local AI workers.",
-    "longDescription": "AI Mobile turns one existing Codex task into a manager-only CEO control room for Windows. Manager-only applies to the parent task, while separate native Codex, Claude Code, Antigravity, and optional Cursor worker sessions/jobs execute suitable dependency-ready work. It discovers models, efforts, quota windows, cooldowns, private routing and communication preferences, and recent outcomes; packages transcript-free project context; normalizes alias-safe work graphs; and coordinates token-bound native Codex host agents with external CLI workers. Pairwise-disjoint writers may run concurrently, while overlaps remain serialized. Goal-aware single-task continuity, a protected Codex reserve, sandboxed unattended Antigravity permission policy, durable external jobs, and a zero-model-token supervisor preserve work across usage resets. Transition-aware status waits return early on change and emit a six-field CEO brief with owners, elapsed time, capacity, progress, blockers, and the next intervention. Objectives continue until verified, genuinely blocked, or explicitly stopped, with acknowledged host cancellation, rolling capacity checkpoints, bounded failover, and evidence-gated completion.",
+    "longDescription": "AI Mobile turns one existing Codex task into a manager-only CEO control room for Windows. The exact root objective remains immutable while separate native Codex, Claude Code, Antigravity, and optional Cursor worker sessions/jobs execute dependency-ready delivery cycles. Continuous-management cycles can be verified, failed, and extended under one run id, but cannot complete the root Codex Goal; only finite objectives can return completion permission. The plugin discovers models, efforts, quota windows, cooldowns, private routing preferences, and recent outcomes; packages transcript-free project context; coordinates bounded parallel workers; protects Codex manager reserve; and continues external work through a zero-model-token supervisor. Transition-aware status emits a seven-field CEO brief with root objective, owners, elapsed time, capacity, cycle progress, blockers, and the next intervention.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -88,7 +88,10 @@
       "Claude Code role contracts",
       "Structured Claude worker evidence",
       "Visible manager progress snapshots",
-      "Six-field CEO control-room monitoring",
+      "Seven-field CEO control-room monitoring",
+      "Immutable continuous root objectives",
+      "Same-run delivery cycles",
+      "Continuous completion firewall",
       "Transition-aware manager reporting",
       "Private profile form of address",
       "Automatic writer scope recovery",

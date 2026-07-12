@@ -268,6 +268,10 @@ const tools = [
         artifactRefs: { type: "array", items: { type: "string" }, maxItems: 20 },
         horizonHours: { type: "number", description: "Capacity/reset planning horizon.", default: 5 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
+        completionPolicy: { type: "string", enum: ["finite", "continuous-management"], description: "Root-objective lifecycle. Use continuous-management for persistent CEO control rooms; their delivery cycles never complete the root Goal.", default: "finite" },
+        cycleObjective: { type: "string", description: "Bounded objective for the first delivery cycle. This never replaces the root goal." },
+        cycleAcceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        cycleVerification: { type: "array", items: { type: "string" }, maxItems: 12 },
         hostCodexAvailable: { type: "boolean", description: "True only when the current host exposes a native spawn-agent tool.", default: false },
         currentCodexModel: { type: "string", description: "Current caller model label when visible." },
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
@@ -292,7 +296,7 @@ const tools = [
   },
   {
     name: "run-project-manager",
-    description: "Default AI Mobile control-room call. Inventory current capacity, build a dependency-aware work graph, dispatch eligible CLI workers, and return one compact operating result. Manager-only mode is the default: the calling Codex task manages, steers, reviews compact evidence, and reports instead of exploring the repository, running project diagnostics, editing files, or duplicating delegated work. Separate provider worker sessions/jobs remain allowed. Externally consequential and protected live-state boundaries remain with the current Codex session.",
+    description: "Start or resume one root project objective. Inventory capacity, dispatch a bounded first cycle, and return a compact CEO result. For persistent control rooms use completionPolicy=continuous-management; later cycles use project-manager-status.nextWorkItems under the same run id and can never complete the root Goal. Manager-only keeps execution in separate native Codex/provider workers.",
     inputSchema: {
       type: "object",
       properties: {
@@ -311,6 +315,10 @@ const tools = [
         hostCodexAvailable: { type: "boolean", description: "True only when the current Codex host exposes multi_agent_v1__spawn_agent. Enables separate native Codex worker lanes while the parent control-room task remains manager-only.", default: false },
         estimatedCodexInputTokens: { type: "number", description: "Rough direct-work cost used only as a routing signal.", default: 5000 },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "patch" },
+        completionPolicy: { type: "string", enum: ["finite", "continuous-management"], description: "Root-objective lifecycle. Set continuous-management for a persistent CEO control room; worker cycles cannot complete its Codex Goal.", default: "finite" },
+        cycleObjective: { type: "string", description: "Bounded objective for the first delivery cycle. The root goal remains unchanged." },
+        cycleAcceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        cycleVerification: { type: "array", items: { type: "string" }, maxItems: 12 },
         agyModel: { type: "string", description: "Optional Antigravity model override.", default: "auto" },
         claudeModel: { type: "string", description: "Optional Claude Code model override.", default: "auto" },
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside automatic policy.", default: false },
@@ -338,7 +346,7 @@ const tools = [
   },
   {
     name: "project-manager-status",
-    description: "Compact continuation call for the latest AI Mobile project-manager run. Acknowledges token-bound native Codex host-worker events, advances dependency-ready CLI work, repairs stale jobs, and returns only manager-relevant actions and artifacts.",
+    description: "Continue the latest AI Mobile run. Acknowledge host workers, record finite final verification or continuous cycle verification, append nextWorkItems under the same continuous run id, advance dependency-ready work, and return only CEO-relevant evidence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -391,6 +399,16 @@ const tools = [
         projectVerified: { type: "boolean", description: "Mark the active objective complete only after every work item and final project verification passed.", default: false },
         projectVerificationFailed: { type: "boolean", description: "Record a failed final verification after all work items finish, preserving the blocker instead of permitting completion.", default: false },
         projectVerificationSummary: { type: "string", description: "Required compact evidence when final verification is recorded as passed or failed." },
+        cycleVerified: { type: "boolean", description: "Record the current continuous-management cycle as verified without completing the root objective or Codex Goal.", default: false },
+        cycleVerificationFailed: { type: "boolean", description: "Record the current continuous-management cycle as failed so a bounded correction cycle can follow.", default: false },
+        cycleVerificationSummary: { type: "string", description: "Required compact evidence when a continuous-management cycle is recorded as passed or failed." },
+        expectedRunId: { type: "string", description: "Exact RunId from the latest status. Required for cycle verification or nextWorkItems so delayed requests cannot mutate another run." },
+        expectedCycleId: { type: "string", description: "Exact ActiveCycleId from the latest status. Required for cycle verification or nextWorkItems so retries cannot advance the wrong cycle." },
+        nextCycleObjective: { type: "string", description: "Bounded objective for the next cycle in the same durable continuous-management run." },
+        nextWorkItems: { type: "array", maxItems: 12, items: projectWorkItemSchema, description: "Dependency-aware work for the next cycle. Requires the prior cycle to be verified or failed; keeps the same run id and root goal." },
+        nextCycleAcceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
+        nextCycleVerification: { type: "array", items: { type: "string" }, maxItems: 12 },
+        refreshInventory: { type: "boolean", description: "Refresh provider capacity before assigning nextWorkItems.", default: false },
         addConstraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "New user constraints to persist before any continuation work." },
         steeringDirective: { type: "string", description: "Latest user steering instruction or safety correction." },
         interruptRunningWorkers: { type: "boolean", description: "Cancel running external workers before applying new steering. Defaults true when constraints or a directive are supplied." },
@@ -3205,6 +3223,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     `Workspace: ${workspace || "<missing>"}`,
     `CapacityHorizonHours: ${horizonHours} (rolling forecast, not a countdown)`,
     `ProjectDuration: ${controls.runDeadlineMinutes > 0 ? `optional deadline ${controls.runDeadlineMinutes}m` : "continuous until verified, blocked, or explicitly stopped"}`,
+    `CompletionPolicy: ${completionPolicyFrom(args)}${completionPolicyFrom(args) === "continuous-management" ? "; delivery cycles cannot complete the root Goal" : ""}`,
     `CapacityCheckpointMinutes: ${controls.capacityCheckpointMinutes}`,
     `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; native workers stop at the reserve and are penalized as headroom shrinks`,
     `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent parallelism`,
@@ -3648,8 +3667,9 @@ function deriveOrchestrationState(manifest) {
   const items = manifest.workItems || [];
   if (!items.length) return "blocked";
   if (manifest.termination?.category) return "blocked";
-  if (manifest.finalVerification?.passed === true && items.every((item) => item.state === "completed")) return "completed";
-  if (manifest.finalVerification?.passed === false) return "blocked";
+  if (isContinuousManagement(manifest) && ["verified", "failed"].includes(manifest.activeCycle?.state)) return "ready-for-codex";
+  if (!isContinuousManagement(manifest) && manifest.finalVerification?.passed === true && items.every((item) => item.state === "completed")) return "completed";
+  if (!isContinuousManagement(manifest) && manifest.finalVerification?.passed === false) return "blocked";
   if (items.some((item) => ["running", "pending", "codex-pending", "host-pending", "host-running"].includes(item.state))) return "running";
   if (items.some((item) => ["host-dispatch-required", "host-reserved", "host-cancel-required"].includes(item.state))) return "ready-for-codex";
   if (items.every((item) => ["completed", "codex"].includes(item.state))) return "ready-for-codex";
@@ -3804,6 +3824,7 @@ function runDeadlineExpired(manifest, now = Date.now()) {
 
 function isActiveOrchestrationRun(manifest) {
   if (!manifest || Number(manifest.version || 1) < 2) return manifest?.state === "running";
+  if (isContinuousManagement(manifest) && !manifest.termination?.category) return true;
   return ["running", "ready-for-codex"].includes(String(manifest.state || ""));
 }
 
@@ -3843,6 +3864,7 @@ function runContractChanges(manifest, args = {}) {
   const controls = normalizedRunControls(args);
   const requested = {
     mode: String(args.mode || "patch").trim().toLowerCase(),
+    completionPolicy: completionPolicyFrom(args),
     managerOnly: args.managerOnly === true,
     horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
     controls,
@@ -3854,6 +3876,7 @@ function runContractChanges(manifest, args = {}) {
   };
   const existing = {
     mode: String(manifest.mode || "patch").trim().toLowerCase(),
+    completionPolicy: completionPolicyFrom(manifest),
     managerOnly: manifest.managerOnly === true,
     horizonHours: Math.max(1, Math.min(12, Number(manifest.horizonHours || 5))),
     controls: {
@@ -3886,6 +3909,7 @@ function runContractChanges(manifest, args = {}) {
 
 function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
   const next = { ...effectiveArgs };
+  if (rawArgs.completionPolicy === undefined) next.completionPolicy = completionPolicyFrom(manifest);
   for (const key of ["runDeadlineMinutes", "capacityCheckpointMinutes", "codexManagerReservePercent", "maxConcurrentCodexWorkers", "maxParallelWriters", "maxWorkerMinutes", "maxClaudeOutputTokens", "maxClaudeBudgetUsd"]) {
     if (rawArgs[key] === undefined && manifest[key] !== undefined) next[key] = manifest[key];
   }
@@ -4425,6 +4449,123 @@ function bridgeStatusForManifestJob(job, statusPath) {
   };
 }
 
+function completionPolicyFrom(value = {}) {
+  const explicit = String(value.completionPolicy || "").trim().toLowerCase();
+  if (["finite", "continuous-management"].includes(explicit)) return explicit;
+  const mode = String(value.mode || "").trim().toLowerCase();
+  const goal = String(value.rootGoal || value.goal || "").toLowerCase();
+  if (mode === "continuous" || /\b(continuous|continuously|persistent|ongoing|24\s*\/\s*7|keep improving|keep managing|control room)\b/.test(goal)) {
+    return "continuous-management";
+  }
+  return "finite";
+}
+
+function isContinuousManagement(value = {}) {
+  return completionPolicyFrom(value) === "continuous-management";
+}
+
+function cycleContract(args = {}, workItems = [], cycleNumber = 1) {
+  const objective = truncateText(redactArtifactContent(String(args.cycleObjective || args.nextCycleObjective || `Delivery cycle ${cycleNumber} toward the root objective.`).trim()), 1000);
+  return {
+    id: `cycle-${cycleNumber}`,
+    number: cycleNumber,
+    objective,
+    itemIds: workItems.map((item) => item.id),
+    acceptanceCriteria: boundedTextList(args.cycleAcceptanceCriteria || args.nextCycleAcceptanceCriteria, 12, 400),
+    verification: boundedTextList(args.cycleVerification || args.nextCycleVerification, 12, 400),
+    state: "running",
+    startedAt: utcStamp(),
+  };
+}
+
+function activeCycleIdFrom(manifest = {}) {
+  if (manifest.activeCycle?.id) return String(manifest.activeCycle.id);
+  return isContinuousManagement(manifest) ? `legacy-cycle-${Math.max(1, Number(manifest.cycleNumber || 1))}` : "";
+}
+
+function cycleTransitionIdentity(manifest = {}) {
+  return {
+    runId: String(manifest.runId || ""),
+    cycleId: activeCycleIdFrom(manifest),
+  };
+}
+
+function assertCycleTransitionIdentity(manifest, expected = {}) {
+  const actual = cycleTransitionIdentity(manifest);
+  if (!expected.runId || !expected.cycleId) {
+    throw new Error("Cycle transitions require expectedRunId and expectedCycleId from the latest project-manager-status result.");
+  }
+  if (actual.runId !== String(expected.runId) || actual.cycleId !== String(expected.cycleId)) {
+    throw new Error(`Stale cycle transition refused: expected run=${expected.runId}, cycle=${expected.cycleId}; active run=${actual.runId || "none"}, cycle=${actual.cycleId || "none"}. Refresh status and retry against the active cycle.`);
+  }
+}
+
+function cycleTransitionRevision(manifest = {}) {
+  return {
+    ...cycleTransitionIdentity(manifest),
+    state: String(manifest.activeCycle?.state || "running"),
+    verifiedAt: String(manifest.activeCycle?.verifiedAt || ""),
+  };
+}
+
+function assertCycleTransitionRevision(manifest, expected = {}) {
+  assertCycleTransitionIdentity(manifest, expected);
+  const actual = cycleTransitionRevision(manifest);
+  if (actual.state !== expected.state || actual.verifiedAt !== expected.verifiedAt) {
+    throw new Error(`Stale cycle revision refused: expected ${expected.cycleId} state=${expected.state}, verifiedAt=${expected.verifiedAt || "none"}; active state=${actual.state}, verifiedAt=${actual.verifiedAt || "none"}. Refresh status before planning or advancing work.`);
+  }
+}
+
+function compactCycleEvidence(activeCycle, workItems = [], jobs = []) {
+  const itemIds = new Set(activeCycle.itemIds || workItems.map((item) => item.id));
+  const archivedItems = workItems
+    .filter((item) => itemIds.has(item.id))
+    .map((item) => ({
+      id: item.id,
+      objective: truncateText(item.objective || "", 400),
+      state: item.state,
+      assignment: item.assignment || "",
+      assignedModel: item.assignedModel || "",
+      activeJobId: item.activeJobId || "",
+      failureCategory: item.failureCategory || "",
+      blocker: truncateText(item.blocker || "", 400),
+      codexEvidence: item.codexEvidence ? {
+        summary: truncateText(item.codexEvidence.summary || "", 800),
+        artifactRefs: boundedTextList(item.codexEvidence.artifactRefs, 12, 300),
+      } : null,
+      hostEvidence: item.hostEvidence ? {
+        summary: truncateText(item.hostEvidence.summary || "", 800),
+        artifactRefs: boundedTextList(item.hostEvidence.artifactRefs, 12, 300),
+        changedFiles: boundedTextList(item.hostEvidence.changedFiles, 20, 300),
+        testSummary: truncateText(item.hostEvidence.testSummary || "", 500),
+      } : null,
+    }));
+  const archivedJobs = jobs
+    .filter((job) => (job.workItemIds || job.assignedTasks || []).some((id) => itemIds.has(id)))
+    .map((job) => ({
+      jobId: job.jobId || "",
+      transport: job.transport || "",
+      toolName: job.toolName || "",
+      laneId: job.laneId || "",
+      state: job.state || "unknown",
+      model: job.model || "",
+      observedModel: job.observedModel || "",
+      workItemIds: [...(job.workItemIds || job.assignedTasks || [])],
+      failureCategory: job.failureCategory || "",
+      blocker: truncateText(job.blocker || "", 400),
+      startedAt: job.startedAt || "",
+      completedAt: job.completedAt || "",
+      artifactRef: job.jobId ? `.antigravity-bridge/jobs/${job.jobId}/` : "",
+      inlineEvidence: job.inlineEvidence ? {
+        summary: truncateText(job.inlineEvidence.summary || "", 800),
+        artifactRefs: boundedTextList(job.inlineEvidence.artifactRefs, 12, 300),
+        changedFiles: boundedTextList(job.inlineEvidence.changedFiles, 20, 300),
+        testSummary: truncateText(job.inlineEvidence.testSummary || "", 500),
+      } : null,
+    }));
+  return { workItems: archivedItems, jobs: archivedJobs };
+}
+
 function refreshTeamRunManifest(workspace, suppliedManifest = null, lockHeld = false) {
   const manifestPath = lastTeamRunJsonPath(workspace);
   if (!lockHeld) {
@@ -4495,6 +4636,8 @@ function teamRunTransitionSignature(snapshot = {}) {
       .map((job) => `${job.jobId}:${job.state}:${job.currentStep || ""}:${job.completedAt || ""}`)
       .sort(),
     finalVerification: snapshot.finalVerification?.passed,
+    activeCycle: `${snapshot.activeCycle?.id || ""}:${snapshot.activeCycle?.state || ""}`,
+    cycleNumber: Number(snapshot.cycleNumber || 0),
     termination: snapshot.termination?.category || "",
     capacityCheckpointCount: Number(snapshot.capacityCheckpointCount || 0),
   });
@@ -4678,29 +4821,42 @@ function controlRoomChangedSummary(snapshot = {}, progress = orchestrationProgre
 }
 
 function controlRoomBlockerSummary(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot), reportWait = {}) {
-  if (!graphIntegrity.valid) return "manager intervention required: replace the malformed graph; no user decision is needed unless an old worker cannot be stopped";
+  if (!graphIntegrity.valid) return isContinuousManagement(snapshot)
+    ? "current cycle graph is malformed; fail this cycle and provide a canonical correction graph under the same root run"
+    : "manager intervention required: replace the malformed graph; no user decision is needed unless an old worker cannot be stopped";
   if (reportWait.refreshError) return "monitoring evidence is stale; do not infer completion";
   if (Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0) return "worker cancellation is unconfirmed; replacement is forbidden";
-  if (snapshot.finalVerification?.passed === false) return `verification failed: ${truncateText(snapshot.finalVerification.summary || "recorded gate failure", 220)}`;
+  if (!isContinuousManagement(snapshot) && snapshot.finalVerification?.passed === false) return `verification failed: ${truncateText(snapshot.finalVerification.summary || "recorded gate failure", 220)}`;
   const managerBoundary = (snapshot.workItems || []).filter((item) => item.state === "codex");
   if (managerBoundary.length) return `manager/user boundary pending: ${compactWorkItemIds(managerBoundary)}`;
+  if (isContinuousManagement(snapshot) && snapshot.activeCycle?.state === "failed") return `cycle ${snapshot.activeCycle.number || "current"} failed; a bounded correction cycle is required while the root objective remains active`;
+  if (isContinuousManagement(snapshot) && snapshot.activeCycle?.state === "verified") return "none recorded; the verified cycle is a checkpoint, not root-objective completion";
   if (progress.failed.length || progress.blocked.length) {
     return `failed=${compactWorkItemIds(progress.failed)}; blocked=${compactWorkItemIds(progress.blocked)}`;
   }
   if (snapshot.state === "blocked") return "run is blocked; inspect only the narrow failed evidence";
-  if (snapshot.state === "ready-for-codex") return "CEO acceptance decision and final verification are pending";
+  if (snapshot.state === "ready-for-codex") return isContinuousManagement(snapshot)
+    ? "cycle acceptance decision is pending; root-objective completion is forbidden"
+    : "CEO acceptance decision and final verification are pending";
   if (!progress.active.length && progress.pending.length) return `no worker is active while ${progress.pending.length} item(s) wait for dependency or dispatch`;
   return "none recorded";
 }
 
 function controlRoomNextMove(snapshot = {}, progress = orchestrationProgress(snapshot), graphIntegrity = workGraphIntegrity(snapshot)) {
-  if (!graphIntegrity.valid) return "stop the damaged contract and call run-project-manager once with canonical objectives, classes, boundaries, and real dependencies";
+  if (!graphIntegrity.valid) return isContinuousManagement(snapshot)
+    ? "record cycleVerificationFailed and nextWorkItems with canonical objectives, classes, boundaries, and real dependencies under this same run"
+    : "stop the damaged contract and call run-project-manager once with canonical objectives, classes, boundaries, and real dependencies";
   if (Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0) return "close and acknowledge the old host worker before any replacement";
   if ((snapshot.workItems || []).some((item) => ["host-dispatch-required", "host-reserved"].includes(item.state))) {
     return "execute the token-bound native Codex reservation/spawn action; keep the parent task manager-only";
   }
-  if (snapshot.finalVerification?.passed === false) return "assign the smallest correction for the failed gate, then re-verify";
-  if (snapshot.state === "ready-for-codex") return "review compact evidence once, request one bounded correction if needed, then record final verification";
+  if (isContinuousManagement(snapshot) && ["verified", "failed"].includes(snapshot.activeCycle?.state)) {
+    return "pass nextWorkItems through project-manager-status for the next bounded cycle in this same run; keep the Codex Goal active";
+  }
+  if (!isContinuousManagement(snapshot) && snapshot.finalVerification?.passed === false) return "assign the smallest correction for the failed gate, then re-verify";
+  if (snapshot.state === "ready-for-codex") return isContinuousManagement(snapshot)
+    ? "review this cycle, record cycleVerified/cycleVerificationFailed, and provide nextWorkItems; never call projectVerified"
+    : "review compact evidence once, request one bounded correction if needed, then record final verification";
   if (snapshot.state === "completed") return "objective verified; report completion and stop creating work";
   if (progress.failed.length || progress.blocked.length) return "rescope or reassign the narrow failed lane; ask the user only for a real authorization or irreversible decision";
   if (progress.active.length) return "monitor the existing workers once; intervene on a recorded stall, failure, capacity change, or dependency release without spawning duplicates";
@@ -4714,10 +4870,11 @@ function formatCeoControlRoomBrief(snapshot = {}, progress = orchestrationProgre
     : "resource snapshot not recorded; refresh before assigning new work";
   return [
     "CEOControlRoom:",
+    `Objective: ${truncateText(snapshot.rootGoal || snapshot.goal || "not recorded", 320)}`,
     `Changed: ${controlRoomChangedSummary(snapshot, progress, graphIntegrity, reportWait)}`,
     `Team now: ${controlRoomTeamSummary(snapshot, progress)}`,
     `Capacity: ${capacity}; next review=${snapshot.nextCapacityCheckpointAt || "on refresh"}`,
-    `Progress: ${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; pending=${progress.pending.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}`,
+    `Progress: root=${isContinuousManagement(snapshot) ? "active" : snapshot.state || "unknown"}; cycle=${snapshot.activeCycle?.number || "n/a"}/${snapshot.activeCycle?.state || "n/a"}; verifiedCycles=${(snapshot.cycles || []).filter((cycle) => cycle.passed === true).length}; items=${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; pending=${progress.pending.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}`,
     `Blocker/Decision: ${controlRoomBlockerSummary(snapshot, progress, graphIntegrity, reportWait)}`,
     `Next: ${controlRoomNextMove(snapshot, progress, graphIntegrity)}`,
   ];
@@ -4735,6 +4892,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     elapsedSeconds: waitedSeconds,
     transitionDetected: false,
   };
+  const completionClaimAllowed = snapshot.state === "completed" && !isContinuousManagement(snapshot);
   const allWorkItems = snapshot.workItems || [];
   const visibleWorkItems = graphIntegrity.valid
     ? [...new Map([
@@ -4774,12 +4932,13 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
   const lines = [
     orchestrated ? "AiMobileResourceOrchestrationRun:" : "AiMobileTeamRun:",
     orchestrated ? `RunId: ${snapshot.runId || "unknown"}` : null,
+    orchestrated && isContinuousManagement(snapshot) ? `ActiveCycleId: ${activeCycleIdFrom(snapshot)}` : null,
     `State: ${snapshot.state}`,
-    orchestrated ? `CompletionClaimAllowed: ${snapshot.state === "completed"}` : null,
+    orchestrated ? `CompletionClaimAllowed: ${completionClaimAllowed}` : null,
     orchestrated ? `RequiredUserStatus: ${reportAddress ? `${reportAddress}, ` : ""}AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
     orchestrated ? "ControlRoomScope: one existing Codex control-room task; provider worker sessions/jobs are allowed and expected; never create Codex tasks/threads for workers." : null,
     ...(orchestrated ? formatCeoControlRoomBrief(snapshot, progress, graphIntegrity, reportWait) : []),
-    orchestrated && snapshot.state !== "completed" ? `RequiredClaimBoundary: do not say done or successful; report the exact ${snapshot.state} state and only the workers actually recorded below.` : null,
+    orchestrated && !completionClaimAllowed ? `RequiredClaimBoundary: do not say the root objective or Codex Goal is done; report the exact ${snapshot.state} state and only the workers actually recorded below.` : null,
     `Workspace: ${workspace}`,
     orchestrated && !graphIntegrity.valid ? `WorkGraphIntegrity: invalid; ${graphIntegrity.reason}` : null,
     orchestrated && reportWait.requestedSeconds > 0
@@ -4788,12 +4947,19 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     orchestrated && reportWait.refreshError ? `StatusRefreshWarning: ${reportWait.refreshError}; returning the last verified snapshot. Do not infer a terminal state.` : null,
     !orchestrated ? `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}` : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid ? "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop and no automation unless explicitly requested." : null,
-    orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Relay CEOControlRoom exactly: Changed, Team now, Capacity, Progress, Blocker/Decision, Next. Do not freeform, omit owners/capacity, repeat history, or answer only \"running\".` : null,
+    orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Relay CEOControlRoom exactly: Objective, Changed, Team now, Capacity, Progress, Blocker/Decision, Next. Do not freeform, omit the root objective/owners/capacity, repeat history, or answer only \"running\".` : null,
     orchestrated && !graphIntegrity.valid && snapshot.state !== "completed"
-      ? "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch."
+      ? (isContinuousManagement(snapshot)
+        ? `RequiredManagerAction: do not integrate the malformed cycle. After its workers are terminal, call project-manager-status with expectedRunId=${snapshot.runId}, expectedCycleId=${activeCycleIdFrom(snapshot)}, cycleVerificationFailed, and canonical nextWorkItems. Preserve this root run.`
+        : "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch.")
       : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid
       ? "RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield until the next Goal continuation."
+      : null,
+    orchestrated && isContinuousManagement(snapshot) && snapshot.state === "ready-for-codex"
+      ? (["verified", "failed"].includes(snapshot.activeCycle?.state)
+        ? `RequiredManagerAction: start the next bounded cycle with expectedRunId=${snapshot.runId}, expectedCycleId=${activeCycleIdFrom(snapshot)}, and project-manager-status.nextWorkItems in this same run. Never call projectVerified or update_goal complete.`
+        : `RequiredManagerAction: record cycleVerified or cycleVerificationFailed with expectedRunId=${snapshot.runId}, expectedCycleId=${activeCycleIdFrom(snapshot)}, evidence, and nextWorkItems. Never call projectVerified or update_goal complete.`)
       : null,
     orchestrated && graphIntegrity.valid ? "WorkGraph:" : null,
     ...(orchestrated && graphIntegrity.valid ? visibleWorkItems.map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary || item.hostEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
@@ -4868,7 +5034,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
       ? ["RunTermination:", `- ${snapshot.termination.category}: ${truncateText(snapshot.termination.reason, 500)}; workersTargeted=${snapshot.termination.targetedWorkers || 0}; workersStopped=${snapshot.termination.cancelledWorkers || 0}; workerStopUnconfirmed=${snapshot.termination.cancellationUnconfirmed || 0}; supervisorStopped=${snapshot.termination.supervisorStopped !== false}; supervisorStopUnconfirmed=${snapshot.termination.supervisorStopUnconfirmed || 0}`]
       : []),
     ...(orchestrated && typeof snapshot.finalVerification?.passed === "boolean"
-      ? ["FinalVerification:", `- passed=${snapshot.finalVerification.passed}; ${truncateText(snapshot.finalVerification.summary, 700)}`]
+      ? [isContinuousManagement(snapshot) ? "LegacyCycleVerificationIgnoredForRoot:" : "FinalVerification:", `- passed=${snapshot.finalVerification.passed}; ${truncateText(snapshot.finalVerification.summary, 700)}`]
       : []),
     graphIntegrity.valid ? "WorkerResults:" : "WorkerResults: omitted because the malformed graph cannot produce acceptable integration evidence.",
   ].filter(Boolean);
@@ -4916,17 +5082,23 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (!graphIntegrity.valid && snapshot.state !== "completed" && !snapshot.termination?.category) lines.push("Next: replace the malformed run contract with canonical work items; do not integrate, verify, or keep polling the damaged graph.");
+  if (!graphIntegrity.valid && snapshot.state !== "completed" && !snapshot.termination?.category) lines.push(isContinuousManagement(snapshot)
+    ? "Next: fail the malformed cycle and provide canonical nextWorkItems under this same run; do not replace or complete the root objective."
+    : "Next: replace the malformed run contract with canonical work items; do not integrate, verify, or keep polling the damaged graph.");
   else if (snapshot.termination?.category) lines.push(Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0
     ? "Next: execute HostCodexCancellationActions and acknowledge the result. Do not start a replacement run while any host worker stop remains unconfirmed."
     : "Next: this run is stopped. Apply the latest user constraints and start a new objective run only if the user still wants continuation.");
-  else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker and continue or re-verify this objective; completion is not allowed.");
+  else if (!isContinuousManagement(snapshot) && snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker and continue or re-verify this objective; completion is not allowed.");
   else if (snapshot.state === "ready-for-codex") lines.push((snapshot.workItems || []).some((item) => ["host-dispatch-required", "host-reserved"].includes(item.state))
     ? "Next: acknowledge HostCodexReservationActions before spawning. Spawn only the returned HostCodexActions, then bind the returned agent id with hostWorkerEvents. The parent control-room task must not perform those tasks itself."
-    : snapshot.managerOnly === true
+    : isContinuousManagement(snapshot)
+      ? (["verified", "failed"].includes(snapshot.activeCycle?.state)
+        ? "Next: pass nextWorkItems to project-manager-status for the next delivery cycle in this same run. The root objective and Codex Goal remain active."
+        : "Next: record cycleVerified/cycleVerificationFailed and pass nextWorkItems. Continuous-management forbids projectVerified and Goal completion.")
+      : snapshot.managerOnly === true
       ? "Next: the manager must review the compact artifacts and recorded verification evidence, request one bounded correction if needed, then call project-manager-status with projectVerified=true. Do not rerun project work in this chat."
       : "Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
-  else if (snapshot.state === "completed") lines.push("Next: this objective is verified complete. Continuous mode does not invent more work after the acceptance gates pass.");
+  else if (snapshot.state === "completed") lines.push("Next: this finite objective is verified complete. Do not invent more work after its acceptance gates pass.");
   else if (snapshot.state === "running") lines.push(`Next: call project-manager-status once with waitSeconds=120 for ${workspace}; completion is not yet allowed.`);
   else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
   return lines.join("\n");
@@ -4956,6 +5128,7 @@ async function orchestrateProject(args = {}) {
   const acceptanceCriteria = boundedTextList(args.acceptanceCriteria, 12, 400);
   const verification = boundedTextList(args.verification, 12, 400);
   const routingPolicy = routingPolicyFromArgs(args);
+  const completionPolicy = completionPolicyFrom(args);
 
   if (args.start === false) {
     return [
@@ -4969,8 +5142,10 @@ async function orchestrateProject(args = {}) {
 
   const runId = `orc-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
   const createdAt = utcStamp();
+  const initialCycleId = completionPolicy === "continuous-management" ? "cycle-1" : "";
   const stagedWorkItems = decision.workItems.map((item) => ({
     ...item,
+    ...(initialCycleId ? { cycleId: initialCycleId } : {}),
     state: item.assignment === "codex:current"
       ? (item.dependsOn.length ? "codex-pending" : "codex")
       : item.assignment.startsWith("codex-host:")
@@ -5019,6 +5194,11 @@ async function orchestrateProject(args = {}) {
     nextCapacityCheckpointAt: new Date(Date.now() + capacityCheckpointDelayMinutes(controls, decision.candidates) * 60000).toISOString(),
     capacityCheckpointCount: 0,
     goal,
+    rootGoal: goal,
+    completionPolicy,
+    cycleNumber: initialCycleId ? 1 : 0,
+    cycles: [],
+    activeCycle: initialCycleId ? cycleContract(args, workItems, 1) : null,
     workspace,
     mode: String(args.mode || "patch").trim().toLowerCase(),
     managerOnly: args.managerOnly === true,
@@ -5065,6 +5245,7 @@ async function orchestrateProject(args = {}) {
     "OrchestrateProjectResult:",
     `RunId: ${runId}`,
     `Goal: ${goal}`,
+    `CompletionPolicy: ${completionPolicy}`,
     `CapacityProbe: ${context.capacityProbe}`,
     `WorkItems: ${workItems.length}`,
     `ExternalResourcesSelected: ${[...new Set(workItems.filter((item) => !["codex:current", "resource:unavailable"].includes(item.assignment)).map((item) => item.assignment))].length}`,
@@ -5105,6 +5286,22 @@ async function runProjectManager(args = {}) {
     }
     const contractChanges = goalChanged ? [] : runContractChanges(existing, effectiveArgs);
     const contractChanged = contractChanges.length > 0;
+    if (isContinuousManagement(existing) && !expired && (goalChanged || contractChanged)) {
+      const protectedResult = [
+        "RunProjectManagerResult:",
+        "ContinuousRootGoalProtected: true",
+        "ReplacementStarted: false",
+        `RootGoal: ${existing.rootGoal || existing.goal}`,
+        goalChanged
+          ? "Reason: a persistent control-room run already owns this workspace. A rephrased management prompt cannot replace or shrink its root goal."
+          : `Reason: the continuous run contract changed (${contractChanges.join(", ")}); use project-manager-status cycle fields instead of replacing the run.`,
+        "Next: verify the current cycle with cycleVerified/cycleVerificationFailed and pass nextWorkItems for the next bounded cycle in this same run. Use stopRun only for explicit user stop or a real root-goal change.",
+        "",
+        formatTeamRunSnapshot(workspace, existing, 0),
+      ].join("\n");
+      writeTextFileEnsuringDir(path.join(bridgeRootFor(workspace), "last-team-run.md"), `${protectedResult}\n`);
+      return protectedResult;
+    }
     if (goalChanged || expired || contractChanged) {
       const replacementReason = goalChanged
         ? "the user goal changed"
@@ -5377,6 +5574,7 @@ function applyProjectManagerUpdates(manifest, args = {}) {
   const takeover = new Set((args.takeoverCodexItems || []).map(normalizeTaskLane).filter(Boolean));
   const evidence = normalizedCodexEvidence(args);
   let next = { ...manifest, workItems: [...(manifest.workItems || [])] };
+  let codexActionChanged = false;
   const knownIds = new Set(next.workItems.map((item) => item.id));
   for (const id of [...completed, ...failed, ...takeover]) {
     if (!knownIds.has(id)) throw new Error(`Unknown project-manager work item: ${id}`);
@@ -5411,25 +5609,34 @@ function applyProjectManagerUpdates(manifest, args = {}) {
 
   for (const id of completed) {
     const target = next.workItems.find((item) => item.id === id);
-    if (target.state !== "codex") throw new Error(`Work item ${id} is not ready for Codex completion. Wait for dependencies or take it over first.`);
     const itemEvidence = evidence.get(id);
     if (!itemEvidence || itemEvidence.summary.length < 12) {
       throw new Error(`Work item ${id} requires compact codexEvidence before it can be completed.`);
     }
+    if (target.state === "completed") {
+      const priorRefs = boundedTextList(target.codexEvidence?.artifactRefs, 12, 300);
+      const nextRefs = boundedTextList(itemEvidence.artifactRefs, 12, 300);
+      if (target.codexEvidence?.summary === itemEvidence.summary && JSON.stringify(priorRefs) === JSON.stringify(nextRefs)) continue;
+      throw new Error(`Codex completion evidence is immutable for ${id}; refresh status instead of rewriting an accepted result.`);
+    }
+    if (target.state !== "codex") throw new Error(`Work item ${id} is not ready for Codex completion. Wait for dependencies or take it over first.`);
     next.workItems = next.workItems.map((item) => item.id === id
       ? { ...item, state: "completed", blocker: "", failureCategory: "", codexEvidence: itemEvidence }
       : item);
+    codexActionChanged = true;
   }
 
   for (const id of failed) {
     const target = next.workItems.find((item) => item.id === id);
+    if (target.state === "blocked" && target.blocker === "Current Codex could not complete this owned action.") continue;
     if (target.state !== "codex") throw new Error(`Work item ${id} is not an active Codex-owned action.`);
     next.workItems = next.workItems.map((item) => item.id === id
       ? { ...item, state: "blocked", blocker: "Current Codex could not complete this owned action." }
       : item);
+    codexActionChanged = true;
   }
 
-  if (completed.size || failed.size) {
+  if (codexActionChanged) {
     next = appendOrchestrationDecision(next, {
       type: "codex-action-update",
       completed: [...completed],
@@ -5437,10 +5644,60 @@ function applyProjectManagerUpdates(manifest, args = {}) {
     });
   }
 
+  if (args.cycleVerified === true && args.cycleVerificationFailed === true) {
+    throw new Error("cycleVerified and cycleVerificationFailed cannot both be true.");
+  }
+  if (args.cycleVerified === true || args.cycleVerificationFailed === true) {
+    if (!isContinuousManagement(next)) {
+      throw new Error("Cycle verification is only valid for completionPolicy=continuous-management. Use project verification for a finite objective.");
+    }
+    const activeCycle = next.activeCycle || cycleContract({ cycleObjective: "Legacy continuous delivery cycle." }, next.workItems, Math.max(1, Number(next.cycleNumber || 1)));
+    const passed = args.cycleVerified === true;
+    const summary = truncateText(redactArtifactContent(String(args.cycleVerificationSummary || "").trim()), 1600);
+    if (summary.length < 20) throw new Error("cycleVerificationSummary is required for a cycle verification result.");
+    const alreadyRecorded = ["verified", "failed"].includes(activeCycle.state);
+    if (alreadyRecorded) {
+      if (activeCycle.passed === passed && String(activeCycle.summary || "") === summary) {
+        // An exact retry is idempotent. Continue through the remaining guards so
+        // a combined request cannot bypass the continuous completion firewall.
+      } else {
+        throw new Error(`Cycle result is immutable: ${activeCycle.id} is already ${activeCycle.state}. Refresh status before taking another lifecycle action.`);
+      }
+    }
+    if (!alreadyRecorded && activeCycle.state !== "running") {
+      throw new Error(`Cycle verification requires a running cycle; ${activeCycle.id} is ${activeCycle.state || "unknown"}.`);
+    }
+    if (!alreadyRecorded) {
+      const cycleIds = new Set(activeCycle.itemIds || next.workItems.map((item) => item.id));
+      const cycleItems = next.workItems.filter((item) => cycleIds.has(item.id));
+      const incomplete = cycleItems.filter((item) => passed
+        ? item.state !== "completed"
+        : ["running", "pending", "codex", "codex-pending", "host-pending", "host-running", "host-dispatch-required", "host-reserved", "host-cancel-required"].includes(item.state));
+      if (incomplete.length) {
+        throw new Error(`Cycle verification cannot finish while cycle work remains active or incomplete: ${incomplete.map((item) => item.id).join(", ")}`);
+      }
+      const verifiedCycle = {
+        ...activeCycle,
+        state: passed ? "verified" : "failed",
+        passed,
+        summary,
+        verifiedAt: utcStamp(),
+        evidenceArchive: compactCycleEvidence(activeCycle, next.workItems, next.jobs),
+      };
+      next.activeCycle = verifiedCycle;
+      next.cycles = [...(next.cycles || []).filter((cycle) => cycle.id !== verifiedCycle.id), verifiedCycle].slice(-50);
+      next.finalVerification = null;
+      next = appendOrchestrationDecision(next, { type: "cycle-verification", cycleId: verifiedCycle.id, passed });
+    }
+  }
+
   if (args.projectVerified === true && args.projectVerificationFailed === true) {
     throw new Error("projectVerified and projectVerificationFailed cannot both be true.");
   }
   if (args.projectVerified === true || args.projectVerificationFailed === true) {
+    if (isContinuousManagement(next)) {
+      throw new Error("Continuous-management completion firewall: projectVerified/projectVerificationFailed cannot close the root objective or Codex Goal. Record cycleVerified/cycleVerificationFailed, then continue with nextWorkItems in the same run. Only explicit user stop may end this control room.");
+    }
     const incomplete = next.workItems.filter((item) => item.state !== "completed").map((item) => item.id);
     if (incomplete.length) throw new Error(`Project verification cannot finish while work items are incomplete: ${incomplete.join(", ")}`);
     const summary = truncateText(redactArtifactContent(String(args.projectVerificationSummary || "").trim()), 1600);
@@ -5454,8 +5711,163 @@ function applyProjectManagerUpdates(manifest, args = {}) {
   return next;
 }
 
+function nextCyclePlanningArgs(manifest, args, workspace) {
+  const cycleNumber = Math.max(1, Number(manifest.cycleNumber || manifest.activeCycle?.number || 1)) + 1;
+  const idMap = new Map();
+  const rawItems = (args.nextWorkItems || []).flat(1).filter((item) => item && typeof item === "object" && !Array.isArray(item));
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const sourceId = normalizeTaskLane(rawItems[index].id || `work-${index + 1}`) || `work-${index + 1}`;
+    idMap.set(sourceId, `c${cycleNumber}-${sourceId}`);
+  }
+  const workItems = rawItems.map((item, index) => {
+    const sourceId = normalizeTaskLane(item.id || `work-${index + 1}`) || `work-${index + 1}`;
+    return {
+      ...item,
+      id: idMap.get(sourceId),
+      dependsOn: (Array.isArray(item.dependsOn) ? item.dependsOn : [])
+        .map((dependency) => idMap.get(normalizeTaskLane(dependency)))
+        .filter(Boolean),
+    };
+  });
+  const routing = manifest.routingPolicy || {};
+  return {
+    goal: manifest.rootGoal || manifest.goal,
+    workspace,
+    workItems,
+    managerOnly: manifest.managerOnly === true,
+    completionPolicy: "continuous-management",
+    mode: "patch",
+    horizonHours: manifest.horizonHours || 5,
+    constraints: manifest.constraints || [],
+    acceptanceCriteria: manifest.acceptanceCriteria || [],
+    verification: manifest.verification || [],
+    cycleObjective: args.nextCycleObjective,
+    cycleAcceptanceCriteria: args.nextCycleAcceptanceCriteria,
+    cycleVerification: args.nextCycleVerification,
+    hostCodexAvailable: manifest.hostCodexAvailable === true || routing.hostCodexAvailable === true,
+    allowAntigravityCli: routing.allowAntigravityCli === true || manifest.allowAntigravityCli === true,
+    unattendedMode: routing.unattendedMode === true || manifest.unattendedMode === true,
+    allowAntigravityPermissionBypass: routing.allowAntigravityPermissionBypass === true || manifest.allowAntigravityPermissionBypass === true,
+    allowPremiumModels: routing.allowPremiumModels === true,
+    agyModel: routing.agyModel || "auto",
+    claudeModel: routing.claudeModel || "auto",
+    includeCursor: routing.includeCursor === true,
+    runDeadlineMinutes: manifest.runDeadlineMinutes || 0,
+    capacityCheckpointMinutes: manifest.capacityCheckpointMinutes || 20,
+    codexManagerReservePercent: manifest.codexManagerReservePercent || 15,
+    maxConcurrentCodexWorkers: manifest.maxConcurrentCodexWorkers || 1,
+    maxParallelWriters: manifest.maxParallelWriters || 2,
+    maxWorkerMinutes: manifest.maxWorkerMinutes || 0,
+    maxClaudeOutputTokens: manifest.maxClaudeOutputTokens || 12000,
+    maxClaudeBudgetUsd: manifest.maxClaudeBudgetUsd || 0,
+    refreshInventory: args.refreshInventory === true,
+  };
+}
+
+function appendContinuousCycle(manifest, args, decision, workspace) {
+  if (!isContinuousManagement(manifest)) throw new Error("nextWorkItems requires completionPolicy=continuous-management.");
+  if (manifest.termination?.category) throw new Error("A terminated run cannot accept another cycle. Start a new root objective only after explicit user direction.");
+  const activeJobs = (manifest.jobs || []).filter((job) => ["queued", "running", "unknown"].includes(job.state));
+  if (activeJobs.length) throw new Error(`The current cycle still has active workers: ${activeJobs.map((job) => job.jobId).join(", ")}`);
+  if (!manifest.activeCycle || !["verified", "failed"].includes(manifest.activeCycle.state)) {
+    throw new Error("Verify or fail the current cycle with cycleVerified/cycleVerificationFailed before passing nextWorkItems.");
+  }
+  if (!decision?.workItems?.length) throw new Error("nextWorkItems must contain at least one canonical work item.");
+
+  const cycleNumber = Math.max(1, Number(manifest.cycleNumber || manifest.activeCycle.number || 1)) + 1;
+  const cycleId = `cycle-${cycleNumber}`;
+  const stagedItems = decision.workItems.map((item) => ({
+    ...item,
+    cycleId,
+    state: item.assignment === "codex:current"
+      ? (item.dependsOn.length ? "codex-pending" : "codex")
+      : item.assignment.startsWith("codex-host:")
+        ? (item.dependsOn.length ? "host-pending" : "host-dispatch-required")
+        : "pending",
+  }));
+  const capsule = writeContextCapsule({
+    goal: manifest.rootGoal || manifest.goal,
+    workspace,
+    lifecycleStage: `continuous-cycle-${cycleNumber}`,
+    workItems: stagedItems,
+    constraints: manifest.constraints || [],
+    acceptanceCriteria: manifest.acceptanceCriteria || [],
+    verification: manifest.verification || [],
+    continuitySummary: args.cycleVerificationSummary || manifest.activeCycle.summary || "",
+  });
+  const workItems = stagedItems.map((item) => {
+    if (!item.assignment.startsWith("codex-host:")) return item;
+    const resource = decision.candidates.find((candidate) => candidate.id === item.assignment);
+    const hostAction = resource ? chooseHostCodexAction([resource], item) : null;
+    const taskCapsulePath = capsule.taskCapsules?.[item.id]?.path || capsule.outputPath;
+    const attemptId = `host-${crypto.randomBytes(6).toString("hex")}`;
+    const dispatchToken = crypto.randomBytes(18).toString("hex");
+    return {
+      ...item,
+      hostAttempt: { attemptId, dispatchToken, state: "dispatch-required", createdAt: utcStamp() },
+      hostAction: hostAction ? {
+        toolName: hostAction.hostTool,
+        agentType: item.readOnly ? "explorer" : "worker",
+        model: hostAction.model,
+        reasoningEffort: hostAction.reasoningEffort,
+        forkContext: false,
+        message: boundedWorkerPrompt(item, manifest.rootGoal || manifest.goal, taskCapsulePath),
+      } : null,
+    };
+  });
+  let next = {
+    ...manifest,
+    rootGoal: manifest.rootGoal || manifest.goal,
+    completionPolicy: "continuous-management",
+    cycleNumber,
+    activeCycle: cycleContract({
+      nextCycleObjective: args.nextCycleObjective,
+      nextCycleAcceptanceCriteria: args.nextCycleAcceptanceCriteria,
+      nextCycleVerification: args.nextCycleVerification,
+    }, workItems, cycleNumber),
+    resources: decision.candidates,
+    primaryWriterId: decision.primaryWriterId,
+    contextCapsulePath: capsule.outputPath,
+    workItems,
+    jobs: ensureHostDispatchReservations(workItems, []),
+    counts: { total: 0, completed: 0, running: 0, failed: 0 },
+    finalVerification: null,
+    supervisorPid: 0,
+    supervisorEndedAt: "",
+    supervisorLastState: "",
+    state: "running",
+  };
+  for (const assignment of decision.decisions || []) {
+    next = appendOrchestrationDecision(next, { type: "cycle-assignment", cycleId, ...assignment });
+  }
+  next = appendOrchestrationDecision(next, { type: "cycle-start", cycleId, objective: next.activeCycle.objective });
+  return next;
+}
+
 async function projectManagerStatus(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
+  const wantsNextCycle = Array.isArray(args.nextWorkItems) && args.nextWorkItems.length > 0;
+  const wantsCycleResult = args.cycleVerified === true || args.cycleVerificationFailed === true;
+  const wantsCycleTransition = wantsCycleResult || wantsNextCycle;
+  let nextCycleDecision = null;
+  const expectedCycleTransition = {
+    runId: String(args.expectedRunId || "").trim(),
+    cycleId: String(args.expectedCycleId || "").trim(),
+  };
+  let expectedCycleRevision = null;
+  if (wantsCycleTransition) {
+    const preview = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null));
+    assertCycleTransitionIdentity(preview, expectedCycleTransition);
+    expectedCycleRevision = cycleTransitionRevision(preview);
+    if (wantsNextCycle && !wantsCycleResult && !["verified", "failed"].includes(expectedCycleRevision.state)) {
+      throw new Error(`nextWorkItems cannot start while ${expectedCycleRevision.cycleId} is ${expectedCycleRevision.state}. Record cycleVerified or cycleVerificationFailed in the same request, or refresh after the cycle reaches a terminal checkpoint.`);
+    }
+    if (wantsNextCycle) {
+      const planningArgs = nextCyclePlanningArgs(preview, args, workspace);
+      const context = await getTeamCapacityContext(planningArgs);
+      nextCycleDecision = buildResourceOrchestrationDecision(planningArgs, context);
+    }
+  }
   const addConstraints = boundedTextList(args.addConstraints, 20, 600);
   const steeringDirective = truncateText(redactArtifactContent(String(args.steeringDirective || "").trim()), 1000);
   const hasSteering = addConstraints.length > 0 || Boolean(steeringDirective) || args.stopRun === true;
@@ -5466,11 +5878,15 @@ async function projectManagerStatus(args = {}) {
     .some((key) => Array.isArray(args[key]) && args[key].length)
     || args.projectVerified === true
     || args.projectVerificationFailed === true
+    || args.cycleVerified === true
+    || args.cycleVerificationFailed === true
+    || wantsNextCycle
     || hasSteering;
   if (hasUpdates) {
     let updatedManifest = null;
     withFileLock(lastTeamRunJsonPath(workspace), () => {
       let manifest = refreshTeamRunManifest(workspace, readJsonFile(lastTeamRunJsonPath(workspace), null), true);
+      if (wantsCycleTransition) assertCycleTransitionRevision(manifest, expectedCycleRevision);
       if (hasSteering) {
         manifest = {
           ...manifest,
@@ -5501,6 +5917,7 @@ async function projectManagerStatus(args = {}) {
       }
       manifest = applyHostWorkerEvents(manifest, args);
       if (!manifest.termination?.category) manifest = applyProjectManagerUpdates(manifest, args);
+      if (!manifest.termination?.category && wantsNextCycle) manifest = appendContinuousCycle(manifest, args, nextCycleDecision, workspace);
       writeTeamRunManifest(workspace, manifest);
       updatedManifest = manifest;
     });
@@ -8660,6 +9077,15 @@ function runSelfTest() {
   assert(buildGoalWorkGraph({ goal: "repair", workItems: [{ id: "contradictory", title: "Repair code", class: "code", readOnly: true }] })[0].readOnly === false, "an explicit code execution class overrides a contradictory readOnly downgrade");
   const managerWorkItemSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties?.workItems?.items;
   assert(managerWorkItemSchema?.properties?.objective && managerWorkItemSchema?.properties?.description && managerWorkItemSchema?.properties?.executionClass && managerWorkItemSchema?.properties?.class, "manager tool publishes canonical work-item fields and defensive aliases");
+  const managerToolSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties;
+  const managerStatusSchema = tools.find((tool) => tool.name === "project-manager-status")?.inputSchema?.properties;
+  assert(managerToolSchema?.completionPolicy
+    && managerToolSchema?.cycleObjective
+    && managerStatusSchema?.cycleVerified
+    && managerStatusSchema?.nextWorkItems
+    && managerStatusSchema?.expectedRunId
+    && managerStatusSchema?.expectedCycleId,
+  "manager tools expose continuous root-goal, identity-guarded, same-run cycle lifecycle fields");
   const defaultToolNames = exposedMcpTools("").map((tool) => tool.name);
   assert(defaultToolNames.length === 10 && defaultToolNames.includes("run-project-manager") && defaultToolNames.includes("project-manager-status") && !defaultToolNames.includes("submit-agy-job"), "default MCP discovery exposes only the lean manager control surface");
   assert(exposedMcpTools("true").length === tools.length, "advanced MCP discovery remains available through one explicit environment switch");
@@ -8668,8 +9094,10 @@ function runSelfTest() {
   assert(managerSkill.includes("do not create another Codex control-room task")
     && managerSkill.includes("Provider worker sessions/jobs are not Codex control-room tasks and remain allowed")
     && managerSkill.includes("Never use `create_thread` to create a worker")
-    && managerSkill.includes("`Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`"),
-  "skill distinguishes one Codex control-room task from allowed provider workers and requires the six-field CEO brief");
+    && managerSkill.includes("`Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`")
+    && managerSkill.includes("never call `update_goal complete`")
+    && managerSkill.includes("Do not search the filesystem"),
+  "skill preserves the root objective, skips self-discovery waste, allows provider workers, and requires the seven-field CEO brief");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
@@ -9338,6 +9766,13 @@ function runSelfTest() {
     completedCodexItems: ["live"],
     codexEvidence: [{ workItemId: "live", summary: "Runner and dashboard health were verified from the current status API.", artifactRefs: ["status.json"] }],
   });
+  const liveCompletionRetried = applyProjectManagerUpdates(liveCompleted, {
+    completedCodexItems: ["live"],
+    codexEvidence: [{ workItemId: "live", summary: "Runner and dashboard health were verified from the current status API.", artifactRefs: ["status.json"] }],
+  });
+  assert(liveCompletionRetried.workItems.find((item) => item.id === "live")?.state === "completed"
+    && liveCompletionRetried.decisions.length === liveCompleted.decisions.length,
+  "an exact full Codex-completion retry is idempotent and does not duplicate lifecycle decisions");
   const codexTakeover = applyProjectManagerUpdates(liveCompleted, { takeoverCodexItems: ["patch"], codexModel: "gpt-test" });
   assert(codexTakeover.workItems.find((item) => item.id === "patch")?.state === "codex" && codexTakeover.workItems.find((item) => item.id === "patch")?.assignment === "codex:current", "Codex takeover is explicit and represented in the work graph");
   const patchCompleted = applyProjectManagerUpdates(codexTakeover, {
@@ -9353,6 +9788,124 @@ function runSelfTest() {
   assert(projectCompleted.state === "completed" && deriveOrchestrationState(projectCompleted) === "completed", "only an evidence-backed final verification permits a completed project-manager cycle");
   const projectBlocked = applyProjectManagerUpdates(patchCompleted, { projectVerificationFailed: true, projectVerificationSummary: "Focused checks passed, but the live authorization gate remains unresolved." });
   assert(projectBlocked.state === "blocked" && projectBlocked.finalVerification?.passed === false, "failed final verification records the blocker and forbids a completion claim");
+  const continuousBase = {
+    ...patchCompleted,
+    runId: "continuous-root-test",
+    goal: "Keep improving the harness until it reliably supports one unique truthful application every seven minutes around the clock.",
+    rootGoal: "Keep improving the harness until it reliably supports one unique truthful application every seven minutes around the clock.",
+    mode: "continuous",
+    completionPolicy: "continuous-management",
+    cycleNumber: 1,
+    cycles: [],
+    jobs: [{
+      jobId: "cycle-one-worker",
+      transport: "host-subagent",
+      state: "completed",
+      model: "gpt-5.6-terra",
+      observedModel: "gpt-5.6-terra",
+      workItemIds: ["live"],
+      assignedTasks: ["live"],
+      inlineEvidence: { summary: "The worker returned bounded lifecycle evidence.", artifactRefs: ["status.json"], changedFiles: [], testSummary: "read-only" },
+    }],
+    activeCycle: {
+      id: "cycle-1",
+      number: 1,
+      objective: "Establish authoritative throughput and blocker evidence.",
+      itemIds: patchCompleted.workItems.map((item) => item.id),
+      state: "running",
+      startedAt: utcStamp(),
+    },
+    finalVerification: null,
+  };
+  let continuousCompletionRejected = false;
+  try {
+    applyProjectManagerUpdates(continuousBase, { projectVerified: true, projectVerificationSummary: "This small review cycle passed but the root throughput objective remains open." });
+  } catch (error) {
+    continuousCompletionRejected = /completion firewall/i.test(String(error?.message || ""));
+  }
+  assert(continuousCompletionRejected, "continuous-management completion firewall rejects projectVerified even when every cycle item completed");
+  const cycleVerified = applyProjectManagerUpdates(continuousBase, { cycleVerified: true, cycleVerificationSummary: "Cycle one established current evidence; the root throughput objective remains active and needs another delivery cycle." });
+  assert(cycleVerified.state === "ready-for-codex"
+    && cycleVerified.activeCycle?.state === "verified"
+    && cycleVerified.cycles?.length === 1
+    && cycleVerified.cycles?.[0]?.evidenceArchive?.workItems?.length === continuousBase.workItems.length
+    && cycleVerified.cycles?.[0]?.evidenceArchive?.jobs?.[0]?.inlineEvidence?.summary === "The worker returned bounded lifecycle evidence."
+    && cycleVerified.finalVerification === null,
+  "cycle verification records immutable compact work-item and job evidence without completing the continuous root objective");
+  const idempotentCycleVerification = applyProjectManagerUpdates(cycleVerified, { cycleVerified: true, cycleVerificationSummary: cycleVerified.activeCycle.summary });
+  assert(idempotentCycleVerification.cycles.length === 1 && idempotentCycleVerification.activeCycle.summary === cycleVerified.activeCycle.summary, "an exact terminal cycle-verification retry is idempotent");
+  let immutableCycleResultRejected = false;
+  try {
+    applyProjectManagerUpdates(cycleVerified, { cycleVerificationFailed: true, cycleVerificationSummary: "A delayed contradictory result must never rewrite the verified cycle evidence." });
+  } catch (error) {
+    immutableCycleResultRejected = /immutable/i.test(String(error?.message || ""));
+  }
+  assert(immutableCycleResultRejected, "a terminal cycle result cannot be rewritten by a delayed contradictory status request");
+  let idempotentRetryCompletionBypassRejected = false;
+  try {
+    applyProjectManagerUpdates(cycleVerified, {
+      cycleVerified: true,
+      cycleVerificationSummary: cycleVerified.activeCycle.summary,
+      projectVerified: true,
+      projectVerificationSummary: "A cycle retry cannot bypass the persistent root completion firewall.",
+    });
+  } catch (error) {
+    idempotentRetryCompletionBypassRejected = /completion firewall/i.test(String(error?.message || ""));
+  }
+  assert(idempotentRetryCompletionBypassRejected, "an idempotent cycle retry cannot bypass the continuous root completion firewall");
+  const failedContinuousCycle = applyProjectManagerUpdates({
+    ...continuousBase,
+    workItems: continuousBase.workItems.map((item, index) => index === 0 ? { ...item, state: "failed", blocker: "bounded cycle failure" } : item),
+  }, { cycleVerificationFailed: true, cycleVerificationSummary: "The bounded cycle failed and requires a correction, while the persistent root objective remains active." });
+  assert(failedContinuousCycle.state === "ready-for-codex" && isActiveOrchestrationRun(failedContinuousCycle), "a failed continuous cycle remains an active same-run correction checkpoint");
+  const readOnlyContinuousCycle = applyProjectManagerUpdates({
+    version: 2,
+    runId: "read-only-continuous-test",
+    goal: "Continuously improve the full project outcome.",
+    rootGoal: "Continuously improve the full project outcome.",
+    completionPolicy: "continuous-management",
+    workItems: [{ id: "read-only-health", objective: "Inspect current health only", readOnly: true, executionClass: "analysis", state: "completed", assignment: "claude:sonnet", dependsOn: [] }],
+    jobs: [{ jobId: "read-only-job", state: "completed", transport: "claude-code", workItemIds: ["read-only-health"], assignedTasks: ["read-only-health"] }],
+    decisions: [],
+    cycleNumber: 1,
+    cycles: [],
+    activeCycle: { id: "cycle-1", number: 1, objective: "Read-only health review", itemIds: ["read-only-health"], state: "running", startedAt: utcStamp() },
+  }, { cycleVerified: true, cycleVerificationSummary: "The read-only health review passed, but it is only a cycle checkpoint and cannot complete the root objective." });
+  assert(readOnlyContinuousCycle.state === "ready-for-codex"
+    && isActiveOrchestrationRun(readOnlyContinuousCycle)
+    && readOnlyContinuousCycle.activeCycle.state === "verified"
+    && readOnlyContinuousCycle.finalVerification == null,
+  "a bounded read-only cycle cannot complete or deactivate a persistent root objective");
+  assertCycleTransitionIdentity(cycleVerified, { runId: "continuous-root-test", cycleId: "cycle-1" });
+  let staleCycleIdentityRejected = false;
+  try {
+    assertCycleTransitionIdentity(cycleVerified, { runId: "another-run", cycleId: "cycle-1" });
+  } catch (error) {
+    staleCycleIdentityRejected = /stale cycle transition refused/i.test(String(error?.message || ""));
+  }
+  assert(staleCycleIdentityRejected, "stale next-cycle planning cannot cross a run identity boundary");
+  const verifiedRevision = cycleTransitionRevision(cycleVerified);
+  let staleCycleRevisionRejected = false;
+  try {
+    assertCycleTransitionRevision({ ...cycleVerified, activeCycle: { ...cycleVerified.activeCycle, state: "failed", passed: false, verifiedAt: "2099-01-01T00:00:00.000Z" } }, verifiedRevision);
+  } catch (error) {
+    staleCycleRevisionRejected = /stale cycle revision refused/i.test(String(error?.message || ""));
+  }
+  assert(staleCycleRevisionRejected, "next-cycle planning refuses a same-id cycle whose terminal state changed before the manifest lock");
+  const continuousSnapshot = formatTeamRunSnapshot(pluginRoot, cycleVerified, 0, DEFAULT_PROFILE);
+  assert(continuousSnapshot.includes("CompletionClaimAllowed: false")
+    && continuousSnapshot.includes(`Objective: ${continuousBase.rootGoal}`)
+    && /never call projectVerified/i.test(continuousSnapshot)
+    && continuousSnapshot.includes("nextWorkItems"),
+  "continuous CEO status keeps the exact root objective visible and requires another cycle instead of Goal completion");
+  const renamedCycleArgs = nextCyclePlanningArgs(cycleVerified, {
+    nextCycleObjective: "Implement the next throughput correction.",
+    nextWorkItems: [
+      { id: "inspect", objective: "Inspect the bottleneck", executionClass: "analysis" },
+      { id: "patch", objective: "Patch the bottleneck", executionClass: "code", dependsOn: ["inspect"], expectedFiles: ["scripts/example.js"] },
+    ],
+  }, pluginRoot);
+  assert(renamedCycleArgs.workItems[0].id === "c2-inspect" && renamedCycleArgs.workItems[1].dependsOn[0] === "c2-inspect", "next cycle work receives collision-safe ids while preserving internal dependencies");
   assert(dependencyEvidenceForItems({ ...projectCompleted, workspace: pluginRoot }, [{ dependsOn: ["live"] }]).includes("Runner and dashboard health"), "verified Codex dependency evidence is passed to downstream workers");
   assert([1, 2, 3, 4].map(resultBulletLimitForComplexity).join(",") === "5,6,8,10", "result bullet budgets scale with work-item complexity");
   assert(deriveOrchestrationState({ workItems: [{ state: "completed" }, { state: "codex" }] }) === "ready-for-codex", "worker completion still requires Codex integration");
@@ -9422,6 +9975,155 @@ function runSelfTest() {
   try {
     const init = spawnSync("git", ["init", "--quiet", workspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
     assert(init.status === 0, "temporary git workspace initializes");
+    const appendedCycle = appendContinuousCycle({
+      ...cycleVerified,
+      runId: "continuous-cycle-test",
+      workspace,
+      resources: [scopeCandidate],
+      jobs: [],
+      decisions: [],
+    }, {
+      nextCycleObjective: "Implement the next bounded throughput correction.",
+      nextCycleAcceptanceCriteria: ["A concrete correction is produced."],
+      nextCycleVerification: ["Run one focused check."],
+      cycleVerificationSummary: cycleVerified.activeCycle.summary,
+    }, {
+      candidates: [scopeCandidate],
+      primaryWriterId: "",
+      decisions: [{ workItemId: "c2-inspect", resourceId: scopeCandidate.id, model: scopeCandidate.model, reason: "self-test" }],
+      workItems: [{
+        ...normalizeWorkItem({ id: "c2-inspect", objective: "Inspect the next bottleneck", executionClass: "analysis", complexity: "low" }, 0, "low"),
+        assignment: scopeCandidate.id,
+        assignedModel: scopeCandidate.model,
+        alternates: [],
+      }],
+    }, workspace);
+    assert(appendedCycle.runId === "continuous-cycle-test"
+      && appendedCycle.rootGoal === continuousBase.rootGoal
+      && appendedCycle.cycleNumber === 2
+      && appendedCycle.activeCycle?.state === "running"
+      && appendedCycle.workItems.length === 1
+      && appendedCycle.workItems[0].cycleId === "cycle-2"
+      && appendedCycle.cycles?.[0]?.evidenceArchive?.workItems?.length === continuousBase.workItems.length
+      && appendedCycle.finalVerification === null,
+    "verified continuous cycles append bounded work inside the same run id without shrinking the root goal or discarding prior evidence");
+    if (process.platform === "win32") {
+      const persistedWorkspace = path.join(workspace, "persisted-lifecycle");
+      fs.mkdirSync(persistedWorkspace, { recursive: true });
+      const persistedInit = spawnSync("git", ["init", "--quiet", persistedWorkspace], { encoding: "utf8", timeout: 10000, windowsHide: true });
+      assert(persistedInit.status === 0, "persisted lifecycle workspace initializes");
+      const helperPath = path.join(pluginRoot, "scripts", "antigravity.ps1");
+      const rootGoal = "Continuously preserve one root objective while bounded read-only cycles advance under one durable run.";
+      const firstItems = JSON.stringify([{
+        id: "read-only-boundary",
+        objective: "Verify the local authenticated browser session without changing profiles, cookies, accounts, credentials, or external state.",
+        kind: "analysis",
+        executionClass: "analysis",
+        complexity: "low",
+        readOnly: true,
+        acceptanceCriteria: ["Compact evidence is recorded."],
+        verification: ["The root objective remains active."],
+      }]);
+      const childOptions = { encoding: "utf8", timeout: 60000, windowsHide: true, env: { ...process.env, AI_MOBILE_SELF_TEST: "1" } };
+      const persistedStart = spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "run-project-manager",
+        "-Goal", rootGoal,
+        "-Workspace", persistedWorkspace,
+        "-CompletionPolicy", "continuous-management",
+        "-CycleObjective", "Verify the first bounded read-only lifecycle checkpoint.",
+        "-WorkItemsJson", firstItems,
+        "-ManagerOnly", "true",
+        "-WaitSeconds", "0",
+      ], childOptions);
+      const firstManifest = readJsonFile(lastTeamRunJsonPath(persistedWorkspace), null);
+      assert(persistedStart.status === 0
+        && /ActiveCycleId:\s*cycle-1/i.test(persistedStart.stdout)
+        && /CompletionClaimAllowed:\s*false/i.test(persistedStart.stdout)
+        && firstManifest.workItems?.[0]?.readOnly === true
+        && firstManifest.workItems?.[0]?.executionClass === "analysis",
+      "PowerShell helper persists a genuinely read-only continuous cycle without permitting root completion");
+      const prematureItems = JSON.stringify([{ id: "premature", objective: "This cycle must not start early.", executionClass: "analysis", readOnly: true }]);
+      const prematureAdvance = spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
+        "-Workspace", persistedWorkspace,
+        "-ExpectedRunId", firstManifest.runId,
+        "-ExpectedCycleId", "cycle-1",
+        "-NextCycleObjective", "Premature cycle.",
+        "-NextWorkItemsJson", prematureItems,
+        "-WaitSeconds", "0",
+      ], childOptions);
+      assert(prematureAdvance.status !== 0 && /nextWorkItems cannot start while cycle-1 is running/i.test(`${prematureAdvance.stdout}\n${prematureAdvance.stderr}`), "PowerShell lifecycle refuses next-only planning from a nonterminal cycle revision");
+      const completionSummary = "The persisted read-only lifecycle checkpoint was verified without external effects or project changes.";
+      const completionEvidence = JSON.stringify([{
+        workItemId: "read-only-boundary",
+        summary: completionSummary,
+        artifactRefs: [],
+      }]);
+      const persistedComplete = spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
+        "-Workspace", persistedWorkspace,
+        "-CompletedCodexItems", "read-only-boundary",
+        "-CodexEvidenceJson", completionEvidence,
+        "-WaitSeconds", "0",
+      ], childOptions);
+      assert(persistedComplete.status === 0, "PowerShell helper records compact read-only cycle evidence");
+      const completedManifest = readJsonFile(lastTeamRunJsonPath(persistedWorkspace), null);
+      const persistedCompleteRetry = spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
+        "-Workspace", persistedWorkspace,
+        "-CompletedCodexItems", "read-only-boundary",
+        "-CodexEvidenceJson", completionEvidence,
+        "-WaitSeconds", "0",
+      ], childOptions);
+      const retriedManifest = readJsonFile(lastTeamRunJsonPath(persistedWorkspace), null);
+      assert(persistedCompleteRetry.status === 0 && retriedManifest.decisions.length === completedManifest.decisions.length, "PowerShell lifecycle treats an exact full completion retry as idempotent");
+      const secondItems = JSON.stringify([{
+        id: "second-boundary",
+        objective: "Verify the local authenticated browser-session boundary remains read-only in cycle two without changing external state.",
+        kind: "analysis",
+        executionClass: "analysis",
+        complexity: "low",
+        readOnly: true,
+      }]);
+      const cycleSummary = "Cycle one passed its bounded read-only checkpoint, while the persistent root objective remains active.";
+      const persistedAdvance = spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
+        "-Workspace", persistedWorkspace,
+        "-ExpectedRunId", firstManifest.runId,
+        "-ExpectedCycleId", "cycle-1",
+        "-CycleVerified", "true",
+        "-CycleVerificationSummary", cycleSummary,
+        "-NextCycleObjective", "Verify same-run advancement into cycle two.",
+        "-NextWorkItemsJson", secondItems,
+        "-WaitSeconds", "0",
+      ], childOptions);
+      const secondManifest = readJsonFile(lastTeamRunJsonPath(persistedWorkspace), null);
+      assert(persistedAdvance.status === 0
+        && secondManifest.runId === firstManifest.runId
+        && secondManifest.activeCycle?.id === "cycle-2"
+        && secondManifest.cycles?.[0]?.evidenceArchive?.workItems?.[0]?.codexEvidence?.summary === completionSummary
+        && deriveOrchestrationState(secondManifest) !== "completed",
+      "PowerShell project-manager-status advances a persisted read-only cycle under the same run and archives its evidence");
+      const staleAdvance = spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
+        "-Workspace", persistedWorkspace,
+        "-ExpectedRunId", firstManifest.runId,
+        "-ExpectedCycleId", "cycle-1",
+        "-CycleVerified", "true",
+        "-CycleVerificationSummary", cycleSummary,
+        "-NextCycleObjective", "A stale retry that must not run.",
+        "-NextWorkItemsJson", secondItems,
+        "-WaitSeconds", "0",
+      ], childOptions);
+      assert(staleAdvance.status !== 0 && /Stale cycle transition refused/i.test(`${staleAdvance.stdout}\n${staleAdvance.stderr}`), "PowerShell lifecycle rejects a delayed cycle-advance retry after the active cycle changes");
+      spawnSync("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
+        "-Workspace", persistedWorkspace,
+        "-StopRun", "true",
+        "-StopReason", "Persisted lifecycle self-test completed.",
+        "-WaitSeconds", "0",
+      ], childOptions);
+    }
     const renameTarget = path.join(workspace, "atomic-rename.json");
     const originalRenameSync = fs.renameSync;
     let renameAttempts = 0;
@@ -9545,12 +10247,13 @@ function runSelfTest() {
     assert(compactSnapshot.includes("CEOControlRoom:")
       && compactSnapshot.includes("workers=none active")
       && !compactSnapshot.includes("Changed: NONE")
-      && compactSnapshot.length < 1800,
+      && compactSnapshot.length < 2100,
     `aggregate readback exposes an idle CEO brief, omits no-op changed markers, and stays compact (${compactSnapshot.length} chars)`);
     const activeProgressSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       runId: "visible-progress-test",
       state: "running",
+      rootGoal: "Deliver the verified project outcome.",
       codexManagerReservePercent: 15,
       nextCapacityCheckpointAt: "2026-07-12T04:20:00.000Z",
       counts: { total: 1, completed: 0, running: 1, failed: 0 },
@@ -9571,16 +10274,17 @@ function runSelfTest() {
       && activeProgressSnapshot.includes("Antigravity=available")
       && activeProgressSnapshot.includes("remaining=12%")
       && activeProgressSnapshot.includes("reserve=15%")
-      && activeProgressSnapshot.includes("Progress: 0/1 completed; active=1")
+      && activeProgressSnapshot.includes("Objective: Deliver the verified project outcome.")
+      && activeProgressSnapshot.includes("items=0/1 completed; active=1")
       && activeProgressSnapshot.includes("Blocker/Decision:")
       && activeProgressSnapshot.includes("RequiredUserStatus: My Lord")
-      && activeProgressSnapshot.includes("Changed, Team now, Capacity, Progress, Blocker/Decision, Next")
+      && activeProgressSnapshot.includes("Objective, Changed, Team now, Capacity, Progress, Blocker/Decision, Next")
       && activeProgressSnapshot.includes("one existing Codex control-room task")
       && activeProgressSnapshot.includes("provider worker sessions/jobs are allowed and expected")
       && activeProgressSnapshot.includes("waitSeconds=120")
       && activeProgressSnapshot.includes("Activity: started=")
-      && activeProgressSnapshot.length < 3800,
-    `running manager snapshots expose a bounded six-field CEO brief, owners, capacity, and one transition-aware wait (${activeProgressSnapshot.length} chars)`);
+      && activeProgressSnapshot.length < 4000,
+    `running manager snapshots expose a bounded seven-field CEO brief, root goal, owners, capacity, and one transition-aware wait (${activeProgressSnapshot.length} chars)`);
     const refreshWarningSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       runId: "refresh-warning-test",
@@ -9607,6 +10311,26 @@ function runSelfTest() {
       && malformedGraphSnapshot.includes("do not integrate, verify")
       && !malformedGraphSnapshot.includes("NextCheck: one project-manager-status"),
     "persisted placeholder graphs surface a CEO intervention and safe canonical replacement instead of integration or repeated polling");
+    const malformedContinuousSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      runId: "malformed-continuous-test",
+      goal: "Continuously improve the root project outcome.",
+      rootGoal: "Continuously improve the root project outcome.",
+      completionPolicy: "continuous-management",
+      cycleNumber: 3,
+      activeCycle: { id: "cycle-3", number: 3, objective: "Repair malformed work", state: "running", itemIds: ["safe-ready-recovery"] },
+      state: "ready-for-codex",
+      counts: { total: 1, completed: 1, running: 0, failed: 0 },
+      workItems: [{ id: "safe-ready-recovery", objective: "Complete work item 2", state: "completed", assignment: "antigravity:gemini-3.5-flash-medium", assignedModel: "gemini-3.5-flash-medium", dependsOn: [], executionClass: "analysis", readOnly: true }],
+      jobs: [],
+    }, 0);
+    assert(malformedContinuousSnapshot.includes("WorkGraphIntegrity: invalid")
+      && malformedContinuousSnapshot.includes("fail this cycle and provide a canonical correction graph under the same root run")
+      && malformedContinuousSnapshot.includes("expectedRunId=malformed-continuous-test")
+      && malformedContinuousSnapshot.includes("expectedCycleId=cycle-3")
+      && malformedContinuousSnapshot.includes("canonical nextWorkItems")
+      && !malformedContinuousSnapshot.includes("Call run-project-manager once"),
+    "a malformed continuous cycle repairs through identity-guarded nextWorkItems without replacing the root run");
     const supersededJob = createJob({ goal: "superseded failure self-test", workspace, mode: "review", worker: "self-test" });
     fs.writeFileSync(path.join(supersededJob.jobDir, "result.md"), "- SUPERSEDED_DETAIL_SHOULD_NOT_BE_REPEATED\n", "utf8");
     fs.writeFileSync(path.join(supersededJob.jobDir, "test-output-summary.md"), "Result: failed\n", "utf8");

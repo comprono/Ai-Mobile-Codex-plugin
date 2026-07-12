@@ -34,6 +34,10 @@ param(
   [string] $ConstraintsJson = "",
   [string] $AcceptanceCriteriaJson = "",
   [string] $VerificationJson = "",
+  [string] $CompletionPolicy = "",
+  [string] $CycleObjective = "",
+  [string] $CycleAcceptanceCriteriaJson = "",
+  [string] $CycleVerificationJson = "",
   [string] $CompletedCodexItems = "",
   [string] $FailedCodexItems = "",
   [string] $TakeoverCodexItems = "",
@@ -42,6 +46,15 @@ param(
   [object] $ProjectVerified = $false,
   [object] $ProjectVerificationFailed = $false,
   [string] $ProjectVerificationSummary = "",
+  [object] $CycleVerified = $false,
+  [object] $CycleVerificationFailed = $false,
+  [string] $CycleVerificationSummary = "",
+  [string] $ExpectedRunId = "",
+  [string] $ExpectedCycleId = "",
+  [string] $NextCycleObjective = "",
+  [string] $NextWorkItemsJson = "",
+  [string] $NextCycleAcceptanceCriteriaJson = "",
+  [string] $NextCycleVerificationJson = "",
   [string] $AddConstraintsJson = "",
   [string] $SteeringDirective = "",
   [object] $InterruptRunningWorkers = $null,
@@ -1233,6 +1246,12 @@ function Invoke-TeamCommand {
     antigravityPreferredTaskPattern = $AntigravityPreferredTaskPattern
     modelPolicyReviewAfter = $ModelPolicyReviewAfter
   }
+  if (-not [string]::IsNullOrWhiteSpace($CompletionPolicy)) {
+    $payloadObject.completionPolicy = $CompletionPolicy
+  }
+  if (-not [string]::IsNullOrWhiteSpace($CycleObjective)) {
+    $payloadObject.cycleObjective = $CycleObjective
+  }
   if (-not [string]::IsNullOrWhiteSpace($Address)) {
     $payloadObject.address = $Address
   }
@@ -1264,7 +1283,9 @@ function Invoke-TeamCommand {
   foreach ($jsonList in @(
     @{ Name = "constraints"; Value = $ConstraintsJson },
     @{ Name = "acceptanceCriteria"; Value = $AcceptanceCriteriaJson },
-    @{ Name = "verification"; Value = $VerificationJson }
+    @{ Name = "verification"; Value = $VerificationJson },
+    @{ Name = "cycleAcceptanceCriteria"; Value = $CycleAcceptanceCriteriaJson },
+    @{ Name = "cycleVerification"; Value = $CycleVerificationJson }
   )) {
     if ([string]::IsNullOrWhiteSpace([string]$jsonList.Value)) { continue }
     try {
@@ -1422,6 +1443,32 @@ function Invoke-BridgeJobCommand {
   }
   $projectVerifiedValue = ConvertTo-BooleanValue -Value $ProjectVerified -Default $false
   $projectVerificationFailedValue = ConvertTo-BooleanValue -Value $ProjectVerificationFailed -Default $false
+  $cycleVerifiedValue = ConvertTo-BooleanValue -Value $CycleVerified -Default $false
+  $cycleVerificationFailedValue = ConvertTo-BooleanValue -Value $CycleVerificationFailed -Default $false
+  $nextWorkItemValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($NextWorkItemsJson)) {
+    try {
+      $nextWorkItemValues = @(ConvertFrom-Json -InputObject $NextWorkItemsJson | ForEach-Object { $_ })
+    } catch {
+      throw "NextWorkItemsJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
+  $nextCycleAcceptanceValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($NextCycleAcceptanceCriteriaJson)) {
+    try {
+      $nextCycleAcceptanceValues = @(ConvertFrom-Json -InputObject $NextCycleAcceptanceCriteriaJson | ForEach-Object { [string]$_ })
+    } catch {
+      throw "NextCycleAcceptanceCriteriaJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
+  $nextCycleVerificationValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($NextCycleVerificationJson)) {
+    try {
+      $nextCycleVerificationValues = @(ConvertFrom-Json -InputObject $NextCycleVerificationJson | ForEach-Object { [string]$_ })
+    } catch {
+      throw "NextCycleVerificationJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
   $addConstraintValues = @()
   if (-not [string]::IsNullOrWhiteSpace($AddConstraintsJson)) {
     try {
@@ -1456,6 +1503,16 @@ function Invoke-BridgeJobCommand {
     projectVerified = $projectVerifiedValue
     projectVerificationFailed = $projectVerificationFailedValue
     projectVerificationSummary = $ProjectVerificationSummary
+    cycleVerified = $cycleVerifiedValue
+    cycleVerificationFailed = $cycleVerificationFailedValue
+    cycleVerificationSummary = $CycleVerificationSummary
+    expectedRunId = $ExpectedRunId
+    expectedCycleId = $ExpectedCycleId
+    nextCycleObjective = $NextCycleObjective
+    nextWorkItems = $nextWorkItemValues
+    nextCycleAcceptanceCriteria = $nextCycleAcceptanceValues
+    nextCycleVerification = $nextCycleVerificationValues
+    refreshInventory = ConvertTo-BooleanValue -Value $RefreshInventory -Default $false
     addConstraints = $addConstraintValues
     steeringDirective = $SteeringDirective
     interruptRunningWorkers = $interruptRunningWorkersValue

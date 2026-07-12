@@ -28,15 +28,18 @@
 - Give individual provider calls complexity-adaptive safety leases from 10 to 90 minutes. A dead-call timeout may rescope/fail over the item once; it never terminates the overall objective.
 - Use `run-project-manager` for normal execution and `project-manager-status` for continuation. `project-manager-plan` is diagnostic only; never reconstruct provider commands from its JSON during a normal run.
 - Treat the initial run result as a dispatch receipt. Report exact assignments, then make one transition-aware status call with `waitSeconds=120`; it returns early on a transition. If unchanged, report one two-minute activity checkpoint and yield until the next Goal continuation.
-- Honor `CEOControlRoom`, `RequiredUserStatus`, and `RequiredProgressReport`. Relay exactly `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`; include active owner/model/elapsed time and current platform capacity/reset evidence.
+- Honor `CEOControlRoom`, `RequiredUserStatus`, and `RequiredProgressReport`. Relay exactly `Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`; keep the root objective verbatim and include active owner/model/elapsed time plus current platform capacity/reset evidence.
 - A CEO continuation is a management decision, not merely a poll. If the status records a stall, failure, quota transition, weak result, or released dependency, rescope, correct, reassign, cool down, fail over, or dispatch the next ready lane before reporting.
 - For an explicitly continuous or 24/7 objective, prefer one active Goal in the same task. Create an automation only when the user separately requests wall-clock reporting.
+- "Manage as my CEO control room" selects manager mode; it does not define or replace the root objective. Use the active Goal objective verbatim or the user's explicit measurable outcome.
+- Persistent control rooms use `completionPolicy=continuous-management`. Record each batch with `cycleVerified` or `cycleVerificationFailed`, the exact latest `expectedRunId` and `expectedCycleId`, then pass `nextWorkItems`; never call `projectVerified` or `update_goal complete` for a cycle. Stale retries are rejected rather than applied to a newer cycle.
+- Do not use `steeringDirective` for routine rescoping or another improvement cycle. It is reserved for actual user steering because its default behavior may terminate the active run.
 - Mark completed or blocked current-Codex items through `project-manager-status`; completion requires a matching compact evidence entry so dependent CLI work advances from verified state.
 - A worker that requires live/current runtime truth depends on the Codex live-control item and receives its evidence. Git status is not runtime evidence.
 - Manager-only mode never replaces a failed worker by editing locally. Rescope or reassign the bounded item; `takeoverCodexItems` is available only when the user explicitly disables manager-only mode.
 - Native Codex work must come from an exact `HostCodexAction`. First acknowledge its token-bound `reserved` event, then spawn only if the next status still exposes that exact action; acknowledge `started` with the returned agent id, then completion, failure, or cancellation through the same token-bound lifecycle. Never record native worker output as parent-chat `codexEvidence`.
 - A changed goal or stop request with a running native Codex worker emits a host cancellation action. Refuse replacement until `multi_agent_v1__close_agent` is acknowledged or the stop is truthfully recorded as unconfirmed.
-- Record final verification as passed or failed. A failed live or acceptance gate remains an explicit blocker and forbids a completion claim.
+- For finite objectives, record final verification as passed or failed. For persistent objectives, record cycle verification and immediately define the next bounded cycle. A failed live or acceptance gate remains explicit evidence and never permits a root completion claim.
 - On new user steering or withdrawn permission, interrupt running workers first, persist the new constraint, and replan. Never let stale workers finish against superseded instructions.
 - Treat `ready-for-codex` as active and refuse a replacement run when an old worker process cannot be confirmed stopped.
 - Do not dispatch an external writer without an explicit or evidence-inferred file boundary.
@@ -70,6 +73,8 @@ When a result is close but incomplete, send one narrow correction. When failure 
 | "Codex reset before I finished" | Resume the persisted run, inspect current external job state, and continue from the recorded dependency graph instead of replaying work |
 | "Do not create another chat" | Interpret this as no new Codex control-room task/thread; provider worker sessions/jobs remain allowed and required |
 | "The worker is still running" | Show owner, model, elapsed time, capacity, and the next intervention threshold; do not report only `running` |
+| "The review cycle passed" | Record a cycle checkpoint and start the next bounded cycle; do not complete the continuous root Goal |
+| "I need to rescope the next fix" | Use `cycleVerificationFailed` plus `nextWorkItems`, not `steeringDirective` or a replacement run |
 
 ## User Escalation
 

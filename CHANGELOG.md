@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.6 - 2026-07-12
+
+- Added an immutable `RootGoal` and explicit `finite` versus `continuous-management` completion policy so "manage as CEO" cannot shrink the project objective into a monitoring task.
+- Added a runtime completion firewall: continuous control rooms reject `projectVerified`/`projectVerificationFailed`, never return root completion permission, and cannot cause `update_goal complete` from a small review cycle.
+- Added numbered delivery cycles with `cycleVerified`, `cycleVerificationFailed`, and `nextWorkItems`, allowing corrections and further work under the same durable run id instead of replacement runs.
+- Added run-and-cycle identity guards so delayed status retries or capacity-planning races cannot mutate a newer cycle or another root run.
+- Made cycle results immutable and archived bounded work-item/job evidence before advancing, while failed cycles remain active checkpoints instead of terminal root runs.
+- Added cycle-state revision checks, idempotent full Codex-result retries, a same-run malformed-cycle repair route, and a persisted two-cycle PowerShell regression test.
+- Protected active continuous runs from rephrased-goal or contract replacement and made the seven-field CEO brief display the exact root objective and separate root/cycle progress.
+- Stopped skill self-discovery and stale memory-workflow substitution, reserved steering for actual user changes, and required persistent managers to keep the Codex Goal active until explicit user stop.
+
 ## 0.1.5 - 2026-07-12
 
 - Replaced the ambiguous "do not create another chat" rule with an explicit single Codex control-room task contract; native Codex subagents and headless Claude, Antigravity, and Cursor worker sessions/jobs remain allowed and expected.

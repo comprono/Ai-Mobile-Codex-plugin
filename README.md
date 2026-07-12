@@ -8,13 +8,14 @@ The goal is better delivery, not merely token saving or static scheduling. AI Mo
 
 ## Core Flow
 
-For a nontrivial goal, use one Codex project task, start a Codex Goal when you want durable repeated continuation, and mention `@ai-mobile`. The skill reuses that Goal and the workspace's active run, detects whether native Codex workers are callable, and executes the returned dependency stages. The default trigger is deliberately short:
+For a nontrivial goal, use one Codex project task and mention `@ai-mobile`. "Manage this project as my CEO control room" selects the operating mode; it is not the project objective. On the first invocation, include the actual root outcome or explicitly create a Codex Goal containing it. Later invocations reuse that exact Goal/root objective.
 
 ```text
 @ai-mobile Manage this project as my CEO control room.
+Root objective: <the measurable project outcome that must remain active>
 ```
 
-This means: keep this existing Codex task as the only user-facing control room; do not create another Codex task, thread, Goal, or automation; do create and manage separate native Codex workers and headless Claude/Antigravity/Cursor jobs when eligible.
+The one-line form is sufficient only when the same task already has an active Goal or AI Mobile run with `RootGoal`. This means: keep this existing Codex task as the only user-facing control room; do not create another Codex task, thread, Goal, or automation; do create and manage separate native Codex workers and headless Claude/Antigravity/Cursor jobs when eligible.
 
 ### Operating Frame
 
@@ -25,16 +26,17 @@ This means: keep this existing Codex task as the only user-facing control room; 
 - **Writer boundaries:** up to two writers may run together when their workspace-relative file or directory boundaries are explicit and pairwise disjoint. Overlapping or unscoped writers remain serialized.
 - **Worker lease:** adaptive 10-90 minute safety window for one provider call; a dead call can be replaced without ending the objective.
 - **Utilization:** use every appropriate healthy resource when distinct dependency-ready work exists; never duplicate the same task merely to keep every model busy.
+- **Continuous management:** persistent control rooms use one immutable root objective and numbered delivery cycles. Finishing a review/fix cycle never completes the root Goal.
 
 PowerShell fallback:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<complete outcome>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 0
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<exact root outcome>" -Workspace "<path>" -CompletionPolicy continuous-management -CycleObjective "<first bounded delivery cycle>" -HorizonHours 5 -WaitSeconds 0
 ```
 
 The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. Project duration is continuous by default: the objective stays available until verified, genuinely blocked, or explicitly stopped. A lightweight detached Node.js supervisor advances sequential external stages and rolling capacity checkpoints without model-token use. A capacity checkpoint is internal routing state, not a schedule or a new chat. When Codex capacity approaches its reserve, unstarted work is routed to durable external CLI jobs so progress can continue; after the Codex window resets, the same Goal/task resumes the persisted run through `project-manager-status` instead of replaying the project.
 
-Manager status is evidence-first and visible. The initial call returns assignments immediately; one `project-manager-status -WaitSeconds 120` call then returns early on a recorded transition or returns one two-minute activity checkpoint. This replaces repetitive 20-second polling. Every status starts with a bounded `CEOControlRoom` brief: `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`. It includes active owner/model/elapsed time plus Codex, Claude, Antigravity, and Cursor capacity/reset evidence. If discovery omits a safe writer file map, AI Mobile launches one read-only scope worker to return exact machine-readable boundaries and resumes the writer without spending provider failover. Continuous work prefers a Codex Goal in the same project task; automations are created only when the user separately asks for timed reports. The detached local supervisor advances eligible external work without model tokens.
+Manager status is evidence-first and visible. The initial call returns assignments immediately; one `project-manager-status -WaitSeconds 120` call then returns early on a recorded transition or returns one two-minute activity checkpoint. Every status starts with a bounded `CEOControlRoom` brief: `Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`. `Objective` is the immutable root goal; progress distinguishes root state from the current cycle. Continuous cycles close with `cycleVerified`/`cycleVerificationFailed` and add `nextWorkItems` under the same run id, using the exact latest `RunId` and `ActiveCycleId` as fail-closed transition guards. The runtime rejects stale cycle requests and `projectVerified` for continuous management, so a retry or small read-only cycle cannot close the Codex Goal. Compact cycle evidence remains archived when the next cycle starts. Automations are created only when separately requested for timed reports.
 
 ### Lean tool surface
 
@@ -159,8 +161,9 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 ## Operating Rules
 
 - Startup is passive. Opening Codex must not open, close, restart, or repair Antigravity.
-- Use `run-project-manager` as the one-call default. It reuses only the same active goal and run contract; changed constraints, work graph, gates, routing authorization, or budgets trigger a bounded replacement. Same-goal constraints, gates, and work graph carry across stopped/completed runs, so earlier boundaries survive later steering without being restated.
+- Use `run-project-manager` once for a root objective. Finite objectives may use a bounded replacement after a real contract change. Active `continuous-management` objectives reject rephrased or reduced replacement prompts; routine corrections and new work graphs must use `project-manager-status` cycle fields under the same run id. Explicit user steering or stop instructions terminate workers first. Persisted constraints and root gates carry across an intentional restart so safety boundaries are not silently lost.
 - `ready-for-codex` is still active until final verification or explicit termination. A changed goal stops that run first, and a replacement is refused if any old worker process cannot be confirmed stopped.
+- For `continuous-management`, `ready-for-codex` is only a cycle boundary. `projectVerified` is rejected; the manager records cycle evidence and supplies the next bounded cycle under the same run id.
 - Complex default implementations wait for discovery evidence before writer dispatch so the orchestrator can infer a narrow file boundary instead of granting repository-wide write scope.
 - A five-hour capacity horizon is a rolling forecast, not a countdown or project deadline. Project duration is continuous by default, with capacity re-evaluated every 20 minutes, every five minutes near the Codex manager reserve, or on the next status call.
 - Individual provider calls use complexity-adaptive safety leases: roughly 10 minutes for small work and up to 90 minutes for critical work. These protect against dead CLIs; they do not end the project, and an explicit `MaxWorkerMinutes` may set a different ceiling.
@@ -199,8 +202,8 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Give each nontrivial work item concise acceptance criteria and focused verification checks. Use canonical `objective`, `executionClass`, and `expectedFiles` fields. Load only relevant context, run at most two pairwise-disjoint writers, and merge independent reports once in Codex.
 - Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
-- Treat `State: ready-for-codex` as an integration gate, not completion. Codex must verify before reporting the user goal complete.
-- Treat `CompletionClaimAllowed` as authoritative. Only a fully completed work graph plus recorded passing final project verification permits a success claim; a failed gate is recorded as `blocked` with its evidence. One completed cycle is not an ongoing AI Mobile scheduler.
+- Treat `State: ready-for-codex` as an integration or cycle gate, not completion. Only a finite run can return `CompletionClaimAllowed: true`; continuous control rooms keep the root Goal active until explicit user stop.
+- Treat `CompletionClaimAllowed` as authoritative. Only a finite root objective with passing final verification permits a success claim. One completed cycle cannot justify stopping or completing a continuous control room.
 - If a worker exits after finalizing telemetry but before its terminal status write, recover the real success/failure category from telemetry and compact artifacts instead of reporting a generic process-gone failure.
 - `cancel-job` stops the recorded local worker process tree before marking the job cancelled.
 - If DevTools says `Transport closed`, call `devtools-health` once; do not keep retrying `list_pages`.
