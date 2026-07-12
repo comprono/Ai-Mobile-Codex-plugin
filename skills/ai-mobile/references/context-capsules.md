@@ -18,7 +18,7 @@ A capsule packages the minimum durable state required to continue work without r
   "workItems": [],
   "fileEvidence": [],
   "continuity": { "summary": "", "artifactRefs": [] },
-  "policy": { "transcriptIncluded": false, "oneWriterPerWorkspace": true, "orchestrationDepth": 1 }
+  "policy": { "transcriptIncluded": false, "oneWriterPerBoundary": true, "maxParallelWriters": 2, "orchestrationDepth": 1 }
 }
 ```
 

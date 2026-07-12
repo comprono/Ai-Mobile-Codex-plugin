@@ -4,7 +4,7 @@ Created by [comprono](https://github.com/comprono).
 
 AI Mobile is a community Codex MCP plugin for Windows. It turns one Codex task into a project control room across native Codex workers, local Antigravity CLI models, Antigravity desktop, Claude Code, and optional Cursor workers. A workflow can start from the ChatGPT mobile app and continue through Codex on the linked PC.
 
-The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players. The current Codex chat stays manager-only: it discovers models, effort levels, and quota windows; plans and monitors work; asks for decisions; and reports verified outcomes. Separate native Codex agents and external workers perform bounded project discovery, implementation, and tests.
+The goal is better delivery, not merely token saving or static scheduling. AI Mobile treats platforms as teams and models as players. The current Codex chat stays manager-only: it discovers models, effort levels, and quota windows; plans and monitors work; asks for decisions; and reports verified outcomes. Manager-only applies only to that control-room chat. Separate native Codex agents, Claude Code, Antigravity, and optional Cursor workers perform bounded project discovery, implementation, and tests concurrently when their dependencies and ownership boundaries allow it.
 
 ## Core Flow
 
@@ -20,6 +20,7 @@ For a nontrivial goal, use one Codex project task, start a Codex Goal when you w
 - **Capacity horizon:** rolling five-hour forecast used to choose models; it never ends the project.
 - **Capacity checkpoint:** normally every 20 minutes, accelerating to five minutes as shared Codex capacity approaches the manager reserve; refreshes quotas, resets, cooldowns, and pending assignments.
 - **Manager runway:** 15% of shared Codex capacity is protected by default, and only one native Codex worker runs at once unless the caller explicitly raises the limit. Claude and Antigravity CLI workers retain independent parallelism.
+- **Writer boundaries:** up to two writers may run together when their workspace-relative file or directory boundaries are explicit and pairwise disjoint. Overlapping or unscoped writers remain serialized.
 - **Worker lease:** adaptive 10-90 minute safety window for one provider call; a dead call can be replaced without ending the objective.
 - **Utilization:** use every appropriate healthy resource when distinct dependency-ready work exists; never duplicate the same task merely to keep every model busy.
 
@@ -31,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 
 The call passively discovers installed workers/models, local Codex five-hour and weekly usage evidence, Claude usage windows, Antigravity per-model capacity when already running, supported Codex reasoning efforts, cooldowns, and recent outcomes. It writes a transcript-free context capsule and an exact action plan under `.antigravity-bridge/orchestrator/`. It does not open desktop apps just to plan. Project duration is continuous by default: the objective stays available until verified, genuinely blocked, or explicitly stopped. A lightweight detached Node.js supervisor advances sequential external stages and rolling capacity checkpoints without model-token use. A capacity checkpoint is internal routing state, not a schedule or a new chat. When Codex capacity approaches its reserve, unstarted work is routed to durable external CLI jobs so progress can continue; after the Codex window resets, the same Goal/task resumes the persisted run through `project-manager-status` instead of replaying the project.
 
-Manager status is evidence-first and visible: every snapshot reports completed, active, failed/blocked, and pending work, plus the latest transition and exact next action. The initial call returns assignments immediately, then the skill uses short status polls rather than ending with a generic `running` message. If discovery omits a safe writer file map, AI Mobile launches one read-only scope worker to return exact machine-readable boundaries and resumes the writer without spending provider failover. Continuous work prefers a Codex Goal in the same project task; automations are created only when the user separately asks for timed reports. The detached local supervisor advances eligible external work without model tokens.
+Manager status is evidence-first and visible. The initial call returns assignments immediately; one `project-manager-status -WaitSeconds 120` call then returns early on a recorded transition or returns one two-minute activity checkpoint. This replaces repetitive 20-second polling. Reports honor the private local address/style and use five concise fields: `Changed`, `Team now`, `Progress`, `Blocker`, and `Next`. If discovery omits a safe writer file map, AI Mobile launches one read-only scope worker to return exact machine-readable boundaries and resumes the writer without spending provider failover. Continuous work prefers a Codex Goal in the same project task; automations are created only when the user separately asks for timed reports. The detached local supervisor advances eligible external work without model tokens.
 
 ### Lean tool surface
 
@@ -40,11 +41,11 @@ AI Mobile exposes ten manager/setup MCP tools by default instead of loading all 
 Complex callers can provide `WorkItemsJson` instead of manually splitting work by software:
 
 ```powershell
-$items = '[{"id":"architecture","objective":"Review the design and risks","kind":"architecture-review","complexity":"high","readOnly":true},{"id":"implementation","objective":"Implement the accepted design","kind":"implementation","complexity":"high","readOnly":false},{"id":"verification","objective":"Independently verify behavior","kind":"testing-review","complexity":"high","readOnly":true,"dependsOn":["implementation"]}]'
+$items = '[{"id":"architecture","objective":"Review the design and risks","executionClass":"analysis","kind":"architecture-review","complexity":"high","readOnly":true},{"id":"implementation","objective":"Implement the accepted design","executionClass":"code","kind":"implementation","complexity":"high","readOnly":false,"expectedFiles":["src/"]},{"id":"verification","objective":"Independently verify behavior","executionClass":"analysis","kind":"testing-review","complexity":"high","readOnly":true,"dependsOn":["implementation"]}]'
 & "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<complete outcome>" -Workspace "<path>" -WorkItemsJson $items
 ```
 
-The active Codex skill reserves each token-bound native Codex action through `project-manager-status` before calling the host tool. The next status response exposes the exact spawn action while reserved; `started` then binds the returned agent id. Starts, completions, failures, and cancellations use the same token, so one-writer and replacement safety also cover host agents. The MCP server never starts `codex.exe`. Existing external-only orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
+The active Codex skill reserves each token-bound native Codex action through `project-manager-status` before calling the host tool. The next status response exposes the exact spawn action while reserved; `started` then binds the returned agent id. Starts, completions, failures, and cancellations use the same token, so bounded-writer and replacement safety also cover host agents. The MCP server never starts `codex.exe`. Existing external-only orchestration remains available; if it returns `State: running`, resume without reading each worker separately:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-team-run -Workspace "<path>" -WaitSeconds 30
@@ -115,13 +116,16 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 
 # Goal-driven orchestration
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 5
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-status -Workspace "<path>" -WaitSeconds 30
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-status -Workspace "<path>" -WaitSeconds 120
 
 # Add a new safety constraint now; active workers are interrupted by default
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-status -Workspace "<path>" -AddConstraintsJson '["Do not access email."]' -SteeringDirective "Do not access email" -InterruptRunningWorkers $true
 
 # Explicitly permit Antigravity CLI for this run (it may require browser sign-in)
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -AllowAntigravityCli $true
+
+# Unattended Antigravity: sandboxed tool prompts are pre-approved; authentication and external-effect gates remain blocked
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -AllowAntigravityCli $true -UnattendedMode $true -AllowAntigravityPermissionBypass $true
 
 # Plan-only routing diagnostic
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" project-manager-plan -Goal "<goal>" -Workspace "<path>" -HorizonHours 5
@@ -165,6 +169,7 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Browser profiles, cookies, saved credentials, account selection, email/SMS messages, and OAuth flows are protected state. Workers must stop at sign-in, CAPTCHA, email, SMS, or authorization gates unless the user explicitly authorizes that exact action.
 - Live session, login, cookie, account, profile, credential, OAuth, email/SMS, and CAPTCHA checks remain current-Codex actions. CLI workers may review bounded source code about those systems but do not inspect the user's live protected state.
 - The current Codex chat is manager-only by default: every normal orchestration entrypoint treats an omitted `managerOnly` as true. It owns goals, capacity decisions, steering, compact evidence review, user-boundary decisions, and reporting. It does not scan project files, run diagnostics/tests, edit source, or duplicate worker execution. Set `managerOnly=false` only when the user explicitly asks this chat to implement or diagnose a bounded item.
+- Manager-only never disables the Codex platform. Separate native Codex host workers remain eligible whenever their measured shared capacity is above the manager reserve, and may run beside Claude and Antigravity workers on independent work.
 - Native Codex workers are separate host agents selected from the current model catalog and shared Codex capacity evidence. The default 15% manager reserve prevents new native dispatch when the shared pool is low, and default native concurrency is one so parallel subagents cannot consume the manager's recovery runway. Every host attempt reserves before spawn, then uses a run-bound attempt id and dispatch token through `hostWorkerEvents` to bind, complete, fail, or cancel the returned agent id.
 - Real submissions, sends, deploys, purchases, destructive actions, and other external effects remain current-Codex actions with authorization and live-state checks. CLI workers may analyze, patch, or verify them but cannot silently execute them.
 - Current-runtime analysis is automatically sequenced after the relevant live Codex control action. Downstream workers receive compact dependency results and verified Codex evidence instead of rediscovering state from scratch.
@@ -187,9 +192,9 @@ Important local tools include `run-project-manager`, `project-manager-status`, `
 - Do not treat process exit code 0 as completion when the result is empty, generic, off-task, or only identifies the model. The orchestrator classifies that as an insufficient result and can fail over the narrow item once.
 - Keep worker prompts bounded and results complexity-sized. Do not stream worker narration or repeatedly read successful job artifacts into Codex.
 - External writer lanes require an explicit file boundary or a narrow boundary inferred from verified dependency evidence. If neither exists, manager-only mode requests bounded discovery and blocks the writer instead of making the control-room chat explore or implement.
-- Native Codex host workers participate in the same dependency, one-writer, evidence, cooldown, and bounded-failover rules as CLI workers. A changed goal cannot start a replacement until any running host agent is confirmed closed.
+- Native Codex host workers participate in the same dependency, bounded-writer, evidence, cooldown, and bounded-failover rules as CLI workers. A changed goal cannot start a replacement until any running host agent is confirmed closed.
 - Worker change artifacts include only paths changed during that worker run. A path already dirty before launch is detected but its full pre-existing diff is never attributed to the worker.
-- Give each nontrivial work item concise acceptance criteria and focused verification checks. Load only the relevant context, keep one writer per workspace, and merge independent reports once in Codex.
+- Give each nontrivial work item concise acceptance criteria and focused verification checks. Use canonical `objective`, `executionClass`, and `expectedFiles` fields. Load only relevant context, run at most two pairwise-disjoint writers, and merge independent reports once in Codex.
 - Use direct single-lane execution when one perspective is enough; fan out only independent lanes with distinct outputs. Workers never invoke more workers, and orchestration depth stays one level.
 - Keep at least one cross-platform alternate in each failover pool so a provider-level failure does not cycle through only that provider's models.
 - Treat `State: ready-for-codex` as an integration gate, not completion. Codex must verify before reporting the user goal complete.

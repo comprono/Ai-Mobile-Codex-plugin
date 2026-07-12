@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   communicationStyle: "professional",
   address: "",
   updateStyle: "concise-executive",
@@ -18,6 +18,7 @@ const DEFAULT_PROFILE = Object.freeze({
   adaptiveRouting: true,
   cliFirst: true,
   uiFallbackOnly: true,
+  antigravityAutoApprovePermissions: false,
 });
 
 function profilePath() {
@@ -43,7 +44,7 @@ function normalizeProfile(value = {}) {
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     communicationStyle: style,
     address: cleanText(value.address, 80),
     updateStyle: ["concise-executive", "technical", "minimal"].includes(String(value.updateStyle || "").toLowerCase())
@@ -58,6 +59,7 @@ function normalizeProfile(value = {}) {
     adaptiveRouting: value.adaptiveRouting !== false,
     cliFirst: value.cliFirst !== false,
     uiFallbackOnly: value.uiFallbackOnly !== false,
+    antigravityAutoApprovePermissions: value.antigravityAutoApprovePermissions === true,
   };
 }
 

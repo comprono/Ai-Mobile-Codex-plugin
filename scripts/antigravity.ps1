@@ -28,6 +28,7 @@ param(
   [string] $AntigravityPreferredTaskPattern = "",
   [string] $ModelPolicyReviewAfter = "",
   [object] $AdaptiveRouting = $null,
+  [object] $AntigravityAutoApprovePermissions = $null,
   [string] $WorkItemsJson = "",
   [string] $WorkItemsFile = "",
   [string] $ConstraintsJson = "",
@@ -53,6 +54,7 @@ param(
   [string] $AgyPrintTimeout = "30m",
   [object] $AgyContinueLatest = $false,
   [object] $AgySandbox = $true,
+  [object] $AgyAutoApprovePermissions = $false,
   [string] $ClaudeModel = "auto",
   [string] $ClaudeFallbackModel = "",
   [string] $ClaudeEffort = "",
@@ -76,12 +78,15 @@ param(
   [object] $ManagerOnly = $true,
   [object] $AllowPremiumModels = $false,
   [object] $AllowAntigravityCli = $false,
+  [object] $UnattendedMode = $false,
+  [object] $AllowAntigravityPermissionBypass = $false,
   [object] $IncludePlan = $false,
   [object] $RefreshInventory = $false,
   [int] $RunDeadlineMinutes = 0,
   [int] $CapacityCheckpointMinutes = 20,
   [int] $CodexManagerReservePercent = 15,
   [int] $MaxConcurrentCodexWorkers = 1,
+  [int] $MaxParallelWriters = 2,
   [int] $MaxWorkerMinutes = 0,
   [int] $MaxClaudeOutputTokens = 12000,
   [double] $MaxClaudeBudgetUsd = 0,
@@ -1171,6 +1176,8 @@ function Invoke-TeamCommand {
   $managerOnlyValue = ConvertTo-BooleanValue -Value $ManagerOnly -Default $true
   $allowPremiumModelsValue = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
   $allowAntigravityCliValue = ConvertTo-BooleanValue -Value $AllowAntigravityCli -Default $false
+  $unattendedModeValue = ConvertTo-BooleanValue -Value $UnattendedMode -Default $false
+  $allowAntigravityPermissionBypassValue = ConvertTo-BooleanValue -Value $AllowAntigravityPermissionBypass -Default $false
   $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
   $refreshInventoryValue = ConvertTo-BooleanValue -Value $RefreshInventory -Default $false
   $hostCodexAvailableValue = ConvertTo-BooleanValue -Value $HostCodexAvailable -Default $false
@@ -1196,12 +1203,15 @@ function Invoke-TeamCommand {
     claudeModel = $ClaudeModel
     allowPremiumModels = $allowPremiumModelsValue
     allowAntigravityCli = $allowAntigravityCliValue
+    unattendedMode = $unattendedModeValue
+    allowAntigravityPermissionBypass = $allowAntigravityPermissionBypassValue
     includeCursor = $includeCursorValue
     managerOnly = $managerOnlyValue
     runDeadlineMinutes = $RunDeadlineMinutes
     capacityCheckpointMinutes = $CapacityCheckpointMinutes
     codexManagerReservePercent = $CodexManagerReservePercent
     maxConcurrentCodexWorkers = $MaxConcurrentCodexWorkers
+    maxParallelWriters = $MaxParallelWriters
     maxWorkerMinutes = $MaxWorkerMinutes
     maxClaudeOutputTokens = $MaxClaudeOutputTokens
     maxClaudeBudgetUsd = $MaxClaudeBudgetUsd
@@ -1228,6 +1238,9 @@ function Invoke-TeamCommand {
   }
   if ($null -ne $AdaptiveRouting) {
     $payloadObject.adaptiveRouting = ConvertTo-BooleanValue -Value $AdaptiveRouting -Default $true
+  }
+  if ($null -ne $AntigravityAutoApprovePermissions) {
+    $payloadObject.antigravityAutoApprovePermissions = ConvertTo-BooleanValue -Value $AntigravityAutoApprovePermissions -Default $false
   }
   $remainingPercentValue = 0.0
   if ([double]::TryParse($CodexRemainingPercent, [ref]$remainingPercentValue)) {
@@ -1539,6 +1552,7 @@ function Invoke-AgyBridgeCommand {
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $continueValue = ConvertTo-BooleanValue -Value $AgyContinueLatest -Default $false
   $sandboxValue = ConvertTo-BooleanValue -Value $AgySandbox -Default $true
+  $autoApprovePermissionsValue = ConvertTo-BooleanValue -Value $AgyAutoApprovePermissions -Default $false
   $payload = [PSCustomObject]@{
     goal = $Goal
     workspace = $Workspace
@@ -1549,6 +1563,7 @@ function Invoke-AgyBridgeCommand {
     conversation = $AgyConversation
     continueLatest = $continueValue
     sandbox = $sandboxValue
+    autoApprovePermissions = $autoApprovePermissionsValue
     printTimeout = $AgyPrintTimeout
     start = $startValue
     jobId = $JobId

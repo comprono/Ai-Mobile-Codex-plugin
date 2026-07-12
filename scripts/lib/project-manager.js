@@ -106,12 +106,33 @@ function chooseHostCodexAction(candidates, item) {
   };
 }
 
+function normalizedBoundary(value) {
+  return String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function disjointWriterPair(left, right) {
+  if (!left || !right || left.readOnly !== false || right.readOnly !== false) return false;
+  const leftFiles = left.expectedFiles || [];
+  const rightFiles = right.expectedFiles || [];
+  if (!leftFiles.length || !rightFiles.length) return false;
+  return leftFiles.every((leftFile) => rightFiles.every((rightFile) => {
+    const a = normalizedBoundary(leftFile);
+    const b = normalizedBoundary(rightFile);
+    if (!a || !b || /[*?\[\]{}]/.test(a) || /[*?\[\]{}]/.test(b)) return false;
+    return a !== b && !a.startsWith(`${b}/`) && !b.startsWith(`${a}/`);
+  }));
+}
+
 function shouldFanOut(workItems = []) {
   const ready = workItems.filter((item) => !(item.dependsOn || []).length);
   if (ready.length < 2) return false;
   const writers = ready.filter((item) => item.readOnly === false);
-  if (writers.length > 1) return false;
-  return ready.some((item) => item.readOnly !== false) && new Set(ready.map((item) => item.kind)).size > 1;
+  for (let index = 0; index < writers.length; index += 1) {
+    for (let peerIndex = index + 1; peerIndex < writers.length; peerIndex += 1) {
+      if (!disjointWriterPair(writers[index], writers[peerIndex])) return false;
+    }
+  }
+  return writers.length > 1 || (ready.some((item) => item.readOnly !== false) && new Set(ready.map((item) => item.kind)).size > 1);
 }
 
 module.exports = {
@@ -121,4 +142,5 @@ module.exports = {
   normalizedEfforts,
   selectReasoningEffort,
   shouldFanOut,
+  disjointWriterPair,
 };

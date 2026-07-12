@@ -19,7 +19,7 @@ Do not turn unknown into healthy.
 - The five-hour and seven-day windows currently govern shared Codex agentic usage; do not claim model-specific buckets unless the source explicitly provides one.
 - Select effort from that model's supported list. Low work uses low; normal work uses the model default; high work uses high; xhigh/max/ultra require material complexity or risk. Never spend maximum effort just because it exists.
 - Local policy may restrict the catalog to a current family such as Sol/Terra/Luna. The policy has a review date so model changes do not require code changes.
-- Treat the parent Codex chat and native Codex workers as different roles. The parent is manager-only; selected native workers execute bounded items through the host spawn tool and report with token-bound lifecycle evidence.
+- Treat the parent Codex chat and native Codex workers as different roles. The parent is manager-only; this does not disable Codex execution. Selected native workers execute bounded items through the host spawn tool and report with token-bound lifecycle evidence.
 - Native dispatch is two-phase: reserve through manager status before spawning, then bind the returned agent id on `started`. A reserved action remains visible until it starts, and a cancellation race stays blocked until it is acknowledged.
 - Capacity evidence is shared across Codex models unless the observed source explicitly identifies a model-specific bucket. Never invent separate Sol, Terra, Luna, or effort-level limits.
 - Protect a default 15% manager reserve in the shared Codex window. Penalize native workers as headroom shrinks, stop new host dispatch at the reserve, and default to one simultaneous native worker so the control room retains steering and failover capacity.
@@ -39,6 +39,7 @@ Do not turn unknown into healthy.
 - Read live per-model percentage/reset data only when the local service is already running.
 - Prefer Flash-class capacity for low-risk discovery/drafting. Escalate for complex implementation or review only when quality and capacity justify it.
 - Use desktop DevTools only for visible project/chat/model/composer state.
+- In unattended mode, exclude Antigravity unless sandboxed tool-permission auto-approval was explicitly authorized. The CLI flag never authorizes OAuth, login, CAPTCHA, external effects, destructive actions, or access outside the assigned boundary.
 
 ## Cursor
 
@@ -46,7 +47,7 @@ Do not turn unknown into healthy.
 
 ## Five-Hour Plan
 
-For each candidate compute capability fit, quality floor, available capacity, reset within horizon, speed, cost/efficiency, project continuity, recent success/failure, file ownership, and independence. Recompute at a stage boundary, provider failure, reset, or stale-evidence threshold; do not poll continuously.
+For each candidate compute capability fit, quality floor, available capacity, reset within horizon, speed, cost/efficiency, project continuity, recent success/failure, file ownership, and independence. Recompute at a stage boundary, provider failure, reset, or stale-evidence threshold; do not poll continuously. Independent native Codex, Claude, and Antigravity work may run together, including up to two writers with pairwise-disjoint verified boundaries.
 
 Apply private local policy before scoring. Public defaults remain model-neutral; local allow/preference patterns and verified project outcomes can favor particular Codex, Claude, or Antigravity roles without exposing those preferences in the repository.
 

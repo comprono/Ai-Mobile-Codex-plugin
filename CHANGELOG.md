@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4 - 2026-07-12
+
+- Fixed defensive work-item normalization so `title`, `description`, and `class` aliases preserve the intended objective and analysis/code/integration execution class instead of collapsing work into generic read-only Flash tasks.
+- Added work-graph integrity detection so runs that already persisted lost placeholder objectives are safely replanned instead of resumed after upgrade.
+- Clarified that manager-only applies only to the parent control-room chat; separate native Codex workers remain executable and can run alongside Claude and Antigravity when current capacity and dependencies permit.
+- Added bounded parallel writers with pairwise-disjoint verified file or directory ownership, a default concurrency of two, and serialization for overlaps, wildcards, or missing boundaries.
+- Added an explicit unattended Antigravity policy: interactive lanes are excluded unless sandboxed permission auto-approval is authorized, and auto-approval never extends to OAuth, login, CAPTCHA, destructive actions, external effects, or undeclared paths.
+- Replaced repeated 20-second manager polling with one 120-second transition-aware wait that returns early on state change, plus profile-aware `Changed`, `Team now`, `Progress`, `Blocker`, and `Next` reporting.
+- Recovered corrupt worker status fail-closed from live process identity or finalized telemetry, returned the last verified snapshot on a transition-wait manifest race, centralized writer-boundary comparison, and prioritized native Codex reservations by work-item priority.
+- Added a complexity-sized hard Claude tool-operation budget so bounded workers stop with a concise blocker instead of consuming many exploratory turns.
+
 ## 0.1.3 - 2026-07-12
 
 - Retried transient Windows `EPERM`, `EACCES`, and `EBUSY` lock-acquisition collisions so overlapping supervisor and manager-status checks do not fail while preserving exclusive state updates.

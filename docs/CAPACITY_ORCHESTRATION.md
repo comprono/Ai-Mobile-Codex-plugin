@@ -28,7 +28,7 @@ Because native Codex workers consume that same shared pool, AI Mobile protects a
 
 ## Visible Progress And Scope Recovery
 
-`run-project-manager` returns initial assignments without a long silent wait. The manager follows with short `project-manager-status` polls and reports completed, active, failed/blocked, next-action, and next-check fields. For a continuous objective, prefer one active Codex Goal in the same project task; the detached supervisor remains responsible for zero-token external progression. Automations are reserved for separately requested wall-clock reports and are never implied by a capacity checkpoint.
+`run-project-manager` returns initial assignments without a long silent wait. The manager then makes one transition-aware `project-manager-status` call with `waitSeconds=120`; it returns early when recorded state changes. If no transition occurs, the response is one two-minute activity checkpoint rather than repeated 20-second reports. Runtime reporting honors the private local address/style and uses `Changed`, `Team now`, `Progress`, `Blocker`, and `Next`. For a continuous objective, prefer one active Codex Goal in the same project task; the detached supervisor remains responsible for zero-token external progression. Automations are reserved for separately requested wall-clock reports and are never implied by a capacity checkpoint.
 
 An external writer still requires a verified file boundary. If discovery does not return one, the run inserts one bounded read-only scope-discovery item with a machine-readable `BOUNDARY <writer-id>:` contract. This is a scoping correction, not a provider failure: it does not consume the writer's failover allowance, and the original writer resumes only after exact existing files are recorded.
 
@@ -59,7 +59,7 @@ The baseline family roles follow [Claude Code model configuration](https://code.
 4. Prefer Sonnet for substantial Claude implementation, architecture, debugging, and tests when its shared windows are healthy and the local profile permits it.
 5. Reserve Opus/Fable for complex premium reasoning or a justified dedicated-capacity opportunity.
 6. Penalize any resource below 15 percent effective remaining capacity and stop dispatching it when an applicable window is exhausted.
-7. Keep one workspace writer. Parallelize only independent read-only work, and honor the separate native Codex concurrency ceiling.
+7. Permit at most two simultaneous writers only when their verified workspace-relative file or directory boundaries are pairwise disjoint. Serialize overlaps, wildcards, missing boundaries, and shared integration surfaces; honor the separate native Codex concurrency ceiling.
 8. Record successful task affinity, failures, cooldowns, exact observed model ids, duration, and available token telemetry.
 9. On quota, outage, timeout, auth, model-unavailable, or insufficient output, fail over the narrow work item once to a provider-diverse alternate.
 10. Keep the parent Codex chat on planning, steering, evidence review, user decisions, and reporting; project execution belongs to separate native or CLI workers.

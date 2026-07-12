@@ -76,17 +76,24 @@ function normalizeWorkItem(item, index) {
   const complexity = ["low", "medium", "high", "critical"].includes(String(item?.complexity || "").toLowerCase())
     ? String(item.complexity).toLowerCase()
     : "medium";
+  const requestedClass = String(item?.executionClass || item?.class || "").trim().toLowerCase();
+  const executionClass = ["analysis", "code", "operation", "integration"].includes(requestedClass)
+    ? requestedClass
+    : item?.readOnly === false
+      ? "code"
+      : "analysis";
   return {
     id: boundedText(item?.id || `item-${index + 1}`, 64).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || `item-${index + 1}`,
-    objective: boundedText(item?.objective, 900),
-    kind: boundedText(item?.kind || "general", 100),
+    objective: boundedText(item?.objective || item?.description || item?.title, 900),
+    kind: boundedText(item?.kind || item?.executionClass || item?.class || "general", 100),
     complexity,
-    readOnly: item?.readOnly !== false,
+    executionClass,
+    readOnly: executionClass === "analysis",
     dependsOn: boundedList(item?.dependsOn, 8, 64),
-    expectedFiles: boundedList(item?.expectedFiles, 12, 500),
-    requiredCapabilities: boundedList(item?.requiredCapabilities, 10, 100),
-    acceptanceCriteria: boundedList(item?.acceptanceCriteria, 6, 400),
-    verification: boundedList(item?.verification, 6, 400),
+    expectedFiles: boundedList(item?.expectedFiles || item?.files, 12, 500),
+    requiredCapabilities: boundedList(item?.requiredCapabilities || item?.capabilities, 10, 100),
+    acceptanceCriteria: boundedList(item?.acceptanceCriteria || item?.acceptance, 6, 400),
+    verification: boundedList(item?.verification || item?.tests, 6, 400),
     contextBudgetChars: { low: 4000, medium: 7000, high: 11000, critical: 15000 }[complexity],
   };
 }
@@ -114,7 +121,8 @@ function buildContextCapsule(args = {}) {
     },
     policy: {
       transcriptIncluded: false,
-      oneWriterPerWorkspace: true,
+      oneWriterPerBoundary: true,
+      maxParallelWriters: Number.isFinite(Number(args.maxParallelWriters)) ? Math.max(1, Math.min(3, Number(args.maxParallelWriters))) : 2,
       orchestrationDepth: 1,
       broadLogsIncluded: false,
     },

@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
-  "version": "0.1.3",
-  "description": "Capacity-aware Codex project manager for native Codex workers, local Antigravity models, Claude Code, and optional Cursor on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
+  "version": "0.1.4",
+  "description": "Capacity-aware Codex control room for parallel native Codex, Claude Code, Antigravity, and optional Cursor workers on Windows, with bounded context, CLI-first execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "license": "MIT",
@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Run one Codex task as a capacity-aware project manager across local AI workers.",
-    "longDescription": "AI Mobile turns one Codex task into a manager-only project control room for Windows. It discovers native Codex models and supported efforts, local Codex capacity windows, Claude and Antigravity quotas, cooldowns, private user routing preferences, and recent outcomes; packages transcript-free project context; builds a dependency-aware work graph; and coordinates token-bound native Codex host agents with external CLI workers. Goal-aware single-task continuity, a protected Codex manager reserve, bounded native concurrency, durable external jobs, and a zero-model-token supervisor preserve work across usage resets without creating recurring chats. Visible progress snapshots report completed, active, failed, and blocked work; missing writer boundaries trigger one bounded read-only scope worker instead of wasting provider failover. The manager plans, steers, monitors, asks for decisions, and reports while separate workers perform bounded project work. Objectives continue until verified, genuinely blocked, or explicitly stopped, with one-writer safety, acknowledged host cancellation, rolling capacity checkpoints, and bounded failover.",
+    "longDescription": "AI Mobile turns one Codex task into a manager-only project control room for Windows. Manager-only applies to the parent chat, while separate native Codex, Claude Code, Antigravity, and optional Cursor workers execute suitable dependency-ready work. It discovers models, efforts, quota windows, cooldowns, private routing and communication preferences, and recent outcomes; packages transcript-free project context; normalizes alias-safe work graphs; and coordinates token-bound native Codex host agents with external CLI workers. Pairwise-disjoint writers may run concurrently, while overlaps remain serialized. Goal-aware single-task continuity, a protected Codex reserve, sandboxed unattended Antigravity permission policy, durable external jobs, and a zero-model-token supervisor preserve work across usage resets without recurring chats. Transition-aware status waits return early on change and require compact profile-aware reports. Objectives continue until verified, genuinely blocked, or explicitly stopped, with acknowledged host cancellation, rolling capacity checkpoints, bounded failover, and evidence-gated completion.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -66,6 +66,8 @@
       "Capability-aware model selection",
       "Dependency-aware work graphs",
       "Parallel worker lanes",
+      "Pairwise-disjoint parallel writers",
+      "Alias-safe work graphs",
       "Capacity-aware routing",
       "Per-run usage telemetry",
       "Cooldown-aware bounded failover",
@@ -86,7 +88,10 @@
       "Claude Code role contracts",
       "Structured Claude worker evidence",
       "Visible manager progress snapshots",
+      "Transition-aware manager reporting",
+      "Private profile form of address",
       "Automatic writer scope recovery",
+      "Sandboxed unattended Antigravity permissions",
       "Cursor UI handoff",
       "Cursor agent detection",
       "Mobile Codex handoff",
@@ -95,7 +100,7 @@
       "Public repo privacy scan"
     ],
     "defaultPrompt": [
-      "Plan and execute this project with AI Mobile using current capacity",
+      "Manage this project with AI Mobile using parallel capacity-aware workers",
       "Show AI Mobile resource inventory",
       "Show Codex and Claude usage windows"
     ],

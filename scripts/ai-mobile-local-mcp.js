@@ -10,6 +10,7 @@ const { buildContextCapsule, buildTaskCapsule, writeContextCapsule } = require("
 const {
   buildHostCodexCandidates,
   chooseHostCodexAction,
+  disjointWriterPair: writerItemsAreDisjoint,
   selectReasoningEffort,
   shouldFanOut,
 } = require("./lib/project-manager");
@@ -31,6 +32,36 @@ const resourceCacheTtlMs = 10 * 60 * 1000;
 const processIdentityCache = new Map();
 const claudeCliCapabilityCache = new Map();
 const claudeWorkerPluginDir = path.join(pluginRoot, "claude-plugin");
+
+const projectWorkItemSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "Stable short work-item id." },
+    objective: { type: "string", description: "Canonical concrete outcome for this item. Prefer this field." },
+    description: { type: "string", description: "Accepted alias for objective." },
+    title: { type: "string", description: "Short label; used as an objective fallback only." },
+    kind: { type: "string", description: "Examples: discovery, architecture, implementation, debugging, verification, review, integration, docs." },
+    complexity: { type: "string", enum: ["low", "medium", "high", "critical"], default: "medium" },
+    requiredCapabilities: { type: "array", items: { type: "string" }, maxItems: 10 },
+    capabilities: { type: "array", items: { type: "string" }, maxItems: 10, description: "Accepted alias for requiredCapabilities." },
+    dependsOn: { type: "array", items: { type: "string" }, maxItems: 12 },
+    expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Exact file or narrow directory ownership boundary." },
+    files: { type: "array", items: { type: "string" }, maxItems: 20, description: "Accepted alias for expectedFiles." },
+    readOnly: { type: "boolean", description: "True for scouts/reviewers; false for implementation." },
+    executionClass: { type: "string", enum: ["analysis", "code", "operation", "integration"] },
+    class: { type: "string", enum: ["analysis", "code", "operation", "integration"], description: "Accepted alias for executionClass." },
+    externallyConsequential: { type: "boolean", description: "True for real submissions, sends, deploys, purchases, destructive actions, or other external effects.", default: false },
+    preferredPlatform: { type: "string", description: "Optional preference: codex, claude, antigravity, or cursor." },
+    platform: { type: "string", description: "Accepted alias for preferredPlatform." },
+    acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 4 },
+    acceptance: { type: "array", items: { type: "string" }, maxItems: 4, description: "Accepted alias for acceptanceCriteria." },
+    verification: { type: "array", items: { type: "string" }, maxItems: 4 },
+    tests: { type: "array", items: { type: "string" }, maxItems: 4, description: "Accepted alias for verification." },
+    priority: { type: "number", description: "Higher values dispatch first.", default: 50 },
+  },
+  required: ["id"],
+  additionalProperties: false,
+};
 
 const tools = [
   {
@@ -208,7 +239,7 @@ const tools = [
         goal: { type: "string", description: "Complete project outcome." },
         workspace: { type: "string", description: "Local project workspace." },
         lifecycleStage: { type: "string", description: "define, plan, execute, verify, review, or ship.", default: "plan" },
-        workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Task-scoped work items; expectedFiles are fingerprinted without embedding file contents." },
+        workItems: { type: "array", maxItems: 12, items: projectWorkItemSchema, description: "Task-scoped work items; expectedFiles are fingerprinted without embedding file contents." },
         constraints: { type: "array", items: { type: "string" }, maxItems: 20 },
         decisions: { type: "array", items: { type: "string" }, maxItems: 20 },
         blockers: { type: "array", items: { type: "string" }, maxItems: 12 },
@@ -229,7 +260,7 @@ const tools = [
       properties: {
         goal: { type: "string", description: "Complete project outcome." },
         workspace: { type: "string", description: "Local project workspace shared by workers." },
-        workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Optional dependency-aware work items." },
+        workItems: { type: "array", maxItems: 12, items: projectWorkItemSchema, description: "Optional dependency-aware work items. Prefer objective, executionClass, and expectedFiles; common aliases are normalized defensively." },
         constraints: { type: "array", items: { type: "string" }, maxItems: 20 },
         acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
         verification: { type: "array", items: { type: "string" }, maxItems: 12 },
@@ -243,10 +274,13 @@ const tools = [
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
         managerOnly: { type: "boolean", description: "Plan the calling Codex chat as a management/reporting control room rather than an implementation worker.", default: true },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
+        unattendedMode: { type: "boolean", description: "Plan for no-human continuity. Interactive workers are excluded unless their separately authorized non-interactive policy is active.", default: false },
+        allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager chat, steering, and failover. Native Codex workers stop dispatching at or below this percentage.", default: 15 },
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneously active native Codex workers. External CLI workers can still run in parallel.", default: 1 },
+        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap. 0 (default) selects the auth-aware automatic policy: claude.ai subscription auth (Pro/Max/Team/Enterprise, no ANTHROPIC_API_KEY) omits --max-budget-usd and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic cap.", default: 0 },
@@ -264,7 +298,7 @@ const tools = [
       properties: {
         goal: { type: "string", description: "Complete project outcome." },
         workspace: { type: "string", description: "Local project workspace shared by the team." },
-        workItems: { type: "array", maxItems: 12, items: { type: "object" }, description: "Optional dependency-aware work graph." },
+        workItems: { type: "array", maxItems: 12, items: projectWorkItemSchema, description: "Optional dependency-aware work graph. Independent items should omit dependsOn so healthy workers can run concurrently." },
         constraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "User and safety constraints propagated to every worker." },
         acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
         verification: { type: "array", items: { type: "string" }, maxItems: 12 },
@@ -281,12 +315,15 @@ const tools = [
         claudeModel: { type: "string", description: "Optional Claude Code model override.", default: "auto" },
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside automatic policy.", default: false },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
+        unattendedMode: { type: "boolean", description: "Run without waiting for a person at the PC. Interactive resources must be excluded or explicitly pre-authorized.", default: false },
+        allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
         managerOnly: { type: "boolean", description: "Keep the calling Codex chat as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; native Codex workers stop at this threshold.", default: 15 },
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; defaults to one to protect the shared five-hour pool.", default: 1 },
+        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
@@ -306,7 +343,7 @@ const tools = [
       type: "object",
       properties: {
         workspace: { type: "string", description: "Workspace containing the active or latest AI Mobile run." },
-        waitSeconds: { type: "number", description: "Optional bounded wait for worker progress.", default: 0 },
+        waitSeconds: { type: "number", description: "Optional bounded transition wait. For Goal continuations use 120: the call returns early when recorded work state changes, avoiding repeated short polls.", default: 0 },
         completedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that this chat completed and verified, allowing dependent CLI work to start." },
         failedCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Codex-owned work item ids that failed or were blocked, preventing unsafe dependent dispatch." },
         takeoverCodexItems: { type: "array", items: { type: "string" }, maxItems: 12, description: "Failed, blocked, or pending worker item ids that the current Codex session will explicitly take over." },
@@ -383,6 +420,7 @@ const tools = [
         adaptiveRouting: { type: "boolean", description: "Learn project affinity from verified successes and penalize recent failures.", default: true },
         cliFirst: { type: "boolean" },
         uiFallbackOnly: { type: "boolean" },
+        antigravityAutoApprovePermissions: { type: "boolean", description: "Private local opt-in for Antigravity CLI --dangerously-skip-permissions during explicitly unattended, sandboxed runs. Does not authorize OAuth, CAPTCHA, authentication, or external effects.", default: false },
       },
       additionalProperties: false,
     },
@@ -418,27 +456,7 @@ const tools = [
           type: "array",
           description: "Optional goal-derived work graph. Codex should provide this for complex work; the orchestrator creates a conservative graph when omitted.",
           maxItems: 12,
-          items: {
-            type: "object",
-            properties: {
-              id: { type: "string", description: "Stable short work item id." },
-              objective: { type: "string", description: "Concrete outcome for this item." },
-              kind: { type: "string", description: "Examples: discovery, architecture, implementation, debugging, verification, review, integration, docs." },
-              complexity: { type: "string", enum: ["low", "medium", "high", "critical"], default: "medium" },
-              requiredCapabilities: { type: "array", items: { type: "string" }, description: "Capabilities required from the selected model." },
-              dependsOn: { type: "array", items: { type: "string" }, description: "Ids that must complete before this item can be finalized." },
-              expectedFiles: { type: "array", items: { type: "string" }, description: "Optional file ownership boundary." },
-              readOnly: { type: "boolean", description: "True for scouts/reviewers; false for implementation.", default: true },
-              executionClass: { type: "string", enum: ["analysis", "code", "operation", "integration"], description: "Work class used to keep real-world operations under Codex control." },
-              externallyConsequential: { type: "boolean", description: "True for real submissions, sends, deploys, purchases, destructive actions, or other external effects.", default: false },
-              preferredPlatform: { type: "string", description: "Optional caller preference: codex, claude, antigravity, or cursor." },
-              acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 4, description: "Specific conditions that must be true before this item is accepted." },
-              verification: { type: "array", items: { type: "string" }, maxItems: 4, description: "Focused checks for this item; do not run unrelated suites." },
-              priority: { type: "number", description: "Higher values dispatch first.", default: 50 },
-            },
-            required: ["id", "objective"],
-            additionalProperties: false,
-          },
+          items: projectWorkItemSchema,
         },
         constraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "User and safety constraints propagated to every worker." },
         acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 12 },
@@ -455,11 +473,14 @@ const tools = [
         claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the orchestrator choose while routine work defaults to Sonnet.", default: "auto" },
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside the automatic policy. Routine work stays off premium models.", default: false },
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
+        unattendedMode: { type: "boolean", description: "Run without waiting for a person at the PC. Interactive resources are excluded unless separately pre-authorized.", default: false },
+        allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only if a real headless cursor-agent is available.", default: false },
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager chat, steering, and recovery.", default: 15 },
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous native Codex workers; external providers remain independently parallel.", default: 1 },
+        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries.", default: 2 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
@@ -581,6 +602,7 @@ const tools = [
         conversation: { type: "string", description: "Optional Antigravity CLI conversation id to resume." },
         continueLatest: { type: "boolean", description: "Continue the most recent Antigravity CLI conversation.", default: false },
         sandbox: { type: "boolean", description: "Run Antigravity CLI with terminal sandbox restrictions enabled.", default: true },
+        autoApprovePermissions: { type: "boolean", description: "Pass --dangerously-skip-permissions for this sandboxed worker. Requires explicit user authorization and never authorizes external effects or authentication bypass.", default: false },
         printTimeout: { type: "string", description: "Antigravity CLI print timeout, such as 30m or 90s.", default: "30m" },
         start: { type: "boolean", description: "Set false to create the job without starting Antigravity CLI.", default: true },
         maxMinutes: { type: "number", description: "Maximum minutes the direct background Antigravity CLI worker may run.", default: 30 },
@@ -1983,17 +2005,26 @@ function buildResourceCandidates(args = {}, context = {}) {
     const profile = agyModelProfile(model);
     const autoDispatchAllowed = args.allowAntigravityCli === true
       || (String(args.agyModel || "auto").toLowerCase() !== "auto" && String(args.agyModel || "").trim() !== "");
+    const unattendedReady = args.unattendedMode !== true || args.allowAntigravityPermissionBypass === true;
     candidates.push({
       id,
       platform: "antigravity",
       team: "Antigravity CLI",
       model: model.id,
       displayName: model.displayName,
-      dispatchable: autoDispatchAllowed,
-      state: autoDispatchAllowed ? availability.state : "authorization-required",
-      evidence: autoDispatchAllowed
-        ? (outcome.lastSuccessAt ? "observed-run" : measured.evidence)
-        : "explicit-cli-authorization-required",
+      dispatchable: autoDispatchAllowed && unattendedReady,
+      state: !autoDispatchAllowed
+        ? "authorization-required"
+        : unattendedReady
+          ? availability.state
+          : "interactive-permission-required",
+      evidence: !autoDispatchAllowed
+        ? "explicit-cli-authorization-required"
+        : !unattendedReady
+          ? "unattended-run-needs-explicit-sandboxed-auto-approval"
+          : outcome.lastSuccessAt ? "observed-run" : measured.evidence,
+      unattendedReady,
+      permissionMode: args.unattendedMode === true && args.allowAntigravityPermissionBypass === true ? "sandboxed-auto-approve" : "interactive",
       remainingPercent: measured.remainingPercent,
       resetAt: availability.resetAt,
       capabilities: profile.capabilities,
@@ -2085,7 +2116,7 @@ function formatResourceInventory(args = {}, context = {}, candidates = buildReso
     `- Claude Code: found=${context.claudeFound}; version=${context.claudeVersion || "unknown"}; plan=${context.claudeAuth?.subscriptionType || "unknown"}; usage-windows=${context.claudeUsage?.windows?.length || 0}; efforts=${context.claudeEfforts?.join(",") || "unknown"}`,
     `- Antigravity: cli=${context.agyFound}; cli-version=${context.agyVersion || "unknown"}; desktop-live=${context.antigravityLiveReady}; live-models=${(context.rawLimits?.Models || []).filter((model) => model.DisplayName).length}`,
     `- Cursor: ui=${context.cursorUiFound}; headless-agent=${context.cursorHeadlessFound}; version=${String(context.cursorUiVersion || "unknown").split(/\r?\n/)[0]}`,
-    `LocalRoutingProfile: codex=${localProfile.codexModelAllowPattern}; claudeAllow=${localProfile.claudeModelAllowPattern}; claudePrefer=${localProfile.claudePreferredModelPattern}; antigravityTasks=${localProfile.antigravityPreferredTaskPattern}; adaptive=${localProfile.adaptiveRouting !== false}`,
+    `LocalRoutingProfile: codex=${localProfile.codexModelAllowPattern}; claudeAllow=${localProfile.claudeModelAllowPattern}; claudePrefer=${localProfile.claudePreferredModelPattern}; antigravityTasks=${localProfile.antigravityPreferredTaskPattern}; agyAutoApprove=${localProfile.antigravityAutoApprovePermissions === true}; adaptive=${localProfile.adaptiveRouting !== false}`,
     "TeamsAndModels:",
   ];
   for (const candidate of candidates) {
@@ -2187,6 +2218,7 @@ function profileSummary(profile = readProfile()) {
     cliFirst: profile.cliFirst,
     uiFallbackOnly: profile.uiFallbackOnly,
     adaptiveRouting: profile.adaptiveRouting !== false,
+    antigravityAutoApprovePermissions: profile.antigravityAutoApprovePermissions === true,
     source: profile.source,
     path: profile.path,
   };
@@ -2210,6 +2242,7 @@ function formatOrchestratorProfile(profile = readProfile()) {
     `CliFirst: ${safe.cliFirst}`,
     `UiFallbackOnly: ${safe.uiFallbackOnly}`,
     `AdaptiveRouting: ${safe.adaptiveRouting}`,
+    `AntigravityAutoApprovePermissions: ${safe.antigravityAutoApprovePermissions}`,
     `LocalPath: ${safe.path}`,
     "Privacy: this profile is local runtime configuration and is not stored in the public plugin repository.",
   ].join("\n");
@@ -2279,7 +2312,7 @@ function topologicalStage(workItem, byId, memo = new Map(), stack = new Set()) {
 }
 
 async function buildProjectManagerPlan(args = {}) {
-  args = normalizeManagerOnly(args);
+  args = applyLocalRuntimePolicy(normalizeManagerOnly(args));
   const controls = normalizedRunControls(args);
   const workspace = safeWorkspacePath(args.workspace);
   const goal = String(args.goal || "").trim();
@@ -2312,23 +2345,32 @@ async function buildProjectManagerPlan(args = {}) {
     : "";
   const byId = new Map(workItems.map((item) => [item.id, item]));
   const memo = new Map();
+  const parallelWriters = parallelWriterIds(workItems);
   const stageResourceCounts = new Map();
   const stagePlatformCounts = new Map();
   const actions = workItems.map((item) => {
     const stage = topologicalStage(item, byId, memo);
+    const canParallelize = item.readOnly || parallelWriters.has(item.id);
     const ranked = item.externallyConsequential ? [] : candidates
       .map((candidate) => {
         let score = projectManagerResourceScore(candidate, item, args, primaryWriterId);
-        if (item.readOnly && Number.isFinite(score)) {
-          score -= (stageResourceCounts.get(`${stage}:${candidate.id}`) || 0) * 24;
-          score -= (stagePlatformCounts.get(`${stage}:${candidate.platform}`) || 0) * 8;
+        if (canParallelize && Number.isFinite(score)) {
+          score -= (stageResourceCounts.get(`${stage}:${candidate.id}`) || 0) * 32;
+          score -= (stagePlatformCounts.get(`${stage}:${candidate.platform}`) || 0) * 10;
         }
         return { candidate, score: Math.round(score * 10) / 10 };
       })
       .filter((row) => Number.isFinite(row.score))
       .sort((a, b) => b.score - a.score || b.candidate.quality - a.candidate.quality);
     let selected = ranked[0] || null;
-    if (!item.readOnly && primaryWriterId) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
+    const stageAlreadyAssigned = [...stageResourceCounts.keys()].some((key) => key.startsWith(`${stage}:`));
+    if (canParallelize && stageAlreadyAssigned) {
+      const unusedCrossPlatform = ranked.find((row) => (stageResourceCounts.get(`${stage}:${row.candidate.id}`) || 0) === 0
+        && (stagePlatformCounts.get(`${stage}:${row.candidate.platform}`) || 0) === 0);
+      const unusedResource = ranked.find((row) => (stageResourceCounts.get(`${stage}:${row.candidate.id}`) || 0) === 0);
+      selected = unusedCrossPlatform || unusedResource || selected;
+    }
+    if (!item.readOnly && primaryWriterId && !parallelWriters.has(item.id)) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
     const resource = selected?.candidate || null;
     if (resource) {
       stageResourceCounts.set(`${stage}:${resource.id}`, (stageResourceCounts.get(`${stage}:${resource.id}`) || 0) + 1);
@@ -2421,26 +2463,29 @@ async function buildProjectManagerPlan(args = {}) {
       taskCapsules: capsuleResult.taskCapsules,
     },
     fanOutReadyStageZero: shouldFanOut(workItems),
-    oneWriterPerWorkspace: true,
+    oneWriterPerWorkspace: controls.maxParallelWriters === 1,
+    oneWriterPerBoundary: true,
+    maxParallelWriters: controls.maxParallelWriters,
     orchestrationDepth: 1,
     controls: {
       runDeadlineMinutes: controls.runDeadlineMinutes,
       capacityCheckpointMinutes: controls.capacityCheckpointMinutes,
       codexManagerReservePercent: controls.codexManagerReservePercent,
       maxConcurrentCodexWorkers: controls.maxConcurrentCodexWorkers,
+      maxParallelWriters: controls.maxParallelWriters,
       crossResetContinuity: "durable-run-resume",
     },
     mainCodexRole: args.managerOnly
       ? [
           "Own the goal, lifecycle gates, resource decisions, and user communication.",
-          "Launch only dependency-ready actions and keep one workspace writer.",
+          "Launch dependency-ready actions in parallel when ownership is disjoint; serialize overlapping or unscoped writers.",
           "Do not inspect project files, run project diagnostics or tests, edit source, or duplicate worker execution.",
           "Critique compact artifacts once, request one bounded correction or provider-diverse failover, then record the integration decision.",
           "Approve only explicit user-boundary actions and report evidence-backed state.",
         ]
       : [
           "Own the goal, lifecycle gates, and architecture/risk decisions.",
-          "Launch only dependency-ready actions and keep one workspace writer.",
+          "Launch dependency-ready actions in parallel when ownership is disjoint; serialize overlapping or unscoped writers.",
           "Work directly on the narrow integration path while independent workers run.",
           "Critique artifacts once, request one bounded correction or provider-diverse failover, then integrate.",
           "Run final focused verification and report only evidence-backed completion.",
@@ -2494,6 +2539,18 @@ function normalizeManagerOnly(args = {}) {
   return { ...args, managerOnly: args.managerOnly !== false };
 }
 
+function applyLocalRuntimePolicy(args = {}) {
+  const localProfile = args.localProfile || (process.env.AI_MOBILE_SELF_TEST === "1" ? neutralLocalRoutingProfile() : readProfile());
+  const unattendedMode = args.unattendedMode === true;
+  return {
+    ...args,
+    localProfile,
+    unattendedMode,
+    allowAntigravityPermissionBypass: args.allowAntigravityPermissionBypass === true
+      || (unattendedMode && localProfile.antigravityAutoApprovePermissions === true),
+  };
+}
+
 function projectManagerRunwayLines(controls = normalizedRunControls({}), context = {}, resources = []) {
   const remaining = Number.isFinite(context.codexRemainingPercent)
     ? context.codexRemainingPercent
@@ -2504,6 +2561,7 @@ function projectManagerRunwayLines(controls = normalizedRunControls({}), context
   return [
     `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; current=${remaining === null ? "unknown" : `${remaining}%`}`,
     `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent capacity`,
+    `ParallelWriters: ${controls.maxParallelWriters}; only pairwise-disjoint verified boundaries may overlap`,
     `CapacityCheckpoint: ${checkpointDelay}m; accelerates near the manager reserve without ending the project`,
     "QuotaResetContinuity: durable run state persists; running external work continues and pending work is reconsidered after capacity refresh",
   ];
@@ -2578,6 +2636,9 @@ function normalizedRunConstraints(args = {}) {
     ...(args.managerOnly === true
       ? ["Manager-only control room: the current Codex chat may steer, approve user-boundary actions, review compact evidence, and report, but must not explore project files, run project diagnostics or tests, edit source, or duplicate worker execution."]
       : []),
+    ...(args.unattendedMode === true
+      ? ["Unattended mode: continue only through non-interactive CLI/host workers. Tool-permission auto-approval never authorizes OAuth, login, CAPTCHA, email/SMS verification, external submissions, destructive actions, or work outside the assigned boundary."]
+      : []),
     ...(Array.isArray(args.constraints) ? args.constraints : []),
   ], 20, 600);
 }
@@ -2588,6 +2649,7 @@ function normalizedRunControls(args = {}) {
   const requestedWorkerCap = Number(args.maxWorkerMinutes ?? 0);
   const requestedManagerReserve = Number(args.codexManagerReservePercent ?? 15);
   const requestedConcurrentCodex = Number(args.maxConcurrentCodexWorkers ?? 1);
+  const requestedParallelWriters = Number(args.maxParallelWriters ?? 2);
   return {
     runDeadlineMinutes: Number.isFinite(requestedDeadline) && requestedDeadline > 0
       ? Math.max(2, Math.min(10080, requestedDeadline))
@@ -2601,6 +2663,9 @@ function normalizedRunControls(args = {}) {
     maxConcurrentCodexWorkers: Number.isFinite(requestedConcurrentCodex)
       ? Math.max(1, Math.min(3, Math.round(requestedConcurrentCodex)))
       : 1,
+    maxParallelWriters: Number.isFinite(requestedParallelWriters)
+      ? Math.max(1, Math.min(3, Math.round(requestedParallelWriters)))
+      : 2,
     maxWorkerMinutes: Number.isFinite(requestedWorkerCap) && requestedWorkerCap > 0
       ? Math.max(1, Math.min(180, requestedWorkerCap))
       : 0,
@@ -2694,10 +2759,23 @@ function normalizeExecutionClass(value, readOnly, externallyConsequential, kind)
 }
 
 function normalizeWorkItem(item, index, fallbackComplexity) {
-  const kind = normalizeTaskLane(item.kind || "general") || "general";
-  const objective = String(item.objective || "").trim();
-  const inferredReadOnly = !/(implementation|implement|patch|fix|debug|migration|refactor|operation|execute|submission)/.test(kind);
-  const requestedReadOnly = typeof item.readOnly === "boolean" ? item.readOnly : inferredReadOnly;
+  const requestedClass = String(item.executionClass || item.class || "").trim().toLowerCase();
+  const objective = String(item.objective || item.description || item.title || "").trim();
+  const classKind = ["analysis", "code", "operation", "integration"].includes(requestedClass) ? requestedClass : "";
+  const kind = normalizeTaskLane(item.kind || classKind || "general") || "general";
+  const writeIntent = /(implementation|implement|patch|fix|correct|debug|migration|refactor|operation|execute|submission|integrat|reconcile|restore|reduce)/.test(`${kind} ${objective}`.toLowerCase());
+  const inferredReadOnly = requestedClass === "analysis"
+    ? true
+    : ["code", "operation", "integration"].includes(requestedClass)
+      ? false
+      : !writeIntent;
+  const requestedReadOnly = requestedClass === "analysis"
+    ? true
+    : ["code", "operation", "integration"].includes(requestedClass)
+      ? false
+      : typeof item.readOnly === "boolean"
+        ? item.readOnly
+        : inferredReadOnly;
   const externallyConsequential = item.externallyConsequential === true
     || (!requestedReadOnly && isExternallyConsequential(`${kind} ${objective}`));
   const readOnly = externallyConsequential
@@ -2710,16 +2788,16 @@ function normalizeWorkItem(item, index, fallbackComplexity) {
     complexity: normalizeComplexity(item.complexity, fallbackComplexity),
     requiredCapabilities: [...new Set([
       ...capabilitiesForWorkItem(kind, objective),
-      ...(Array.isArray(item.requiredCapabilities) ? item.requiredCapabilities.map(normalizeTaskLane).filter(Boolean) : []),
+      ...(Array.isArray(item.requiredCapabilities || item.capabilities) ? (item.requiredCapabilities || item.capabilities).map(normalizeTaskLane).filter(Boolean) : []),
     ])],
     dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.map(normalizeTaskLane).filter(Boolean) : [],
-    expectedFiles: Array.isArray(item.expectedFiles) ? item.expectedFiles.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 20) : [],
+    expectedFiles: Array.isArray(item.expectedFiles || item.files) ? (item.expectedFiles || item.files).map((value) => String(value || "").trim()).filter(Boolean).slice(0, 20) : [],
     readOnly,
-    executionClass: normalizeExecutionClass(item.executionClass, readOnly, externallyConsequential, kind),
+    executionClass: normalizeExecutionClass(requestedClass, readOnly, externallyConsequential, kind),
     externallyConsequential,
-    preferredPlatform: normalizeTaskLane(item.preferredPlatform || ""),
-    acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
-    verification: Array.isArray(item.verification) ? item.verification.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
+    preferredPlatform: normalizeTaskLane(item.preferredPlatform || item.platform || ""),
+    acceptanceCriteria: Array.isArray(item.acceptanceCriteria || item.acceptance) ? (item.acceptanceCriteria || item.acceptance).map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
+    verification: Array.isArray(item.verification || item.tests) ? (item.verification || item.tests).map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4) : [],
     priority: Math.max(0, Math.min(100, Number(item.priority ?? 50))),
     state: "pending",
     failoverCount: 0,
@@ -2810,6 +2888,42 @@ function buildGoalWorkGraph(args = {}) {
   const validIds = new Set(unique.map((item) => item.id));
   const validGraph = unique.map((item) => ({ ...item, dependsOn: item.dependsOn.filter((id) => validIds.has(id) && id !== item.id) }));
   return injectLiveOperationDependencies(validGraph);
+}
+
+function activeWriterJobs(manifest = {}) {
+  return (manifest.jobs || []).filter((job) => ["queued", "running", "unknown"].includes(job.state)
+    && (job.workItemIds || job.assignedTasks || []).some((id) => (manifest.workItems || []).find((item) => item.id === id && !item.readOnly)));
+}
+
+function writerGroupCanLaunch(manifest = {}, items = []) {
+  const writers = items.filter((item) => !item.readOnly);
+  if (!writers.length) return true;
+  const activeJobs = activeWriterJobs(manifest);
+  const maxParallelWriters = Math.max(1, Math.min(3, Number(manifest.maxParallelWriters || 2)));
+  if (activeJobs.length >= maxParallelWriters) return false;
+  const byId = new Map((manifest.workItems || []).map((item) => [item.id, item]));
+  const activeWriters = activeJobs.flatMap((job) => (job.workItemIds || job.assignedTasks || [])
+    .map((id) => byId.get(id))
+    .filter((item) => item && !item.readOnly));
+  return writers.every((writer) => activeWriters.every((active) => writerItemsAreDisjoint(writer, active)));
+}
+
+function parallelWriterIds(workItems = []) {
+  const byId = new Map(workItems.map((item) => [item.id, item]));
+  const memo = new Map();
+  const result = new Set();
+  const writers = workItems.filter((item) => !item.readOnly && !item.externallyConsequential);
+  for (let index = 0; index < writers.length; index += 1) {
+    for (let peerIndex = index + 1; peerIndex < writers.length; peerIndex += 1) {
+      const left = writers[index];
+      const right = writers[peerIndex];
+      if (topologicalStage(left, byId, memo) !== topologicalStage(right, byId, memo)) continue;
+      if (!writerItemsAreDisjoint(left, right)) continue;
+      result.add(left.id);
+      result.add(right.id);
+    }
+  }
+  return result;
 }
 
 function requiredQuality(complexity) {
@@ -2960,7 +3074,7 @@ function requiresProtectedLiveState(item) {
 }
 
 function buildResourceOrchestrationDecision(args = {}, context = {}) {
-  args = normalizeManagerOnly(args);
+  args = applyLocalRuntimePolicy(normalizeManagerOnly(args));
   const managerOnly = args.managerOnly === true;
   const localProfile = args.localProfile || (process.env.AI_MOBILE_SELF_TEST === "1" ? neutralLocalRoutingProfile() : readProfile());
   const routingArgs = { ...args, localProfile };
@@ -2970,6 +3084,10 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
   ];
   const workItems = buildGoalWorkGraph(args);
   const workItemsById = new Map(workItems.map((item) => [item.id, item]));
+  const stageMemo = new Map();
+  const parallelWriters = parallelWriterIds(workItems);
+  const stageResourceCounts = new Map();
+  const stagePlatformCounts = new Map();
   const writable = workItems.filter((item) => !item.readOnly && !item.externallyConsequential).sort((a, b) => b.priority - a.priority);
   let primaryWriterId = "";
   if (writable.length) {
@@ -3002,14 +3120,36 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
         decisionReason: reason,
       };
     }
-    const ranked = rankResourcesForWorkItem(candidates, item, routingArgs, primaryWriterId);
+    const stage = topologicalStage(item, workItemsById, stageMemo);
+    const canParallelize = item.readOnly || parallelWriters.has(item.id);
+    const ranked = rankResourcesForWorkItem(candidates, item, routingArgs, primaryWriterId)
+      .map((row) => ({
+        ...row,
+        score: canParallelize
+          ? Math.round((row.score
+            - ((stageResourceCounts.get(`${stage}:${row.candidate.id}`) || 0) * 32)
+            - ((stagePlatformCounts.get(`${stage}:${row.candidate.platform}`) || 0) * 10)) * 10) / 10
+          : row.score,
+      }))
+      .sort((a, b) => b.score - a.score || b.candidate.quality - a.candidate.quality);
     let selected = ranked[0];
-    if (!item.readOnly && primaryWriterId) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
+    const stageAlreadyAssigned = [...stageResourceCounts.keys()].some((key) => key.startsWith(`${stage}:`));
+    if (canParallelize && stageAlreadyAssigned) {
+      const unusedCrossPlatform = ranked.find((row) => (stageResourceCounts.get(`${stage}:${row.candidate.id}`) || 0) === 0
+        && (stagePlatformCounts.get(`${stage}:${row.candidate.platform}`) || 0) === 0);
+      const unusedResource = ranked.find((row) => (stageResourceCounts.get(`${stage}:${row.candidate.id}`) || 0) === 0);
+      selected = unusedCrossPlatform || unusedResource || selected;
+    }
+    if (!item.readOnly && primaryWriterId && !parallelWriters.has(item.id)) selected = ranked.find((row) => row.candidate.id === primaryWriterId) || selected;
     const assignment = selected?.candidate || null;
+    if (assignment) {
+      stageResourceCounts.set(`${stage}:${assignment.id}`, (stageResourceCounts.get(`${stage}:${assignment.id}`) || 0) + 1);
+      stagePlatformCounts.set(`${stage}:${assignment.platform}`, (stagePlatformCounts.get(`${stage}:${assignment.platform}`) || 0) + 1);
+    }
     const alternates = selectAlternateResourceIds(ranked, assignment, 3);
     const fallbackResourceId = managerOnly ? "resource:unavailable" : "codex:current";
     const reason = assignment
-      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${resourceCapacityReason(assignment, item, routingArgs)}; ${item.readOnly ? "independent read-only work" : "single workspace writer"}`
+      ? `capability/quality/capacity score ${selected.score}; ${assignment.evidence}; ${resourceCapacityReason(assignment, item, routingArgs)}; ${item.readOnly ? "independent read-only work" : parallelWriters.has(item.id) ? "disjoint parallel writer boundary" : "serialized workspace writer"}`
       : managerOnly
         ? "no dispatchable worker currently satisfies the work item; manager-only mode refuses silent current-Codex execution"
         : "no dispatchable resource currently satisfies the work item";
@@ -3068,9 +3208,11 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     `CapacityCheckpointMinutes: ${controls.capacityCheckpointMinutes}`,
     `CodexManagerReserve: ${controls.codexManagerReservePercent}% remaining; native workers stop at the reserve and are penalized as headroom shrinks`,
     `NativeCodexConcurrency: ${controls.maxConcurrentCodexWorkers}; external CLI workers retain independent parallelism`,
+    `ParallelWriters: ${controls.maxParallelWriters}; overlapping or unscoped writers remain serialized`,
     `WorkerLeasePolicy: ${controls.maxWorkerMinutes > 0 ? `adaptive with ${controls.maxWorkerMinutes}m ceiling` : "complexity-adaptive (10m to 90m), no global worker cap"}`,
     `MaxClaudeOutputTokens: ${controls.maxClaudeOutputTokens}`,
     `AntigravityCliAutoDispatch: ${args.allowAntigravityCli === true}`,
+    `UnattendedMode: ${args.unattendedMode === true}; AntigravityPermissionMode: ${args.unattendedMode === true && args.allowAntigravityPermissionBypass === true ? "sandboxed-auto-approve" : args.unattendedMode === true ? "excluded-if-interactive" : "interactive"}`,
     `ControlRoomMode: ${args.managerOnly === true ? "manager-only" : "manager-and-integrator"}`,
     `OperatingMode: ${dispatchable.length ? "goal-driven-team" : "codex-only-until-workers-available"}`,
     "UtilizationPolicy: use appropriate healthy resources for distinct dependency-ready work; never duplicate a lane merely to keep every model busy.",
@@ -3092,7 +3234,7 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     "",
     "ControlLoop:",
     "1. Inventory measured, observed, cached, caller-provided, and unknown capacity without opening desktop apps.",
-    "2. Dispatch dependency-ready work; keep one writer per workspace and parallelize independent read-only scouts/reviewers.",
+    "2. Dispatch dependency-ready work concurrently across native Codex and external CLIs. Read-only lanes may fan out; writers overlap only with pairwise-disjoint verified boundaries.",
     "3. Read compact artifacts and per-run telemetry, then continue dependent work automatically within the bounded wait.",
     "4. On quota, outage, timeout, auth, or model failure, cool down that resource and fail over the narrow work item once.",
     "5. Protect manager runway: before the shared Codex pool reaches its reserve, route remaining work to durable external CLI jobs so the local supervisor can continue without Codex tokens.",
@@ -3114,6 +3256,7 @@ async function buildTeamOrchestrationPlan(args = {}) {
 
 function actionSummary(action, toolName, workspace, lane = {}) {
   const jobId = valueFromResult(action, "JobId");
+  const workerPidValue = Number(valueFromResult(action, "WorkerPid"));
   const started = /\bStarted:\s*true\b/i.test(action) || /\bState:\s*running\b/i.test(action);
   const failed = /\bState:\s*failed\b/i.test(action) || /\bBlocker:/i.test(action);
   return {
@@ -3123,6 +3266,8 @@ function actionSummary(action, toolName, workspace, lane = {}) {
     assignedTasks: lane.assignedTasks || [],
     model: lane.model || "",
     jobId,
+    workerPid: Number.isInteger(workerPidValue) && workerPidValue > 0 ? workerPidValue : null,
+    workerCommandMarker: jobId || "",
     started: started && !failed,
     failed,
     readBack: jobId ? `ai-mobile-local.read-job with workspace=${workspace} and jobId=${jobId}` : "no JobId returned",
@@ -3428,6 +3573,8 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       model: items[0]?.assignedModel || resource.model,
       maxMinutes: maxWorkerMinutes,
       printTimeout: `${maxWorkerMinutes}m`,
+      sandbox: true,
+      autoApprovePermissions: manifest.unattendedMode === true && manifest.allowAntigravityPermissionBypass === true,
       resourceId: resource.id,
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
@@ -3664,6 +3811,8 @@ function routingPolicyFromArgs(args = {}) {
   const requestedAgyModel = String(args.agyModel || "auto").trim().toLowerCase() || "auto";
   return {
     allowAntigravityCli: args.allowAntigravityCli === true || requestedAgyModel !== "auto",
+    unattendedMode: args.unattendedMode === true,
+    allowAntigravityPermissionBypass: args.allowAntigravityPermissionBypass === true,
     allowPremiumModels: args.allowPremiumModels === true,
     agyModel: requestedAgyModel,
     claudeModel: String(args.claudeModel || "auto").trim().toLowerCase() || "auto",
@@ -3712,6 +3861,7 @@ function runContractChanges(manifest, args = {}) {
       capacityCheckpointMinutes: Number(manifest.capacityCheckpointMinutes ?? 20),
       codexManagerReservePercent: Number(manifest.codexManagerReservePercent ?? 15),
       maxConcurrentCodexWorkers: Number(manifest.maxConcurrentCodexWorkers ?? 1),
+      maxParallelWriters: Number(manifest.maxParallelWriters ?? 2),
       maxWorkerMinutes: Number(manifest.maxWorkerMinutes ?? 0),
       maxClaudeOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
       maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd ?? 0) > 0 ? Number(manifest.maxClaudeBudgetUsd) : 0,
@@ -3721,6 +3871,8 @@ function runContractChanges(manifest, args = {}) {
     verification: manifest.verification || [],
     routingPolicy: manifest.routingPolicy || {
       allowAntigravityCli: manifest.allowAntigravityCli === true,
+      unattendedMode: manifest.unattendedMode === true,
+      allowAntigravityPermissionBypass: manifest.allowAntigravityPermissionBypass === true,
       allowPremiumModels: false,
       agyModel: "auto",
       claudeModel: "auto",
@@ -3734,8 +3886,12 @@ function runContractChanges(manifest, args = {}) {
 
 function carryForwardSameGoalContract(effectiveArgs, rawArgs, manifest) {
   const next = { ...effectiveArgs };
-  for (const key of ["runDeadlineMinutes", "capacityCheckpointMinutes", "codexManagerReservePercent", "maxConcurrentCodexWorkers", "maxWorkerMinutes", "maxClaudeOutputTokens", "maxClaudeBudgetUsd"]) {
+  for (const key of ["runDeadlineMinutes", "capacityCheckpointMinutes", "codexManagerReservePercent", "maxConcurrentCodexWorkers", "maxParallelWriters", "maxWorkerMinutes", "maxClaudeOutputTokens", "maxClaudeBudgetUsd"]) {
     if (rawArgs[key] === undefined && manifest[key] !== undefined) next[key] = manifest[key];
+  }
+  const routing = manifest.routingPolicy || {};
+  for (const key of ["allowAntigravityCli", "allowPremiumModels", "agyModel", "claudeModel", "includeCursor", "hostCodexAvailable", "unattendedMode", "allowAntigravityPermissionBypass"]) {
+    if (rawArgs[key] === undefined && routing[key] !== undefined) next[key] = routing[key];
   }
   next.constraints = boundedTextList([...(manifest.constraints || []), ...(Array.isArray(rawArgs.constraints) ? rawArgs.constraints : [])], 20, 600);
   next.acceptanceCriteria = boundedTextList([...(manifest.acceptanceCriteria || []), ...(Array.isArray(rawArgs.acceptanceCriteria) ? rawArgs.acceptanceCriteria : [])], 12, 400);
@@ -3776,6 +3932,8 @@ function capacityArgsFromManifest(manifest) {
     managerOnly: manifest.managerOnly === true,
     horizonHours: manifest.horizonHours,
     allowAntigravityCli: routing.allowAntigravityCli === true || manifest.allowAntigravityCli === true,
+    unattendedMode: routing.unattendedMode === true || manifest.unattendedMode === true,
+    allowAntigravityPermissionBypass: routing.allowAntigravityPermissionBypass === true || manifest.allowAntigravityPermissionBypass === true,
     allowPremiumModels: routing.allowPremiumModels === true,
     agyModel: routing.agyModel || "auto",
     claudeModel: routing.claudeModel || "auto",
@@ -3783,6 +3941,7 @@ function capacityArgsFromManifest(manifest) {
     hostCodexAvailable: routing.hostCodexAvailable === true || manifest.hostCodexAvailable === true,
     codexManagerReservePercent: manifest.codexManagerReservePercent,
     maxConcurrentCodexWorkers: manifest.maxConcurrentCodexWorkers,
+    maxParallelWriters: manifest.maxParallelWriters,
     refreshInventory: true,
   };
 }
@@ -4158,9 +4317,7 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
       changed = true;
       continue;
     }
-    const activeWriter = (manifest.jobs || []).some((job) => ["queued", "running", "unknown"].includes(job.state)
-      && (job.workItemIds || []).some((id) => manifest.workItems.find((item) => item.id === id && !item.readOnly)));
-    if (activeWriter && items.some((item) => !item.readOnly)) continue;
+    if (!writerGroupCanLaunch(manifest, items)) continue;
     const failedItemJob = [...(manifest.jobs || [])].reverse().find((job) => items.some((item) => (job.workItemIds || []).includes(item.id)) && job.state === "failed");
     const launch = launchGroup(manifest, resource, items, failedItemJob?.jobId || "");
     if (!launch.launched) {
@@ -4244,6 +4401,30 @@ function teamStateFromJobs(jobs) {
   return "failed";
 }
 
+function bridgeStatusForManifestJob(job, statusPath) {
+  const parsed = readJsonFile(statusPath, null);
+  const state = String(parsed?.state || "").trim().toLowerCase();
+  const validStates = new Set(["queued", "running", "completed", "failed", "cancelled"]);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && validStates.has(state)) {
+    return {
+      workerPid: job.workerPid || null,
+      workerCommandMarker: job.workerCommandMarker || job.jobId,
+      ...parsed,
+    };
+  }
+  return {
+    jobId: job.jobId,
+    state: "running",
+    currentStep: "invalid-status-json",
+    workerPid: job.workerPid || null,
+    workerCommandMarker: job.workerCommandMarker || job.jobId,
+    createdAt: job.createdAt || "",
+    startedAt: job.startedAt || "",
+    statusCorrupt: true,
+    warning: "status.json was unreadable; recovering from the recorded process identity or finalized telemetry.",
+  };
+}
+
 function refreshTeamRunManifest(workspace, suppliedManifest = null, lockHeld = false) {
   const manifestPath = lastTeamRunJsonPath(workspace);
   if (!lockHeld) {
@@ -4263,7 +4444,7 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null, lockHeld = f
     const jobDir = jobDirFor(workspace, job.jobId);
     const statusPath = path.join(jobDir, "status.json");
     if (!fs.existsSync(statusPath)) return { ...job, state: "failed", currentStep: "missing-status", blocker: "status.json is missing." };
-    const repair = repairStaleRunningJob(workspace, job.jobId, jobDir, readJsonFile(statusPath, {}));
+    const repair = repairStaleRunningJob(workspace, job.jobId, jobDir, bridgeStatusForManifestJob(job, statusPath));
     const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
     const telemetryFailureCategory = telemetry?.success === false ? String(telemetry.failureCategory || "worker-failure") : "";
     const effectiveState = repair.status.state || "unknown";
@@ -4304,15 +4485,49 @@ function refreshTeamRunManifest(workspace, suppliedManifest = null, lockHeld = f
   return refreshed;
 }
 
+function teamRunTransitionSignature(snapshot = {}) {
+  return JSON.stringify({
+    state: snapshot.state || "unknown",
+    workItems: (snapshot.workItems || [])
+      .map((item) => `${item.id}:${item.state}:${item.activeJobId || ""}:${item.failureCategory || ""}`)
+      .sort(),
+    jobs: (snapshot.jobs || [])
+      .map((job) => `${job.jobId}:${job.state}:${job.currentStep || ""}:${job.completedAt || ""}`)
+      .sort(),
+    finalVerification: snapshot.finalVerification?.passed,
+    termination: snapshot.termination?.category || "",
+    capacityCheckpointCount: Number(snapshot.capacityCheckpointCount || 0),
+  });
+}
+
 async function waitForTeamRun(workspace, waitSeconds = 0, suppliedManifest = null) {
   const boundedWait = Math.max(0, Math.min(300, Number(waitSeconds || 0)));
+  const startedAt = Date.now();
   const deadline = Date.now() + (boundedWait * 1000);
   let snapshot = advanceOrchestrationRun(workspace, refreshTeamRunManifest(workspace, suppliedManifest));
+  const initialSignature = teamRunTransitionSignature(snapshot);
+  let transitionDetected = false;
+  let refreshError = "";
   while (snapshot.state === "running" && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(100, deadline - Date.now()))));
-    snapshot = advanceOrchestrationRun(workspace, refreshTeamRunManifest(workspace));
+    try {
+      snapshot = advanceOrchestrationRun(workspace, refreshTeamRunManifest(workspace));
+    } catch (error) {
+      refreshError = truncateText(String(error?.message || error || "Status refresh failed."), 300);
+      break;
+    }
+    transitionDetected = teamRunTransitionSignature(snapshot) !== initialSignature;
+    if (transitionDetected) break;
   }
-  return snapshot;
+  return {
+    ...snapshot,
+    reportWait: {
+      requestedSeconds: boundedWait,
+      elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
+      transitionDetected,
+      refreshError,
+    },
+  };
 }
 
 function compactWorkItemIds(items, limit = 4) {
@@ -4351,48 +4566,103 @@ function orchestrationProgress(snapshot) {
   };
 }
 
-function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
+function workGraphIntegrity(snapshot = {}) {
+  const workItems = snapshot.workItems || [];
+  const placeholderItems = workItems.filter((item) => /^Complete work item \d+$/i.test(String(item.objective || "").trim()));
+  if (placeholderItems.length) {
+    return {
+      valid: false,
+      reason: `placeholder objectives detected for ${placeholderItems.map((item) => item.id).join(",")}; an older caller lost title/description/class fields`,
+    };
+  }
+  return { valid: true, reason: "canonical objectives retained" };
+}
+
+function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportProfileOverride = null) {
   const orchestrated = Number(snapshot.version || 1) >= 2;
   const progress = orchestrationProgress(snapshot);
+  const graphIntegrity = workGraphIntegrity(snapshot);
+  const reportProfile = reportProfileOverride || (process.env.AI_MOBILE_SELF_TEST === "1" ? DEFAULT_PROFILE : readProfile());
+  const reportAddress = truncateText(String(reportProfile.address || "").trim(), 80);
+  const reportStyle = truncateText(String(reportProfile.updateStyle || "concise-executive").trim(), 40);
+  const reportWait = snapshot.reportWait || {
+    requestedSeconds: waitedSeconds,
+    elapsedSeconds: waitedSeconds,
+    transitionDetected: false,
+  };
+  const allWorkItems = snapshot.workItems || [];
+  const visibleWorkItems = graphIntegrity.valid
+    ? [...new Map([
+        ...allWorkItems.filter((item) => item.state !== "completed"),
+        ...allWorkItems.filter((item) => item.state === "completed").slice(-1),
+      ].map((item) => [item.id, item])).values()].slice(0, 8)
+    : [];
+  const allConstraints = snapshot.constraints || [];
+  const visibleConstraints = allConstraints.slice(-3);
   // Native Codex workers share the manager's five-hour pool. Bound concurrent host actions even when
   // several read-only items are ready; external CLI workers keep their independent parallelism.
   const maxConcurrentHostWorkers = Math.max(1, Math.min(3, Number(snapshot.maxConcurrentCodexWorkers || 1)));
   let availableHostSlots = maxConcurrentHostWorkers - (snapshot.jobs || []).filter((job) => job.transport === "host-subagent" && ["running", "unknown"].includes(job.state)).length;
-  let writerSlotTaken = (snapshot.jobs || []).some((job) => ["running", "unknown"].includes(job.state)
-    && (job.workItemIds || []).some((id) => (snapshot.workItems || []).find((item) => item.id === id && !item.readOnly)));
-  const emittableHostDispatchItems = (snapshot.workItems || []).filter((item) => ["host-dispatch-required", "host-reserved"].includes(item.state)).filter((item) => {
-    if (availableHostSlots <= 0) return false;
-    if (!item.readOnly && writerSlotTaken) return false;
-    availableHostSlots -= 1;
-    if (!item.readOnly) writerSlotTaken = true;
-    return true;
-  });
+  const maxParallelWriters = Math.max(1, Math.min(3, Number(snapshot.maxParallelWriters || 2)));
+  // A queued host reservation is not a running writer yet. Select the bounded spawn actions in order
+  // below so disjoint reservations can launch together and overlapping reservations expose only one.
+  const boundaryHoldingWriterJobs = activeWriterJobs(snapshot)
+    .filter((job) => !(job.transport === "host-subagent" && job.state === "queued"));
+  let activeWriterCount = boundaryHoldingWriterJobs.length;
+  const snapshotItemsById = new Map((snapshot.workItems || []).map((item) => [item.id, item]));
+  const scheduledWriterItems = boundaryHoldingWriterJobs.flatMap((job) => (job.workItemIds || job.assignedTasks || [])
+    .map((id) => snapshotItemsById.get(id))
+    .filter((item) => item && !item.readOnly));
+  const emittableHostDispatchItems = (snapshot.workItems || [])
+    .filter((item) => ["host-dispatch-required", "host-reserved"].includes(item.state))
+    .sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0))
+    .filter((item) => {
+      if (availableHostSlots <= 0) return false;
+      if (!item.readOnly && (activeWriterCount >= maxParallelWriters || scheduledWriterItems.some((writer) => !writerItemsAreDisjoint(item, writer)))) return false;
+      availableHostSlots -= 1;
+      if (!item.readOnly) {
+        activeWriterCount += 1;
+        scheduledWriterItems.push(item);
+      }
+      return true;
+    });
   const lines = [
     orchestrated ? "AiMobileResourceOrchestrationRun:" : "AiMobileTeamRun:",
     orchestrated ? `RunId: ${snapshot.runId || "unknown"}` : null,
     `State: ${snapshot.state}`,
     orchestrated ? `CompletionClaimAllowed: ${snapshot.state === "completed"}` : null,
-    orchestrated ? `RequiredUserStatus: AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
+    orchestrated ? `RequiredUserStatus: ${reportAddress ? `${reportAddress}, ` : ""}AI Mobile run ${snapshot.runId || "unknown"}: ${snapshot.state}` : null,
     orchestrated && snapshot.state !== "completed" ? `RequiredClaimBoundary: do not say done or successful; report the exact ${snapshot.state} state and only the workers actually recorded below.` : null,
     `Workspace: ${workspace}`,
     orchestrated ? `ProjectDuration: ${snapshot.deadlineAt ? `optional deadline ${snapshot.deadlineAt}` : "continuous until verified, blocked, or explicitly stopped"}` : null,
     orchestrated ? `CapacityHorizon: rolling ${snapshot.horizonHours || 5}h forecast; nextReview=${snapshot.nextCapacityCheckpointAt || "on next status refresh"}; reviews=${snapshot.capacityCheckpointCount || 0}` : null,
     orchestrated ? `WorkerLeases: ${Number(snapshot.maxWorkerMinutes || 0) > 0 ? `adaptive with ${snapshot.maxWorkerMinutes}m ceiling` : "complexity-adaptive 10m-90m"}; claudeOutput<=${snapshot.maxClaudeOutputTokens || "legacy"}; claudeBudget=${describeClaudeBudgetPolicy(snapshot)}; agyAuto=${snapshot.allowAntigravityCli === true}` : null,
     orchestrated ? `CodexRunway: reserve=${snapshot.codexManagerReservePercent ?? 15}%; nativeConcurrency=${snapshot.maxConcurrentCodexWorkers ?? 1}; checkpointDelay=${capacityCheckpointDelayMinutes(snapshot)}m` : null,
+    orchestrated && !graphIntegrity.valid ? `WorkGraphIntegrity: invalid; ${graphIntegrity.reason}` : null,
     orchestrated ? "Continuity: durable external work survives Codex turns and resets; resume this run from the same Goal/task with project-manager-status." : null,
     orchestrated ? `Supervisor: ${orchestrationSupervisorHealthy(snapshot) ? `running pid=${snapshot.supervisorPid}` : `idle; lastState=${snapshot.supervisorLastState || snapshot.state || "unknown"}`}` : null,
-    `WaitedSeconds: ${waitedSeconds}`,
+    `WaitedSeconds: ${reportWait.elapsedSeconds}`,
+    orchestrated && reportWait.requestedSeconds > 0
+      ? `StatusChange: ${reportWait.transitionDetected ? "recorded transition detected; report the change now" : `none during ${reportWait.elapsedSeconds}s; report one activity checkpoint without repeating unchanged history`}`
+      : null,
+    orchestrated && reportWait.refreshError ? `StatusRefreshWarning: ${reportWait.refreshError}; returning the last verified snapshot. Do not infer a terminal state.` : null,
     `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}`,
     orchestrated ? `WorkProgress: ${progress.completed.length}/${progress.total} completed; active=${progress.active.length}; failed=${progress.failed.length}; blocked=${progress.blocked.length}; pending=${progress.pending.length}` : null,
     orchestrated && progress.completed.length ? `CompletedWork: ${compactWorkItemIds(progress.completed)}` : null,
     orchestrated && progress.active.length ? `ActiveWork: ${compactWorkItemIds(progress.active)}` : null,
     orchestrated && (progress.failed.length || progress.blocked.length) ? `FailedOrBlockedWork: failed=${compactWorkItemIds(progress.failed)}; blocked=${compactWorkItemIds(progress.blocked)}` : null,
     orchestrated && progress.transitionText !== "none recorded" ? `LatestTransition: ${progress.transitionText}` : null,
-    orchestrated && snapshot.state === "running" ? "NextCheck: 20s in this turn; then the same Goal/task or next status request. No automation unless timed reports were explicitly requested." : null,
-    orchestrated ? "RequiredProgressReport: show Progress, Completed, Active, Failed/Blocked, Next, and Next check; never answer only \"running\"." : null,
-    orchestrated && snapshot.state === "running" ? "RequiredManagerAction: report assignments, then poll project-manager-status (waitSeconds=20) until a transition or 2-minute activity update. Do not close on dispatch." : null,
-    orchestrated ? "WorkGraph:" : null,
-    ...(orchestrated ? (snapshot.workItems || []).map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary || item.hostEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    orchestrated && snapshot.state === "running" && graphIntegrity.valid ? "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop and no automation unless explicitly requested." : null,
+    orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Report only Changed, Team now, Progress, Blocker, and Next. Omit unchanged boilerplate and never answer only \"running\".` : null,
+    orchestrated && !graphIntegrity.valid && snapshot.state !== "completed"
+      ? "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch."
+      : null,
+    orchestrated && snapshot.state === "running" && graphIntegrity.valid
+      ? "RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield until the next Goal continuation."
+      : null,
+    orchestrated && graphIntegrity.valid ? "WorkGraph:" : null,
+    ...(orchestrated && graphIntegrity.valid ? visibleWorkItems.map((item) => `- ${item.id}: ${item.state}; class=${item.executionClass || (item.readOnly ? "analysis" : "code")}; resource=${item.assignment}; model=${item.assignedModel}; dependsOn=${item.dependsOn.join(",") || "none"}${item.codexEvidence?.summary || item.hostEvidence?.summary ? "; evidence=recorded" : ""}${item.externallyConsequential ? "; external-effect=current-Codex-only" : ""}${item.failureCategory ? `; failure=${item.failureCategory}` : ""}`) : []),
+    orchestrated && graphIntegrity.valid && allWorkItems.length > visibleWorkItems.length ? `- ${allWorkItems.length - visibleWorkItems.length} completed or low-signal work items omitted from this checkpoint.` : null,
     ...(orchestrated && emittableHostDispatchItems.filter((item) => item.state === "host-dispatch-required").length
       ? [
           "HostCodexReservationActions:",
@@ -4453,11 +4723,10 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
             .map((item) => `- ${item.id}: ${truncateText(item.hostEvidence.summary, 300)}`),
         ]
       : []),
-    ...(orchestrated && (snapshot.constraints || []).length
+    ...(orchestrated && allConstraints.length
       ? [
-          "ActiveConstraints:",
-          ...(snapshot.constraints || []).slice(0, 6).map((constraint) => `- ${truncateText(constraint, 220)}`),
-          (snapshot.constraints || []).length > 6 ? `- ... ${(snapshot.constraints || []).length - 6} more persisted constraints` : null,
+          `ActiveConstraints: ${allConstraints.length} persisted; showing the newest ${visibleConstraints.length}.`,
+          ...visibleConstraints.map((constraint) => `- ${truncateText(constraint, 180)}`),
         ].filter(Boolean)
       : []),
     ...(orchestrated && snapshot.termination?.category
@@ -4466,12 +4735,21 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     ...(orchestrated && typeof snapshot.finalVerification?.passed === "boolean"
       ? ["FinalVerification:", `- passed=${snapshot.finalVerification.passed}; ${truncateText(snapshot.finalVerification.summary, 700)}`]
       : []),
-    "WorkerResults:",
+    graphIntegrity.valid ? "WorkerResults:" : "WorkerResults: omitted because the malformed graph cannot produce acceptable integration evidence.",
   ].filter(Boolean);
 
   const allJobs = snapshot.jobs || [];
-  const visibleJobs = allJobs.slice(-4);
-  if (allJobs.length > visibleJobs.length) lines.push(`- ${allJobs.length - visibleJobs.length} older worker attempts omitted; use read-job for diagnosis.`);
+  const activeJobStates = new Set(["queued", "running", "unknown"]);
+  const visibleJobs = graphIntegrity.valid
+    ? [...new Map([
+        ...allJobs.filter((job) => activeJobStates.has(job.state)),
+        ...allJobs.filter((job) => ["failed", "cancelled"].includes(job.state)).slice(-2),
+        ...allJobs.filter((job) => job.state === "completed").slice(-1),
+      ].map((job) => [job.jobId, job])).values()]
+      .sort((left, right) => allJobs.indexOf(left) - allJobs.indexOf(right))
+      .slice(-4)
+    : [];
+  if (allJobs.length > visibleJobs.length) lines.push(`- ${allJobs.length - visibleJobs.length} older or redundant worker attempts omitted; use read-job only for diagnosis.`);
   for (const job of visibleJobs) {
     const index = allJobs.indexOf(job);
     const hostTransport = job.transport === "host-subagent";
@@ -4503,7 +4781,8 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
     if (tests && !supersededBySuccess && !supersededByCodex) lines.push(`   Tests: ${tests.replace(/\s*\n\s*/g, " ")}`);
   }
 
-  if (snapshot.termination?.category) lines.push(Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0
+  if (!graphIntegrity.valid && snapshot.state !== "completed" && !snapshot.termination?.category) lines.push("Next: replace the malformed run contract with canonical work items; do not integrate, verify, or keep polling the damaged graph.");
+  else if (snapshot.termination?.category) lines.push(Number(snapshot.termination?.cancellationUnconfirmed || 0) > 0
     ? "Next: execute HostCodexCancellationActions and acknowledge the result. Do not start a replacement run while any host worker stop remains unconfirmed."
     : "Next: this run is stopped. Apply the latest user constraints and start a new objective run only if the user still wants continuation.");
   else if (snapshot.finalVerification?.passed === false) lines.push("Next: final verification failed. Resolve the recorded blocker and continue or re-verify this objective; completion is not allowed.");
@@ -4513,7 +4792,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0) {
       ? "Next: the manager must review the compact artifacts and recorded verification evidence, request one bounded correction if needed, then call project-manager-status with projectVerified=true. Do not rerun project work in this chat."
       : "Next: Codex must critique and integrate the compact artifacts, run targeted final verification, then call project-manager-status with projectVerified=true. Completion is not yet allowed.");
   else if (snapshot.state === "completed") lines.push("Next: this objective is verified complete. Continuous mode does not invent more work after the acceptance gates pass.");
-  else if (snapshot.state === "running") lines.push(`Next: call project-manager-status for ${workspace}; completion is not yet allowed.`);
+  else if (snapshot.state === "running") lines.push(`Next: call project-manager-status once with waitSeconds=120 for ${workspace}; completion is not yet allowed.`);
   else lines.push("Next: inspect only failed/partial jobs with read-job, reassign their narrow lanes, and do not claim team completion.");
   return lines.join("\n");
 }
@@ -4530,7 +4809,7 @@ async function readTeamRun(args = {}) {
 }
 
 async function orchestrateProject(args = {}) {
-  args = normalizeManagerOnly(args);
+  args = applyLocalRuntimePolicy(normalizeManagerOnly(args));
   const workspace = safeWorkspacePath(args.workspace);
   const goal = String(args.goal || "").trim();
   if (!goal) throw new Error("orchestrate-project requires a non-empty goal.");
@@ -4609,6 +4888,8 @@ async function orchestrateProject(args = {}) {
     mode: String(args.mode || "patch").trim().toLowerCase(),
     managerOnly: args.managerOnly === true,
     hostCodexAvailable: args.hostCodexAvailable === true,
+    unattendedMode: args.unattendedMode === true,
+    allowAntigravityPermissionBypass: args.allowAntigravityPermissionBypass === true,
     horizonHours: Math.max(1, Math.min(12, Number(args.horizonHours || 5))),
     ...controls,
     constraints,
@@ -5565,6 +5846,23 @@ function repairStaleRunningJob(workspace, jobId, jobDir, status) {
     writeJsonFile(path.join(jobDir, "status.json"), { ...telemetryStatus, updatedAt: utcStamp() });
     return { status: telemetryStatus, repaired: true, source: "telemetry" };
   }
+  if (status.statusCorrupt === true && state === "running" && !workerAlive) {
+    const repairedStatus = {
+      ...status,
+      state: "failed",
+      currentStep: "invalid-status-json",
+      completedAt: utcStamp(),
+      bridgeFinalized: true,
+      failureCategory: "state-corruption",
+      blocker: "status.json was unreadable and neither a live recorded worker nor finalized telemetry could recover the job.",
+    };
+    writeJsonFile(path.join(jobDir, "status.json"), { ...repairedStatus, updatedAt: utcStamp() });
+    const testsPath = path.join(jobDir, "test-output-summary.md");
+    if (!fs.existsSync(testsPath) || fs.readFileSync(testsPath, "utf8").trim() === "") {
+      fs.writeFileSync(testsPath, "StatusJsonRecovered: false\nResult: failed closed because bridge job state was unreadable.\n", "utf8");
+    }
+    return { status: repairedStatus, repaired: true, source: "state-corruption" };
+  }
   if (state !== "running" || !Number.isInteger(pid) || pid <= 0 || workerAlive) {
     return { status, repaired: false };
   }
@@ -6203,7 +6501,7 @@ function claudeWorkerRole(args = {}) {
 function claudeWorkerSystemPrompt(role) {
   const common = "You are a bounded AI Mobile worker. Work only on the assigned item, never launch an Agent or subagent, preserve unrelated changes, and return concise verification evidence instead of narration.";
   return {
-    writer: `${common} Act as the single workspace writer: edit only the declared file boundary, implement one coherent change, and run focused checks.`,
+    writer: `${common} Act as the sole writer for the declared file boundary: edit only that boundary, implement one coherent change, and run focused checks. Other disjoint boundaries may have separate workers.`,
     reviewer: `${common} Act as an independent read-only reviewer: prioritize concrete defects, risks, exact paths, and the smallest safe correction.`,
     verifier: `${common} Act as a read-only verifier: run only named checks, distinguish observation from inference, and fail closed when evidence is missing.`,
     scout: `${common} Act as a read-only scout: inspect the minimum relevant files and return exact paths, facts, assumptions, and blockers for the next worker.`,
@@ -6532,6 +6830,7 @@ function buildAgyJobPrompt(workspace, jobId, args = {}) {
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
     "Do not narrate planned tool calls. Use targeted rg/file reads, avoid .antigravity-bridge except this job folder, and stop exploring once the assigned evidence is sufficient.",
     `Stay within roughly ${operationBudget} targeted file/search operations. A concise blocker is better than a broad workspace crawl.`,
+    args.autoApprovePermissions === true ? "Tool permission prompts were pre-approved for this sandboxed worker by explicit local user policy. This changes only the CLI prompt behavior; all scope, authentication, external-effect, and safety constraints remain mandatory." : null,
     "",
     request,
     "",
@@ -6543,7 +6842,7 @@ function buildAgyJobPrompt(workspace, jobId, args = {}) {
     `- Keep result.md to max ${maxResultBullets} bullets.`,
     "",
     `Current next step: ${String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim()}`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function compactWorkerStdout(value, maxChars = 6000) {
@@ -6623,7 +6922,11 @@ function buildAgyCliArgs(prompt, args = {}) {
   if (args.project) cliArgs.push("--project", safeAgyFlag(args.project, "project"));
   if (args.conversation) cliArgs.push("--conversation", safeAgyFlag(args.conversation, "conversation"));
   if (args.continueLatest) cliArgs.push("--continue");
+  if (args.autoApprovePermissions === true && args.sandbox === false) {
+    throw new Error("Antigravity permission auto-approval requires sandbox=true.");
+  }
   if (args.sandbox !== false) cliArgs.push("--sandbox");
+  if (args.autoApprovePermissions === true) cliArgs.push("--dangerously-skip-permissions");
   if (args.printTimeout) cliArgs.push("--print-timeout", safeAgyFlag(args.printTimeout, "printTimeout"));
   return cliArgs;
 }
@@ -6665,6 +6968,7 @@ function runAgyJobWorker(args = {}) {
     agyCommand: path.basename(status.command),
     agyVersion: status.version,
     agyModel: args.model || "",
+    agyPermissionMode: args.autoApprovePermissions === true ? "sandboxed-auto-approve" : "interactive",
   });
 
   const startedMs = Date.now();
@@ -6826,6 +7130,7 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
   const request = summarizeFile(path.join(jobDir, "request.md"), 12000);
   const maxResultBullets = boundedResultBulletLimit(args, 8);
   const maxOutputTokens = Math.max(2000, Math.min(50000, Number(args.maxOutputTokens ?? 12000)));
+  const operationBudget = maxResultBullets <= 5 ? 8 : maxResultBullets <= 6 ? 12 : 16;
   const permissionMode = String(args.permissionMode || "").trim().toLowerCase();
   const artifactRules = permissionMode === "plan"
     ? [
@@ -6847,6 +7152,7 @@ function buildClaudeJobPrompt(workspace, jobId, args = {}) {
     "You are Claude Code running as a local worker for Codex.",
     "Work in the workspace path below. Inspect files locally; do not paste full files, full logs, screenshots, credentials, cookies, or private chat transcripts.",
     "Do not narrate planned tool calls. Use targeted reads/searches and stop when enough evidence exists for the assigned work items.",
+    `Hard operation budget: use at most ${operationBudget} focused tool calls. If that is insufficient, return one concise blocker instead of broadening the search.`,
     `Hard efficiency budget: stop after one focused solution and do not exceed approximately ${maxOutputTokens} output tokens. Do not launch subagents or broaden the task.`,
     "",
     request,
@@ -8205,6 +8511,20 @@ function runSelfTest() {
 
   const split = inferTaskSplit("ignored when explicit lanes exist", "UI, backend, testing");
   assert(split.join(",") === "ui,backend,testing", "explicit task split is preserved");
+  const aliasedGraph = buildGoalWorkGraph({
+    goal: "repair",
+    workItems: [
+      { id: "inspect", title: "Inspect runtime", description: "Verify live runtime truth", class: "analysis" },
+      { id: "repair", title: "Repair routing", description: "Correct safe-ready routing", class: "code", dependsOn: ["inspect"] },
+      { id: "integrate", title: "Integrate correction", description: "Reconcile and verify the correction", class: "integration", dependsOn: ["repair"] },
+    ],
+  });
+  assert(aliasedGraph[0].objective === "Verify live runtime truth" && aliasedGraph[0].readOnly === true && aliasedGraph[0].executionClass === "analysis", "work-item description/title/class aliases preserve analysis intent");
+  assert(aliasedGraph[1].objective === "Correct safe-ready routing" && aliasedGraph[1].readOnly === false && aliasedGraph[1].executionClass === "code", "work-item aliases cannot collapse code into generic read-only work");
+  assert(aliasedGraph[2].readOnly === false && aliasedGraph[2].executionClass === "integration", "integration aliases retain writable integration semantics");
+  assert(buildGoalWorkGraph({ goal: "repair", workItems: [{ id: "contradictory", title: "Repair code", class: "code", readOnly: true }] })[0].readOnly === false, "an explicit code execution class overrides a contradictory readOnly downgrade");
+  const managerWorkItemSchema = tools.find((tool) => tool.name === "run-project-manager")?.inputSchema?.properties?.workItems?.items;
+  assert(managerWorkItemSchema?.properties?.objective && managerWorkItemSchema?.properties?.description && managerWorkItemSchema?.properties?.executionClass && managerWorkItemSchema?.properties?.class, "manager tool publishes canonical work-item fields and defensive aliases");
   const defaultToolNames = exposedMcpTools("").map((tool) => tool.name);
   assert(defaultToolNames.length === 10 && defaultToolNames.includes("run-project-manager") && defaultToolNames.includes("project-manager-status") && !defaultToolNames.includes("submit-agy-job"), "default MCP discovery exposes only the lean manager control surface");
   assert(exposedMcpTools("true").length === tools.length, "advanced MCP discovery remains available through one explicit environment switch");
@@ -8273,6 +8593,14 @@ function runSelfTest() {
   assert(staleHost.every((candidate) => candidate.state === "capacity-stale"), "stale Codex capacity evidence fails closed for new host assignments");
   assert(shouldFanOut([{ id: "a", kind: "research", readOnly: true, dependsOn: [] }, { id: "b", kind: "review", readOnly: true, dependsOn: [] }]), "independent distinct read-only work may fan out");
   assert(!shouldFanOut([{ id: "a", kind: "implementation", readOnly: false, dependsOn: [] }, { id: "b", kind: "implementation", readOnly: false, dependsOn: [] }]), "parallel shared-workspace writers are refused");
+  assert(shouldFanOut([
+    { id: "ui", kind: "implementation", readOnly: false, dependsOn: [], expectedFiles: ["ui/"] },
+    { id: "backend", kind: "implementation", readOnly: false, dependsOn: [], expectedFiles: ["server/"] },
+  ]), "pairwise-disjoint bounded writers may fan out");
+  assert(!shouldFanOut([
+    { id: "ui-a", kind: "implementation", readOnly: false, dependsOn: [], expectedFiles: ["ui/"] },
+    { id: "ui-b", kind: "implementation", readOnly: false, dependsOn: [], expectedFiles: ["ui/App.tsx"] },
+  ]), "overlapping bounded writers remain serialized");
   const defaultControls = normalizedRunControls({});
   assert(defaultControls.runDeadlineMinutes === 0 && defaultControls.capacityCheckpointMinutes === 20 && defaultControls.maxWorkerMinutes === 0 && defaultControls.maxClaudeOutputTokens === 12000, "projects default to continuous duration with rolling capacity checkpoints");
   assert(workerMinutesFor(defaultControls, 4, "antigravity") === 60 && workerMinutesFor(defaultControls, 4, "claude") === 90 && workerMinutesFor({ ...defaultControls, maxWorkerMinutes: 25 }, 4, "claude") === 25, "worker leases adapt to complexity and honor only an explicit ceiling");
@@ -8315,6 +8643,8 @@ function runSelfTest() {
     continuitySummary: "Compact prior state only.",
   });
   assert(capsuleFixture.policy.transcriptIncluded === false && capsuleFixture.fileEvidence.every((entry) => !entry.path.includes("outside")), "context capsules exclude transcripts and paths outside the workspace");
+  const aliasedCapsuleFixture = buildContextCapsule({ goal: "Repair code", workspace: pluginRoot, workItems: [{ id: "repair", title: "Repair code", class: "code", readOnly: true, files: ["scripts/example.js"] }] });
+  assert(aliasedCapsuleFixture.workItems[0]?.executionClass === "code" && aliasedCapsuleFixture.workItems[0]?.readOnly === false, "context capsules preserve alias-normalized writer intent even when readOnly is contradictory");
   assert(capsuleFixture.projectMap.topLevel.length > 0 && capsuleFixture.projectMap.manifests.some((entry) => entry.path === ".codex-plugin/plugin.json"), "context capsules include a lightweight project map and manifest fingerprints");
   assert(JSON.stringify(capsuleFixture).length < 12000, "context capsules remain bounded for token-efficient handoffs");
   const taskCapsuleFixture = buildTaskCapsule(capsuleFixture, capsuleFixture.workItems[0]);
@@ -8352,6 +8682,12 @@ function runSelfTest() {
   assert(gatedAgy.length > 0 && gatedAgy.every((candidate) => candidate.dispatchable === false && candidate.state === "authorization-required"), "Antigravity CLI cannot auto-dispatch when an OAuth popup was not explicitly authorized");
   const enabledAgy = buildResourceCandidates({ allowAntigravityCli: true }, fakeContext).filter((candidate) => candidate.platform === "antigravity");
   assert(enabledAgy.some((candidate) => candidate.dispatchable === true), "explicit Antigravity CLI authorization enables its model roster");
+  const unattendedInteractiveAgy = buildResourceCandidates({ allowAntigravityCli: true, unattendedMode: true }, fakeContext).filter((candidate) => candidate.platform === "antigravity");
+  assert(unattendedInteractiveAgy.every((candidate) => candidate.dispatchable === false && candidate.state === "interactive-permission-required"), "unattended routing excludes Antigravity when tool permission prompts are not pre-authorized");
+  const unattendedApprovedAgy = buildResourceCandidates({ allowAntigravityCli: true, unattendedMode: true, allowAntigravityPermissionBypass: true }, fakeContext).filter((candidate) => candidate.platform === "antigravity");
+  assert(unattendedApprovedAgy.some((candidate) => candidate.dispatchable === true && candidate.permissionMode === "sandboxed-auto-approve"), "explicit sandboxed permission auto-approval makes Antigravity eligible for unattended work");
+  const profiledUnattended = applyLocalRuntimePolicy({ unattendedMode: true, localProfile: { ...DEFAULT_PROFILE, antigravityAutoApprovePermissions: true } });
+  assert(profiledUnattended.allowAntigravityPermissionBypass === true, "private local Antigravity permission policy is applied only to unattended runs");
   const baselineRoutingContext = {
     ...fakeContext,
     claudeUsage: {
@@ -8523,6 +8859,40 @@ function runSelfTest() {
     agyModels: [],
     recommendedAvailable: [],
   };
+  const fullTeamParallelDecision = buildResourceOrchestrationDecision({
+    goal: "Improve independent UI, backend, and verification lanes in parallel",
+    managerOnly: true,
+    hostCodexAvailable: true,
+    allowAntigravityCli: true,
+    maxParallelWriters: 2,
+    localProfile: privateRoutingProfile,
+    workItems: [
+      { id: "ui", objective: "Improve the UI implementation", executionClass: "code", complexity: "high", expectedFiles: ["ui/"] },
+      { id: "backend", objective: "Improve the backend implementation", executionClass: "code", complexity: "high", expectedFiles: ["server/"] },
+      { id: "verification", objective: "Independently verify the project behavior", executionClass: "analysis", complexity: "medium", expectedFiles: ["tests/"] },
+    ],
+  }, {
+    ...baselineRoutingContext,
+    codexCatalog: hostRoutingContext.codexCatalog,
+    codexTelemetry: hostRoutingContext.codexTelemetry,
+  });
+  const fullTeamPlatforms = new Set(fullTeamParallelDecision.workItems.map((item) => String(item.assignment || "").split(":")[0]));
+  assert(fullTeamPlatforms.has("codex-host") && fullTeamPlatforms.has("claude") && fullTeamPlatforms.has("antigravity"), `independent disjoint work uses native Codex, Claude, and Antigravity together when all are healthy (got ${[...fullTeamPlatforms].join(",")})`);
+  const externalParallelDecision = buildResourceOrchestrationDecision({
+    goal: "Improve two independent code boundaries while native Codex is unavailable",
+    managerOnly: true,
+    allowAntigravityCli: true,
+    localProfile: privateRoutingProfile,
+    workItems: [
+      { id: "ui-external", objective: "Improve the UI implementation", executionClass: "code", complexity: "high", expectedFiles: ["ui/"] },
+      { id: "backend-external", objective: "Improve the backend implementation", executionClass: "code", complexity: "high", expectedFiles: ["server/"] },
+    ],
+  }, {
+    ...baselineRoutingContext,
+    agyModels: [...baselineRoutingContext.agyModels, { id: "gemini-3.1-pro-high", displayName: "Gemini 3.1 Pro (High)" }],
+  });
+  const externalParallelPlatforms = new Set(externalParallelDecision.workItems.map((item) => String(item.assignment || "").split(":")[0]));
+  assert(externalParallelPlatforms.has("claude") && externalParallelPlatforms.has("antigravity"), `disjoint writers stay parallel across Claude and Antigravity when native Codex is unavailable (got ${[...externalParallelPlatforms].join(",")})`);
   const nativeCodexDecision = buildResourceOrchestrationDecision({
     goal: "Implement and test a bounded project change",
     managerOnly: true,
@@ -8654,6 +9024,8 @@ function runSelfTest() {
 
   assert(normalizeManagerOnly({}).managerOnly === true && normalizeManagerOnly({ managerOnly: undefined }).managerOnly === true, "every orchestration entrypoint defaults managerOnly to true when the caller omits it");
   assert(normalizeManagerOnly({ managerOnly: false }).managerOnly === false, "an explicit managerOnly=false is preserved instead of being forced back to manager-only");
+  const parsedActionSummary = actionSummary("SubmitWorkerResult:\nJobId: worker-test\nWorkerPid: 321\nStarted: true", "worker-tool", pluginRoot);
+  assert(parsedActionSummary.workerPid === 321 && parsedActionSummary.workerCommandMarker === "worker-test", "new worker reservations retain process identity before the first status refresh");
 
   const reservationHostItem = prepareHostAssignedItem({ ...hostRunBase, runId: "host-reservation-test" }, { ...preparedHostItem, hostAttempt: null, hostAction: null }, terraResource);
   const reservedManifest = { ...hostRunBase, runId: "host-reservation-test", workItems: [reservationHostItem], jobs: ensureHostDispatchReservations([reservationHostItem], []) };
@@ -8679,18 +9051,49 @@ function runSelfTest() {
   const dualWriterSnapshot = {
     ...hostRunBase,
     runId: "host-writer-serialization-test",
+    maxConcurrentCodexWorkers: 2,
+    maxParallelWriters: 2,
     workItems: dualWriterWorkItems,
     jobs: ensureHostDispatchReservations(dualWriterWorkItems, []),
     state: "ready-for-codex",
     counts: { total: 2, completed: 0, running: 2, failed: 0 },
   };
-  const firstWriterReserved = applyHostWorkerEvents(dualWriterSnapshot, { hostWorkerEvents: [{ event: "reserved", runId: dualWriterSnapshot.runId, workItemId: firstWritableHostItem.id, attemptId: firstWritableHostItem.hostAttempt.attemptId, dispatchToken: firstWritableHostItem.hostAttempt.dispatchToken }] });
-  const dualWriterText = formatTeamRunSnapshot(pluginRoot, firstWriterReserved, 0);
+  const bothWritersReserved = applyHostWorkerEvents(dualWriterSnapshot, { hostWorkerEvents: dualWriterWorkItems.map((item) => ({ event: "reserved", runId: dualWriterSnapshot.runId, workItemId: item.id, attemptId: item.hostAttempt.attemptId, dispatchToken: item.hostAttempt.dispatchToken })) });
+  const dualWriterText = formatTeamRunSnapshot(pluginRoot, bothWritersReserved, 0);
   const emittedSpawnInstructions = (dualWriterText.match(/multi_agent_v1__spawn_agent/g) || []).length;
-  assert(emittedSpawnInstructions === 1, "only one writable host writer action is emitted at a time even when two writable items are dispatch-ready");
+  assert(emittedSpawnInstructions === 2, "two native writers may launch together when their verified file boundaries are disjoint and capacity allows it");
+  const overlappingWriter = prepareHostAssignedItem(
+    { ...hostRunBase, runId: "host-writer-overlap-test" },
+    { ...normalizeWorkItem({ id: "native-overlap", objective: "Implement an overlapping patch", kind: "implementation", complexity: "high", readOnly: false, expectedFiles: ["scripts/example.js"] }, 1, "high"), assignment: terraResource.id, assignedModel: terraResource.model },
+    terraResource,
+  );
+  const overlapItems = [firstWritableHostItem, overlappingWriter].map((item) => ({ ...item, hostAttempt: { ...item.hostAttempt, attemptId: `overlap-${item.id}`, dispatchToken: `token-${item.id}`, state: "dispatch-required" } }));
+  const overlapSnapshot = {
+    ...hostRunBase,
+    runId: "host-writer-overlap-test",
+    maxConcurrentCodexWorkers: 2,
+    maxParallelWriters: 2,
+    workItems: overlapItems,
+    jobs: ensureHostDispatchReservations(overlapItems, []),
+    state: "ready-for-codex",
+    counts: { total: 2, completed: 0, running: 2, failed: 0 },
+  };
+  const overlapReserved = applyHostWorkerEvents(overlapSnapshot, { hostWorkerEvents: overlapItems.map((item) => ({ event: "reserved", runId: overlapSnapshot.runId, workItemId: item.id, attemptId: item.hostAttempt.attemptId, dispatchToken: item.hostAttempt.dispatchToken })) });
+  assert((formatTeamRunSnapshot(pluginRoot, overlapReserved, 0).match(/multi_agent_v1__spawn_agent/g) || []).length === 1, "overlapping native writers expose only one spawn action");
+  const activeWriterManifest = {
+    maxParallelWriters: 2,
+    workItems: [
+      { id: "ui", readOnly: false, expectedFiles: ["ui/"] },
+      { id: "backend", readOnly: false, expectedFiles: ["server/"] },
+      { id: "ui-overlap", readOnly: false, expectedFiles: ["ui/App.tsx"] },
+    ],
+    jobs: [{ jobId: "ui-job", state: "running", workItemIds: ["ui"] }],
+  };
+  assert(writerGroupCanLaunch(activeWriterManifest, [activeWriterManifest.workItems[1]]) === true, "an external disjoint writer may launch while another boundary is active");
+  assert(writerGroupCanLaunch(activeWriterManifest, [activeWriterManifest.workItems[2]]) === false, "an external overlapping writer waits for the active boundary");
   const parallelReadItems = ["native-read-1", "native-read-2"].map((id, index) => prepareHostAssignedItem(
     { ...hostRunBase, runId: "host-capacity-serialization-test" },
-    { ...normalizeWorkItem({ id, objective: `Review bounded area ${index + 1}`, kind: "review", complexity: "medium", readOnly: true, expectedFiles: [`scripts/read-${index + 1}.js`] }, index, "medium"), assignment: terraResource.id, assignedModel: terraResource.model },
+    { ...normalizeWorkItem({ id, objective: `Review bounded area ${index + 1}`, kind: "review", complexity: "medium", readOnly: true, priority: index === 0 ? 10 : 90, expectedFiles: [`scripts/read-${index + 1}.js`] }, index, "medium"), assignment: terraResource.id, assignedModel: terraResource.model },
     terraResource,
   ));
   const parallelReadSnapshot = {
@@ -8702,7 +9105,9 @@ function runSelfTest() {
     state: "ready-for-codex",
     counts: { total: 2, completed: 0, running: 2, failed: 0 },
   };
-  assert((formatTeamRunSnapshot(pluginRoot, parallelReadSnapshot, 0).match(/one reserved hostWorkerEvent/g) || []).length === 1, "native Codex read-only fan-out respects the shared-pool concurrency limit");
+  const prioritizedHostText = formatTeamRunSnapshot(pluginRoot, parallelReadSnapshot, 0);
+  assert((prioritizedHostText.match(/one reserved hostWorkerEvent/g) || []).length === 1, "native Codex read-only fan-out respects the shared-pool concurrency limit");
+  assert(prioritizedHostText.match(/HostCodexReservationActions:\n- ([^:]+):/)?.[1] === "native-read-2", "native Codex reservations expose the highest-priority ready item first");
 
   const protectedSessionDecision = buildResourceOrchestrationDecision({
     goal: "Verify the current portal session before a controlled operation",
@@ -8864,6 +9269,11 @@ function runSelfTest() {
   assert(inferAgyObservedModel("I am currently running on **Gemini 3.5 Flash (Medium)**.", "gemini-3.5-flash-low") === "gemini-3.5-flash-medium", "Antigravity telemetry records a self-reported model instead of the requested alias");
   const agyPrintArgs = buildAgyCliArgs("EXECUTE-THIS-PROMPT", { model: "gemini-3.5-flash-low", printTimeout: "1m" });
   assert(agyPrintArgs[0] === "--print" && agyPrintArgs[1] === "EXECUTE-THIS-PROMPT", "Antigravity CLI receives the task through the verified long-form print argument");
+  const unattendedAgyArgs = buildAgyCliArgs("UNATTENDED", { model: "gemini-3.5-flash-low", sandbox: true, autoApprovePermissions: true });
+  assert(unattendedAgyArgs.includes("--sandbox") && unattendedAgyArgs.includes("--dangerously-skip-permissions"), "sandboxed unattended Antigravity jobs use the CLI's explicit permission auto-approval flag");
+  let unsafeAgyAutoApproveRejected = false;
+  try { buildAgyCliArgs("UNSAFE", { sandbox: false, autoApprovePermissions: true }); } catch { unsafeAgyAutoApproveRejected = true; }
+  assert(unsafeAgyAutoApproveRejected, "Antigravity permission auto-approval is refused without the sandbox");
 
   const tempRoot = path.resolve(os.tmpdir());
   const workspace = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-self-test-"));
@@ -9000,8 +9410,28 @@ function runSelfTest() {
       workItems: [{ id: "active-review", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [] }],
       jobs: [{ jobId: compactJob.jobId, laneId: "active", state: "running", assignedTasks: ["active-review"], workItemIds: ["active-review"], model: "sonnet", startedAt: new Date(Date.now() - 30000).toISOString(), currentStep: "reviewing" }],
       decisions: [{ at: utcStamp(), type: "worker-start", workItemId: "active-review", resourceId: "claude:sonnet" }],
-    }, 20);
-    assert(activeProgressSnapshot.includes("WorkProgress: 0/1 completed; active=1") && activeProgressSnapshot.includes("RequiredProgressReport:") && activeProgressSnapshot.includes("RequiredManagerAction:") && activeProgressSnapshot.includes("NextCheck:") && activeProgressSnapshot.includes("Activity: started="), "running manager snapshots expose visible progress, activity, and mandatory continuation fields");
+    }, 120, { ...DEFAULT_PROFILE, address: "My Lord", updateStyle: "concise-executive" });
+    assert(activeProgressSnapshot.includes("WorkProgress: 0/1 completed; active=1") && activeProgressSnapshot.includes("RequiredUserStatus: My Lord") && activeProgressSnapshot.includes("Changed, Team now, Progress, Blocker, and Next") && activeProgressSnapshot.includes("waitSeconds=120") && activeProgressSnapshot.includes("Activity: started="), "running manager snapshots enforce private address, executive progress fields, and one transition-aware wait");
+    const refreshWarningSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      runId: "refresh-warning-test",
+      state: "running",
+      counts: { total: 1, completed: 0, running: 1, failed: 0 },
+      workItems: [{ id: "active-review", objective: "Review active work", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [], readOnly: true }],
+      jobs: [],
+      reportWait: { requestedSeconds: 120, elapsedSeconds: 1, transitionDetected: false, refreshError: "manifest changed during wait" },
+    }, 120);
+    assert(refreshWarningSnapshot.includes("StatusRefreshWarning: manifest changed during wait") && refreshWarningSnapshot.includes("last verified snapshot"), "a transition-wait refresh race returns explicit stale-snapshot evidence instead of hiding the interruption");
+    assert(teamRunTransitionSignature({ state: "running", workItems: [{ id: "a", state: "running" }] }) !== teamRunTransitionSignature({ state: "running", workItems: [{ id: "a", state: "completed" }] }), "transition-aware waits detect work-item state changes without polling boilerplate");
+    const malformedGraphSnapshot = formatTeamRunSnapshot(workspace, {
+      version: 2,
+      runId: "malformed-graph-test",
+      state: "ready-for-codex",
+      counts: { total: 1, completed: 1, running: 0, failed: 0 },
+      workItems: [{ id: "safe-ready-recovery", objective: "Complete work item 2", state: "completed", assignment: "antigravity:gemini-3.5-flash-medium", assignedModel: "gemini-3.5-flash-medium", dependsOn: [], executionClass: "analysis", readOnly: true }],
+      jobs: [],
+    }, 0);
+    assert(malformedGraphSnapshot.includes("WorkGraphIntegrity: invalid") && malformedGraphSnapshot.includes("Call run-project-manager once") && malformedGraphSnapshot.includes("do not integrate, verify") && !malformedGraphSnapshot.includes("NextCheck: one project-manager-status"), "persisted placeholder graphs require safe canonical replacement instead of integration or repeated polling");
     const supersededJob = createJob({ goal: "superseded failure self-test", workspace, mode: "review", worker: "self-test" });
     fs.writeFileSync(path.join(supersededJob.jobDir, "result.md"), "- SUPERSEDED_DETAIL_SHOULD_NOT_BE_REPEATED\n", "utf8");
     fs.writeFileSync(path.join(supersededJob.jobDir, "test-output-summary.md"), "Result: failed\n", "utf8");
@@ -9034,6 +9464,13 @@ function runSelfTest() {
     assert(completedRefresh.jobs[0]?.failureCategory === "", "completed worker attempts never retain a synthetic failure category");
     writeTeamRunManifest(workspace, { ...manifest, jobs: [] });
     assert(refreshTeamRunManifest(workspace).state === "blocked", "team with no startable jobs reports blocked");
+
+    const corruptStatusJob = createJob({ goal: "corrupt status recovery self-test", workspace, mode: "review", worker: "self-test" });
+    const corruptStatusPath = path.join(corruptStatusJob.jobDir, "status.json");
+    fs.writeFileSync(corruptStatusPath, "{", "utf8");
+    const corruptFallback = bridgeStatusForManifestJob({ jobId: corruptStatusJob.jobId, state: "running" }, corruptStatusPath);
+    const corruptRepair = repairStaleRunningJob(workspace, corruptStatusJob.jobId, corruptStatusJob.jobDir, corruptFallback);
+    assert(corruptFallback.statusCorrupt === true && corruptRepair.status.state === "failed" && corruptRepair.status.failureCategory === "state-corruption", "unreadable status JSON fails closed instead of holding an unknown worker slot forever");
 
     const staleTelemetryJob = createJob({ goal: "telemetry repair self-test", workspace, mode: "review", worker: "self-test" });
     fs.writeFileSync(path.join(staleTelemetryJob.jobDir, "result.md"), "- Worker timed out before final status write.\n", "utf8");
@@ -9274,6 +9711,7 @@ async function handleRequest(message) {
               adaptiveRouting: values.adaptiveRouting,
               cliFirst: values.cliFirst,
               uiFallbackOnly: values.uiFallbackOnly,
+              antigravityAutoApprovePermissions: values.antigravityAutoApprovePermissions,
             })
           : readProfile();
         sendResult(id, { content: [{ type: "text", text: formatOrchestratorProfile(profile) }] });
