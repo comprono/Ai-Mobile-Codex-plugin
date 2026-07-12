@@ -319,8 +319,8 @@ const tools = [
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager task, steering, and failover. Native Codex workers stop dispatching at or below this percentage.", default: 15 },
-        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers sharing the measured Codex pool. Other providers remain independently parallel.", default: 1 },
-        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers sharing the measured Codex pool. Defaults to three so healthy capacity above the manager reserve is actively used.", default: 3 },
+        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 3 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap. 0 (default) selects the auth-aware automatic policy: claude.ai subscription auth (Pro/Max/Team/Enterprise, no ANTHROPIC_API_KEY) omits --max-budget-usd and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic cap.", default: 0 },
@@ -366,8 +366,8 @@ const tools = [
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for management and failover; standalone and host-native Codex workers stop at this threshold.", default: 15 },
-        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; defaults to one to protect the shared five-hour pool.", default: 1 },
-        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 2 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; defaults to three while preserving the manager reserve.", default: 3 },
+        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 3 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
@@ -446,8 +446,8 @@ const tools = [
         nextCycleVerification: { type: "array", items: { type: "string" }, maxItems: 12 },
         refreshInventory: { type: "boolean", description: "Refresh provider capacity before assigning nextWorkItems.", default: false },
         addConstraints: { type: "array", items: { type: "string" }, maxItems: 20, description: "New user constraints to persist before any continuation work." },
-        steeringDirective: { type: "string", description: "Latest user steering instruction or safety correction." },
-        interruptRunningWorkers: { type: "boolean", description: "Cancel running external workers before applying new steering. Defaults true when constraints or a directive are supplied." },
+        steeringDirective: { type: "string", description: "Actual user change to the root goal or safety boundary. Never use for internal routing, model, capacity, transport, or worker corrections." },
+        interruptRunningWorkers: { type: "boolean", description: "Cancel running workers for an actual user change. Must be explicitly true for a steeringDirective; new safety constraints still interrupt by default." },
         stopRun: { type: "boolean", description: "Stop the active objective and cancel external workers.", default: false },
         stopReason: { type: "string", description: "Required reason when stopping the run." },
       },
@@ -533,8 +533,8 @@ const tools = [
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
         codexManagerReservePercent: { type: "number", description: "Shared Codex capacity reserved for the manager task, steering, and recovery.", default: 15 },
-        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; other providers remain independently parallel.", default: 1 },
-        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries.", default: 2 },
+        maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; defaults to three while preserving the manager reserve.", default: 3 },
+        maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries.", default: 3 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
         maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
@@ -2868,8 +2868,8 @@ function normalizedRunControls(args = {}) {
   const requestedCheckpoint = Number(args.capacityCheckpointMinutes ?? 20);
   const requestedWorkerCap = Number(args.maxWorkerMinutes ?? 0);
   const requestedManagerReserve = Number(args.codexManagerReservePercent ?? 15);
-  const requestedConcurrentCodex = Number(args.maxConcurrentCodexWorkers ?? 1);
-  const requestedParallelWriters = Number(args.maxParallelWriters ?? 2);
+  const requestedConcurrentCodex = Number(args.maxConcurrentCodexWorkers ?? 3);
+  const requestedParallelWriters = Number(args.maxParallelWriters ?? 3);
   return {
     runDeadlineMinutes: Number.isFinite(requestedDeadline) && requestedDeadline > 0
       ? Math.max(2, Math.min(10080, requestedDeadline))
@@ -2882,10 +2882,10 @@ function normalizedRunControls(args = {}) {
       : 15,
     maxConcurrentCodexWorkers: Number.isFinite(requestedConcurrentCodex)
       ? Math.max(1, Math.min(3, Math.round(requestedConcurrentCodex)))
-      : 1,
+      : 3,
     maxParallelWriters: Number.isFinite(requestedParallelWriters)
       ? Math.max(1, Math.min(3, Math.round(requestedParallelWriters)))
-      : 2,
+      : 3,
     maxWorkerMinutes: Number.isFinite(requestedWorkerCap) && requestedWorkerCap > 0
       ? Math.max(1, Math.min(180, requestedWorkerCap))
       : 0,
@@ -3166,7 +3166,7 @@ function writerGroupCanLaunch(manifest = {}, items = []) {
   const writers = items.filter((item) => !item.readOnly);
   if (!writers.length) return true;
   const activeJobs = activeWriterJobs(manifest);
-  const maxParallelWriters = Math.max(1, Math.min(3, Number(manifest.maxParallelWriters || 2)));
+  const maxParallelWriters = Math.max(1, Math.min(3, Number(manifest.maxParallelWriters || 3)));
   if (activeJobs.length >= maxParallelWriters) return false;
   const byId = new Map((manifest.workItems || []).map((item) => [item.id, item]));
   const activeWriters = activeJobs.flatMap((job) => (job.workItemIds || job.assignedTasks || [])
@@ -3175,15 +3175,30 @@ function writerGroupCanLaunch(manifest = {}, items = []) {
   return writers.every((writer) => activeWriters.every((active) => writerItemsAreDisjoint(writer, active)));
 }
 
+function codexConcurrencyLimit(manifest = {}) {
+  const configured = Math.max(1, Math.min(3, Number(manifest.maxConcurrentCodexWorkers || 3)));
+  const remaining = (manifest.resources || [])
+    .filter((resource) => resourcePlatform(resource) === "codex" && resource.id !== "codex:current" && Number.isFinite(Number(resource.remainingPercent)))
+    .map((resource) => Number(resource.remainingPercent))
+    .sort((left, right) => left - right)[0];
+  if (!Number.isFinite(remaining)) return configured;
+  const reserve = Math.max(5, Math.min(50, Number(manifest.codexManagerReservePercent || 15)));
+  const headroom = remaining - reserve;
+  if (headroom <= 0) return 0;
+  if (headroom < 20) return 1;
+  if (headroom < 45) return Math.min(configured, 2);
+  return configured;
+}
+
 function codexWorkerCanLaunch(manifest = {}, resource = {}) {
   if (resourcePlatform(resource) !== "codex" || resource.id === "codex:current") return true;
-  const limit = Math.max(1, Math.min(3, Number(manifest.maxConcurrentCodexWorkers || 1)));
+  const limit = codexConcurrencyLimit(manifest);
   const active = (manifest.jobs || []).filter((job) => {
     if (!["queued", "running", "unknown"].includes(job.state)) return false;
     if (job.transport === "host-subagent") return true;
     return String(job.resourceId || "").startsWith("codex-cli:");
   }).length;
-  return active < limit;
+  return limit > 0 && active < limit;
 }
 
 function parallelWriterIds(workItems = []) {
@@ -4343,8 +4358,8 @@ function runContractChanges(manifest, args = {}) {
       runDeadlineMinutes: Number(manifest.runDeadlineMinutes ?? 0),
       capacityCheckpointMinutes: Number(manifest.capacityCheckpointMinutes ?? 20),
       codexManagerReservePercent: Number(manifest.codexManagerReservePercent ?? 15),
-      maxConcurrentCodexWorkers: Number(manifest.maxConcurrentCodexWorkers ?? 1),
-      maxParallelWriters: Number(manifest.maxParallelWriters ?? 2),
+      maxConcurrentCodexWorkers: Number(manifest.maxConcurrentCodexWorkers ?? 3),
+      maxParallelWriters: Number(manifest.maxParallelWriters ?? 3),
       maxWorkerMinutes: Number(manifest.maxWorkerMinutes ?? 0),
       maxClaudeOutputTokens: Number(manifest.maxClaudeOutputTokens || 12000),
       maxClaudeBudgetUsd: Number(manifest.maxClaudeBudgetUsd ?? 0) > 0 ? Number(manifest.maxClaudeBudgetUsd) : 0,
@@ -5450,9 +5465,9 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
   const visibleConstraints = allConstraints.slice(-3);
   // Native Codex workers share the manager's five-hour pool. Bound concurrent host actions even when
   // several read-only items are ready; external CLI workers keep their independent parallelism.
-  const maxConcurrentHostWorkers = Math.max(1, Math.min(3, Number(snapshot.maxConcurrentCodexWorkers || 1)));
+  const maxConcurrentHostWorkers = codexConcurrencyLimit(snapshot);
   let availableHostSlots = maxConcurrentHostWorkers - (snapshot.jobs || []).filter((job) => job.transport === "host-subagent" && ["running", "unknown"].includes(job.state)).length;
-  const maxParallelWriters = Math.max(1, Math.min(3, Number(snapshot.maxParallelWriters || 2)));
+  const maxParallelWriters = Math.max(1, Math.min(3, Number(snapshot.maxParallelWriters || 3)));
   // A queued host reservation is not a running writer yet. Select the bounded spawn actions in order
   // below so disjoint reservations can launch together and overlapping reservations expose only one.
   const boundaryHoldingWriterJobs = activeWriterJobs(snapshot)
@@ -6332,8 +6347,8 @@ function nextCyclePlanningArgs(manifest, args, workspace) {
     runDeadlineMinutes: manifest.runDeadlineMinutes || 0,
     capacityCheckpointMinutes: manifest.capacityCheckpointMinutes || 20,
     codexManagerReservePercent: manifest.codexManagerReservePercent || 15,
-    maxConcurrentCodexWorkers: manifest.maxConcurrentCodexWorkers || 1,
-    maxParallelWriters: manifest.maxParallelWriters || 2,
+    maxConcurrentCodexWorkers: manifest.maxConcurrentCodexWorkers || 3,
+    maxParallelWriters: manifest.maxParallelWriters || 3,
     maxWorkerMinutes: manifest.maxWorkerMinutes || 0,
     maxClaudeOutputTokens: manifest.maxClaudeOutputTokens || 12000,
     maxClaudeBudgetUsd: manifest.maxClaudeBudgetUsd || 0,
@@ -6421,6 +6436,10 @@ function appendContinuousCycle(manifest, args, decision, workspace) {
   return next;
 }
 
+function steeringShouldInterrupt(args = {}, addConstraints = []) {
+  return args.stopRun === true || args.interruptRunningWorkers === true || addConstraints.length > 0;
+}
+
 async function projectManagerStatus(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
   const wantsNextCycle = Array.isArray(args.nextWorkItems) && args.nextWorkItems.length > 0;
@@ -6474,8 +6493,7 @@ async function projectManagerStatus(args = {}) {
           directive: steeringDirective || String(args.stopReason || "Constraints updated."),
           addedConstraints: addConstraints,
         });
-        const interrupt = args.stopRun === true
-          || args.interruptRunningWorkers !== false;
+        const interrupt = steeringShouldInterrupt(args, addConstraints);
         if (interrupt) {
           const reason = String(args.stopReason || steeringDirective || `User constraints changed: ${addConstraints.join(" | ")}`);
           manifest = terminateOrchestrationRun(workspace, manifest, reason, "user-steering");
@@ -10328,7 +10346,17 @@ function runSelfTest() {
     { id: "ui-b", kind: "implementation", readOnly: false, dependsOn: [], expectedFiles: ["ui/App.tsx"] },
   ]), "overlapping bounded writers remain serialized");
   const defaultControls = normalizedRunControls({});
-  assert(defaultControls.runDeadlineMinutes === 0 && defaultControls.capacityCheckpointMinutes === 20 && defaultControls.maxWorkerMinutes === 0 && defaultControls.maxClaudeOutputTokens === 12000, "projects default to continuous duration with rolling capacity checkpoints");
+  assert(defaultControls.runDeadlineMinutes === 0 && defaultControls.capacityCheckpointMinutes === 20 && defaultControls.maxWorkerMinutes === 0 && defaultControls.maxClaudeOutputTokens === 12000 && defaultControls.maxConcurrentCodexWorkers === 3 && defaultControls.maxParallelWriters === 3, "projects default to continuous duration with active three-lane Codex and disjoint-writer capacity");
+  const codexHeadroomManifest = { ...defaultControls, resources: [{ id: "codex-host:gpt-5.6-sol", platform: "codex", remainingPercent: 84 }] };
+  assert(codexConcurrencyLimit(codexHeadroomManifest) === 3
+    && codexConcurrencyLimit({ ...codexHeadroomManifest, resources: [{ id: "codex-host:gpt-5.6-sol", platform: "codex", remainingPercent: 45 }] }) === 2
+    && codexConcurrencyLimit({ ...codexHeadroomManifest, resources: [{ id: "codex-host:gpt-5.6-sol", platform: "codex", remainingPercent: 25 }] }) === 1
+    && codexConcurrencyLimit({ ...codexHeadroomManifest, resources: [{ id: "codex-host:gpt-5.6-sol", platform: "codex", remainingPercent: 15 }] }) === 0,
+  "Codex concurrency actively uses healthy headroom and scales down only near the 15% reserve");
+  assert(!steeringShouldInterrupt({ steeringDirective: "Use host-native Codex for writers." }, [])
+    && steeringShouldInterrupt({ steeringDirective: "User revoked browser access.", interruptRunningWorkers: true }, [])
+    && steeringShouldInterrupt({}, ["Do not access the browser."]),
+  "internal routing notes cannot terminate a run while explicit user steering and new safety constraints still interrupt");
   assert(workerMinutesFor(defaultControls, 4, "antigravity", false) === 60
     && workerMinutesFor(defaultControls, 4, "antigravity", true) === 20
     && workerMinutesFor(defaultControls, 4, "claude", false) === 90

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6 - 2026-07-13
+
+- Changed the Codex reserve from a conservative one-worker default into a 15% floor with up to three concurrent Codex workers, scaled down only as measured headroom approaches the reserve.
+- Required `hostCodexAvailable=true` whenever any native `spawn_agent` tool is callable, including the current `collaboration` namespace, so a writable native Codex lane is not silently discarded.
+- Raised pairwise-disjoint writer concurrency to three and strengthened the manager contract: large tasks must create enough independent bounded lanes to use healthy Codex capacity instead of leaving it idle.
+- Prevented an internal routing note from terminating a run: `steeringDirective` now interrupts only with explicit `interruptRunningWorkers=true`, an actual stop, or newly added safety constraints.
+
 ## 0.2.5 - 2026-07-13
 
 - Enforced every explicitly requested `BOUNDARY <work-item-id>:` scope contract before releasing dependent writers, even when those writers already declare expected files, and preserved boundary lines during compact result readback.

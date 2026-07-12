@@ -22,7 +22,7 @@ The one-line form is sufficient only when the same task already has an active Go
 - **Objective:** persists until verified, genuinely blocked, or explicitly stopped.
 - **Capacity horizon:** rolling five-hour forecast used to choose models; it never ends the project.
 - **Capacity checkpoint:** normally every 20 minutes, accelerating to five minutes as shared Codex capacity approaches the manager reserve; refreshes quotas, resets, cooldowns, and pending assignments.
-- **Manager runway:** 15% of shared Codex capacity is protected by default, and only one standalone-or-host Codex worker runs at once unless the caller explicitly raises the shared limit. Claude and Antigravity CLI workers retain independent parallelism.
+- **Manager runway:** 15% of shared Codex capacity is protected as a floor. Up to three standalone-or-host Codex workers run concurrently when capacity and independent boundaries permit; the effective limit scales down as headroom approaches the reserve. Claude and Antigravity CLI workers retain independent parallelism.
 - **Writer boundaries:** up to two writers may run together when their workspace-relative file or directory boundaries are explicit and pairwise disjoint. Overlapping or unscoped writers remain serialized.
 - **Worker lease:** short read-only leases (5-30 minutes by provider/complexity) and longer bounded writer leases (10-90 minutes); a silent or dead call can fail over without ending the objective.
 - **Visible activity:** manager reports show each active worker's current bridge step and elapsed/maximum lease, so a healthy long-running worker is distinguishable from a stalled one without opening provider UIs or reading large logs.
