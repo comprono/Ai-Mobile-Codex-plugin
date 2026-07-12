@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 - 2026-07-12
+
+- Fixed PowerShell `project-manager-status` serialization to preserve nested next-cycle arrays such as `dependsOn`, `expectedFiles`, acceptance criteria, and verification checks instead of silently flattening the dependency graph.
+- Enforced machine-readable boundary-discovery output before a scope worker can succeed, so missing `BOUNDARY <work-item-id>:` lines fail over rather than leaving a writer blocked after false discovery success.
+- Added persisted PowerShell regression coverage proving next-cycle dependency ordering survives the public helper path.
+
 ## 0.1.7 - 2026-07-12
 
 - Shortened orchestrated read-only worker leases by provider and complexity so silent Antigravity discovery fails over in 5-20 minutes and other read-only lanes in 8-30 minutes, while bounded writer leases and continuous project duration remain unchanged.

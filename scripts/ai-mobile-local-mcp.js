@@ -3392,6 +3392,19 @@ function inferFileBoundaryFromEvidence(workspace, evidence, workItemId = "") {
   return result;
 }
 
+function validateBoundaryEvidenceContract(args = {}, resultText = "") {
+  const targets = [...new Set((Array.isArray(args.boundaryTargets) ? args.boundaryTargets : []).map(normalizeTaskLane).filter(Boolean))];
+  if (!targets.length) return { ok: true, reason: "", missing: [] };
+  const missing = targets.filter((target) => !inferFileBoundaryFromEvidence(args.workspace, resultText, target).length);
+  return missing.length
+    ? {
+        ok: false,
+        missing,
+        reason: `Boundary discovery omitted a valid machine-readable BOUNDARY line for: ${missing.join(", ")}. Fail over or rescope; prose and incidental paths cannot authorize a writer.`,
+      }
+    : { ok: true, reason: "", missing: [] };
+}
+
 function downstreamWriterNeedsBoundary(manifest, completedItems) {
   const dependencyIds = new Set((completedItems || []).map((item) => item.id));
   return (manifest.workItems || []).some((item) => !item.readOnly
@@ -3516,6 +3529,15 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
   const projectVerification = boundedTextList(manifest.verification, 12, 400);
   const boundaryEvidenceNeeded = readOnly && downstreamWriterNeedsBoundary(manifest, items);
   const scopeTargets = items.map((item) => item.scopeFor).filter(Boolean);
+  const dependencyIds = new Set(items.map((item) => item.id));
+  const downstreamBoundaryTargets = boundaryEvidenceNeeded
+    ? (manifest.workItems || [])
+      .filter((item) => !item.readOnly
+        && !(item.expectedFiles || []).length
+        && (item.dependsOn || []).some((id) => dependencyIds.has(id)))
+      .map((item) => item.id)
+    : [];
+  const boundaryTargets = [...new Set([...scopeTargets, ...downstreamBoundaryTargets])];
   const goal = [
     manifest.goal,
     "",
@@ -3543,8 +3565,8 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
     `Complete only work items: ${items.map((item) => item.id).join(", ")}.`,
     readOnly ? "Inspect and critique only; do not edit project files." : "Make one coherent narrow implementation and run targeted verification.",
     boundaryEvidenceNeeded ? "Your result must name each proposed writer file as an exact workspace-relative path wrapped in backticks; these paths become the enforced write boundary." : null,
-    scopeTargets.length ? `Return exactly one line per target using this format: ${scopeTargets.map((target) => `BOUNDARY ${target}: \`path/to/existing-file.ext\`, \`path/to/another-file.ext\``).join(" | ")}.` : null,
-    scopeTargets.length ? "Do not return directories, globs, '+' shorthand, or prose in place of exact file paths." : null,
+    boundaryTargets.length ? `Return exactly one line per target using this format: ${boundaryTargets.map((target) => `BOUNDARY ${target}: \`path/to/existing-file.ext\`, \`path/to/another-file.ext\``).join(" | ")}.` : null,
+    boundaryTargets.length ? "Do not return directories, globs, '+' shorthand, or prose in place of exact file paths." : null,
     `State assumptions and blockers explicitly. Stop immediately if the task conflicts with an active constraint. Read only focused context up to ${contextCharacterLimit} characters. Keep result.md to ${maxResultBullets} bullets or fewer. Accept work only against the stated criteria, verified dependency evidence, and verification checks.`,
   ].filter(Boolean).join(" ");
   let expectedFiles = [...new Set(items.flatMap((item) => item.expectedFiles || []))];
@@ -3585,6 +3607,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
       readOnly,
+      boundaryTargets,
       maxResultBullets,
       start: true,
     });
@@ -3604,6 +3627,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
       readOnly,
+      boundaryTargets,
       maxResultBullets,
       start: true,
     });
@@ -3620,6 +3644,7 @@ function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
       workItemKinds: items.map((item) => item.kind),
       expectedFiles,
       readOnly,
+      boundaryTargets,
       maxResultBullets,
       start: true,
     });
@@ -7576,15 +7601,16 @@ function runAgyJobWorker(args = {}) {
   const executionFailed = result.status !== 0 || Boolean(result.error);
   const resultText = compactResultText || summarizeFile(resultPath, resultCharacterLimit(args, 8));
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
   const observedModel = inferAgyObservedModel(stdout, args.model || "");
   const modelMismatch = Boolean(args.model && observedModel && normalizedModelText(args.model) !== normalizedModelText(observedModel));
-  const failed = executionFailed || !boundary.ok || !quality.ok || !writerCompletion.ok;
+  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`)
-      : (!quality.ok || !writerCompletion.ok) ? "insufficient-result" : "";
+      : (!quality.ok || !boundaryEvidence.ok || !writerCompletion.ok) ? "insufficient-result" : "";
   recordWorkerTelemetry(workspace, jobDir, {
     ...args,
     resourceId: args.resourceId || `antigravity:${args.model || "default"}`,
@@ -7615,6 +7641,8 @@ function runAgyJobWorker(args = {}) {
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : !writerCompletion.ok
         ? writerCompletion.reason
+      : !boundaryEvidence.ok
+        ? boundaryEvidence.reason
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Antigravity CLI exited non-zero.", 1000) : "",
@@ -8032,8 +8060,9 @@ function runClaudeJobWorker(args = {}) {
   const claudeBudgetError = claudeBudgetErrorSubtype(parsedOutput.errorSubtype);
   const resultText = summarizeFile(resultPath, 8000);
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
-  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok || !writerCompletion.ok;
+  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : modelMismatch
@@ -8042,7 +8071,7 @@ function runClaudeJobWorker(args = {}) {
       ? "budget-exceeded"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`)
-      : (!quality.ok || !writerCompletion.ok) ? "insufficient-result" : "";
+      : (!quality.ok || !boundaryEvidence.ok || !writerCompletion.ok) ? "insufficient-result" : "";
   recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "claude:sonnet" }, {
     provider: "claude",
     requestedModel: args.model || "sonnet",
@@ -8089,6 +8118,8 @@ function runClaudeJobWorker(args = {}) {
         ? `Requested Claude model ${dispatchModel}, but the dominant observed model was ${parsedOutput.observedModel || "unknown"}.`
       : !writerCompletion.ok
         ? writerCompletion.reason
+      : !boundaryEvidence.ok
+        ? boundaryEvidence.reason
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Claude Code exited non-zero.", 1000) : "",
@@ -8270,13 +8301,14 @@ function runCursorJobWorker(args = {}) {
   const executionFailed = result.status !== 0 || Boolean(result.error);
   const resultText = summarizeFile(resultPath, 8000);
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
+  const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
-  const failed = executionFailed || !boundary.ok || !quality.ok || !writerCompletion.ok;
+  const failed = executionFailed || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${stdout}`)
-      : (!quality.ok || !writerCompletion.ok) ? "insufficient-result" : "";
+      : (!quality.ok || !boundaryEvidence.ok || !writerCompletion.ok) ? "insufficient-result" : "";
   recordWorkerTelemetry(workspace, jobDir, { ...args, resourceId: args.resourceId || "cursor:agent" }, {
     provider: "cursor",
     requestedModel: args.model || "default",
@@ -8300,6 +8332,8 @@ function runCursorJobWorker(args = {}) {
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : !writerCompletion.ok
         ? writerCompletion.reason
+      : !boundaryEvidence.ok
+        ? boundaryEvidence.reason
       : !quality.ok
         ? quality.reason
         : failed ? truncateText(result.error?.message || stderr || stdout || "Cursor agent exited non-zero.", 1000) : "",
@@ -9531,6 +9565,8 @@ function runSelfTest() {
   const boundaryEvidence = "BOUNDARY writer-a: `scripts/ai-mobile-local-mcp.js`\nBOUNDARY writer-b: `README.md`";
   assert(inferFileBoundaryFromEvidence(pluginRoot, boundaryEvidence, "writer-a").join(",") === path.join("scripts", "ai-mobile-local-mcp.js"), "writer boundary parsing uses only the target's machine-readable boundary line");
   assert(inferFileBoundaryFromEvidence(pluginRoot, "Observed `README.md` before proposing a correction.", "writer-a").length === 0, "writer boundaries never fall back to incidental backtick paths when the target marker is missing");
+  assert(!validateBoundaryEvidenceContract({ workspace: pluginRoot, boundaryTargets: ["writer-a"] }, "Proposed `README.md` in prose only.").ok, "boundary discovery without the required target marker fails its result contract");
+  assert(validateBoundaryEvidenceContract({ workspace: pluginRoot, boundaryTargets: ["writer-a", "writer-b"] }, boundaryEvidence).ok, "boundary discovery passes only when every requested target has a valid machine-readable path");
   const scopeCandidate = {
     id: "antigravity:gemini-3.5-flash-medium",
     platform: "antigravity",
@@ -10122,14 +10158,25 @@ function runSelfTest() {
       ], childOptions);
       const retriedManifest = readJsonFile(lastTeamRunJsonPath(persistedWorkspace), null);
       assert(persistedCompleteRetry.status === 0 && retriedManifest.decisions.length === completedManifest.decisions.length, "PowerShell lifecycle treats an exact full completion retry as idempotent");
-      const secondItems = JSON.stringify([{
-        id: "second-boundary",
-        objective: "Verify the local authenticated browser-session boundary remains read-only in cycle two without changing external state.",
-        kind: "analysis",
-        executionClass: "analysis",
-        complexity: "low",
-        readOnly: true,
-      }]);
+      const secondItems = JSON.stringify([
+        {
+          id: "second-boundary",
+          objective: "Verify the local authenticated browser-session boundary remains read-only in cycle two without changing external state.",
+          kind: "analysis",
+          executionClass: "analysis",
+          complexity: "low",
+          readOnly: true,
+        },
+        {
+          id: "second-verifier",
+          objective: "Verify the second boundary only after its dependency completes.",
+          kind: "verification",
+          executionClass: "analysis",
+          complexity: "low",
+          readOnly: true,
+          dependsOn: ["second-boundary"],
+        },
+      ]);
       const cycleSummary = "Cycle one passed its bounded read-only checkpoint, while the persistent root objective remains active.";
       const persistedAdvance = spawnSync("powershell", [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
@@ -10146,9 +10193,10 @@ function runSelfTest() {
       assert(persistedAdvance.status === 0
         && secondManifest.runId === firstManifest.runId
         && secondManifest.activeCycle?.id === "cycle-2"
+        && secondManifest.workItems?.find((item) => item.id === "c2-second-verifier")?.dependsOn?.[0] === "c2-second-boundary"
         && secondManifest.cycles?.[0]?.evidenceArchive?.workItems?.[0]?.codexEvidence?.summary === completionSummary
         && deriveOrchestrationState(secondManifest) !== "completed",
-      "PowerShell project-manager-status advances a persisted read-only cycle under the same run and archives its evidence");
+      "PowerShell project-manager-status preserves nested dependencies, advances the same run, and archives prior evidence");
       const staleAdvance = spawnSync("powershell", [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, "project-manager-status",
         "-Workspace", persistedWorkspace,

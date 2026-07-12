@@ -1518,7 +1518,7 @@ function Invoke-BridgeJobCommand {
     interruptRunningWorkers = $interruptRunningWorkersValue
     stopRun = ConvertTo-BooleanValue -Value $StopRun -Default $false
     stopReason = $StopReason
-  } | ConvertTo-Json -Compress
+  } | ConvertTo-Json -Depth 8 -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("antigravity-bridge-job-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
