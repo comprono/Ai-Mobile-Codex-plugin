@@ -154,6 +154,8 @@ Read only compact worker artifacts: `result.md`, `changed-files.txt`, `diff.patc
 
 When an older terminal job has only `WorkerReportedSummary`, use no-model `verify-job` with the exact structured command instead of launching another model. An identical passing request is idempotently reused.
 
+For new work, make command-complete checks a read-only item with `kind=verification` or `kind=testing`, `executionClass=analysis`, and structured `verificationCommands`. AI Mobile assigns these items to the durable `bridge:verification / no-model` lane automatically. Do not spend Codex, Claude, Antigravity, or Cursor quota merely to restate exit codes. Keep diagnosis, explanation, architecture, comparison, critique, and recommendations in a separate model-routed item.
+
 Detailed contract: [context-capsules.md](references/context-capsules.md).
 
 ## Lifecycle Gates

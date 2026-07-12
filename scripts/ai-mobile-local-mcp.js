@@ -2476,6 +2476,29 @@ async function buildProjectManagerPlan(args = {}) {
   const stagePlatformCounts = new Map();
   const actions = workItems.map((item) => {
     const stage = topologicalStage(item, byId, memo);
+    if (isDeterministicVerificationWorkItem(item)) {
+      const taskCapsulePath = capsuleResult.taskCapsules?.[item.id]?.path || capsuleResult.outputPath;
+      return {
+        workItemId: item.id,
+        stage,
+        objective: item.objective,
+        readOnly: true,
+        dependsOn: item.dependsOn,
+        resourceId: "bridge:verification",
+        platform: "bridge",
+        model: "no-model",
+        reasoningEffort: "no-model",
+        dispatchMode: "bridge-verification",
+        toolName: "ai-mobile-internal.bridge-verification",
+        toolArgs: { verificationCommands: bridgeVerificationCommands([item], true) },
+        score: null,
+        promptHash: "no-model",
+        taskCapsulePath,
+        acceptanceCriteria: item.acceptanceCriteria,
+        verification: item.verification,
+        alternates: [],
+      };
+    }
     const canParallelize = item.readOnly || parallelWriters.has(item.id);
     const ranked = item.externallyConsequential ? [] : candidates
       .map((candidate) => {
@@ -3270,6 +3293,24 @@ function buildResourceOrchestrationDecision(args = {}, context = {}) {
 
   const decisions = [];
   const assignedItems = workItems.map((item) => {
+    if (isDeterministicVerificationWorkItem(item)) {
+      const reason = "structured read-only checks fully define acceptance; run them in the durable zero-model bridge instead of spending provider quota";
+      decisions.push({
+        workItemId: item.id,
+        resourceId: "bridge:verification",
+        model: "no-model",
+        score: null,
+        reason,
+        alternates: [],
+      });
+      return {
+        ...item,
+        assignment: "bridge:verification",
+        assignedModel: "no-model",
+        alternates: [],
+        decisionReason: reason,
+      };
+    }
     const directOperationalReview = isRedundantOperationalReview(item, workItemsById);
     const protectedLiveState = requiresProtectedLiveState(item);
     if (item.externallyConsequential || protectedLiveState || (directOperationalReview && !managerOnly)) {
@@ -3396,6 +3437,9 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
       : "Orchestrator: Codex owns goal interpretation, risk, feedback, integration, and final verification; workers own bounded execution.",
     "",
     "ResourceEvidence:",
+    ...(decision.workItems.some((item) => item.assignment === "bridge:verification")
+      ? ["- bridge:verification: state=available; remaining=unmetered; evidence=local structured commands; model=no-model"]
+      : []),
     ...decision.candidates.map((candidate) => {
       const remaining = candidate.remainingPercent === null ? "unknown" : `${candidate.remainingPercent}%`;
       return `- ${candidate.id}: state=${candidate.state}; remaining=${remaining}; evidence=${candidate.evidence}; model=${candidate.displayName}`;
@@ -3404,7 +3448,8 @@ function formatTeamOrchestrationPlan(args = {}, context = {}) {
     "WorkGraphAndAssignments:",
     ...decision.workItems.map((item, index) => {
       const resource = resources.get(item.assignment);
-      return `${index + 1}. ${item.id}: ${item.objective}; kind=${item.kind}; complexity=${item.complexity}; readOnly=${item.readOnly}; dependsOn=${item.dependsOn.join(",") || "none"}; assigned=${resource?.team || "Codex"}/${item.assignedModel}; reason=${item.decisionReason}`;
+      const team = item.assignment === "bridge:verification" ? "AI Mobile Bridge" : resource?.team || "Codex";
+      return `${index + 1}. ${item.id}: ${item.objective}; kind=${item.kind}; complexity=${item.complexity}; readOnly=${item.readOnly}; dependsOn=${item.dependsOn.join(",") || "none"}; assigned=${team}/${item.assignedModel}; reason=${item.decisionReason}`;
     }),
     "",
     "ControlLoop:",
@@ -3687,6 +3732,80 @@ function bridgeVerificationCommands(items = [], readOnly = true) {
     seen.add(key);
     return true;
   }).slice(0, 8);
+}
+
+const deterministicVerificationKinds = new Set([
+  "check",
+  "checks",
+  "health-check",
+  "regression-verification",
+  "runtime-verification",
+  "test",
+  "testing",
+  "verification",
+]);
+
+function isDeterministicVerificationWorkItem(item = {}) {
+  if (item.readOnly !== true || item.executionClass !== "analysis" || item.externallyConsequential === true) return false;
+  if (!normalizeVerificationCommands(item.verificationCommands).length) return false;
+  if (!deterministicVerificationKinds.has(normalizeTaskLane(item.kind || ""))) return false;
+  const qualitativeIntent = `${item.objective || ""} ${(item.acceptanceCriteria || []).join(" ")}`.toLowerCase();
+  return !/\b(architect|compare|critique|design|diagnos|explain|investigat|recommend|root cause|source review)\b/.test(qualitativeIntent);
+}
+
+function deterministicVerificationLeaseMinutes(items = []) {
+  const seconds = items
+    .flatMap((item) => normalizeVerificationCommands(item.verificationCommands))
+    .reduce((total, entry) => total + Number(entry.timeoutSeconds || 300), 0);
+  return Math.max(2, Math.min(30, Math.ceil(seconds / 60) + 1));
+}
+
+function launchDeterministicVerificationGroup(manifest, items) {
+  const verificationCommands = bridgeVerificationCommands(items, true);
+  if (!items.length || items.some((item) => !isDeterministicVerificationWorkItem(item)) || !verificationCommands.length) {
+    return { launched: false, blocker: "Zero-model verification requires read-only verification items with structured bridge commands." };
+  }
+  const goal = [
+    `Project goal: ${manifest.goal}`,
+    ...items.map((item) => `Verification item ${item.id}: ${item.objective}`),
+  ].join("\n");
+  const action = submitVerificationJob({
+    goal,
+    workspace: manifest.workspace,
+    mode: "review",
+    nextStep: "Run only the structured bridge checks. Do not invoke a model or modify project files.",
+    verificationCommands,
+    resourceId: "bridge:verification",
+    workItemKinds: items.map((item) => item.kind),
+    maxResultBullets: 5,
+    start: true,
+  });
+  const summary = actionSummary(action, "bridge-verification", manifest.workspace, {
+    id: "orchestrator-bridge-verification",
+    worker: "bridge-verifier",
+    assignedTasks: items.map((item) => item.id),
+    model: "no-model",
+  });
+  return {
+    launched: Boolean(summary.jobId),
+    blocker: summary.jobId ? "" : truncateText(action, 1000),
+    job: {
+      toolName: "bridge-verification",
+      laneId: summary.laneId,
+      worker: "bridge-verifier",
+      resourceId: "bridge:verification",
+      transport: "bridge-verification",
+      assignedTasks: items.map((item) => item.id),
+      workItemIds: items.map((item) => item.id),
+      model: "no-model",
+      jobId: summary.jobId,
+      state: summary.failed ? "failed" : summary.started ? "running" : "queued",
+      failoverOf: "",
+      failoverDepth: 0,
+      readOnly: true,
+      leaseMinutes: deterministicVerificationLeaseMinutes(items),
+    },
+  };
 }
 
 function launchOrchestrationGroup(manifest, resource, items, failoverOf = "") {
@@ -4215,6 +4334,18 @@ function applyCapacityCheckpointCandidates(manifest, candidates, args = {}) {
   const workItems = (manifest.workItems || []).map((item) => {
     const resourceBlocked = item.state === "blocked" && String(item.blocker || "").startsWith("Assigned resource ");
     if (item.state !== "pending" && !resourceBlocked) return item;
+    if (isDeterministicVerificationWorkItem(item)) {
+      return {
+        ...item,
+        state: "pending",
+        assignment: "bridge:verification",
+        assignedModel: "no-model",
+        alternates: [],
+        blocker: "",
+        failureCategory: "",
+        decisionReason: "Structured verification remains on the unmetered local bridge across capacity checkpoints.",
+      };
+    }
     const ranked = rankResourcesForWorkItem(candidates, item, args, manifest.primaryWriterId || "");
     const current = byId.get(item.assignment);
     const currentRow = ranked.find((row) => row.candidate.id === current?.id);
@@ -4538,8 +4669,41 @@ function advanceOrchestrationRun(workspace, suppliedManifest, lockHeld = false, 
   const ready = manifest.workItems
     .filter((item) => item.state === "pending" && item.dependsOn.every((id) => currentById.get(id)?.state === "completed"))
     .sort((a, b) => b.priority - a.priority);
+  const deterministicReady = ready.filter(isDeterministicVerificationWorkItem);
+  const activeDeterministicJobs = (manifest.jobs || []).filter((job) => job.transport === "bridge-verification"
+    && ["queued", "running", "unknown"].includes(job.state)).length;
+  const deterministicSlots = Math.max(0, 2 - activeDeterministicJobs);
+  for (const item of deterministicReady.slice(0, deterministicSlots)) {
+    const launch = launchDeterministicVerificationGroup(manifest, [item]);
+    if (!launch.launched) {
+      manifest.workItems = manifest.workItems.map((candidate) => candidate.id === item.id
+        ? { ...candidate, state: "failed", blocker: launch.blocker || "Bridge verification launch failed.", failureCategory: "worker-failure" }
+        : candidate);
+      changed = true;
+      continue;
+    }
+    manifest.jobs = [...(manifest.jobs || []), launch.job];
+    manifest.workItems = manifest.workItems.map((candidate) => candidate.id === item.id
+      ? {
+          ...candidate,
+          state: launch.job.state === "failed" ? "failed" : "running",
+          assignment: "bridge:verification",
+          assignedModel: "no-model",
+          alternates: [],
+          activeJobId: launch.job.jobId,
+          decisionReason: "Structured read-only acceptance checks are executing in the durable zero-model bridge.",
+        }
+      : candidate);
+    manifest = appendOrchestrationDecision(manifest, {
+      type: "deterministic-verification-dispatch",
+      workItemId: item.id,
+      resourceId: "bridge:verification",
+      reason: "structured checks fully define this verification item; provider model call omitted",
+    });
+    changed = true;
+  }
   const groups = new Map();
-  for (const item of ready) {
+  for (const item of ready.filter((candidate) => !isDeterministicVerificationWorkItem(candidate))) {
     if (!groups.has(item.assignment)) groups.set(item.assignment, []);
     groups.get(item.assignment).push(item);
   }
@@ -7528,6 +7692,130 @@ function getCodexCliStatusText() {
   ].join("\n");
 }
 
+function runVerificationJobWorker(args = {}) {
+  const workspace = safeWorkspacePath(args.workspace);
+  const jobId = resolveJobId(workspace, args.jobId);
+  const jobDir = jobDirFor(workspace, jobId);
+  const verificationCommands = normalizeVerificationCommands(args.verificationCommands);
+  if (!verificationCommands.length) throw new Error("Bridge verification worker requires structured verification commands.");
+  const requestHash = crypto.createHash("sha256").update(JSON.stringify(verificationCommands)).digest("hex").slice(0, 20);
+  const startedAt = utcStamp();
+  const startedMs = Date.now();
+  updateJobStatus(workspace, jobId, {
+    state: "running",
+    worker: "bridge-verifier",
+    currentStep: "deterministic-verification-running",
+    startedAt,
+    observedModel: "no-model",
+  });
+
+  const evidence = verificationRunner.run(workspace, jobDir, {
+    ...args,
+    verificationCommands,
+    verificationRequestHash: requestHash,
+  });
+  const resultLines = [
+    `- Outcome: bridge-owned deterministic verification ${evidence.passed === true ? "passed" : "failed"}; no model was invoked.`,
+    ...evidence.checks.map((check) => `- ${check.name}: exit ${check.exitCode ?? "unknown"}/${check.expectedExitCode}; ${check.durationMs}ms; ${check.passed ? "passed" : "failed"}.`),
+    `- Workspace mutation: ${evidence.workspaceMutationDetected === true ? "detected" : "none detected"}.`,
+    evidence.blocker ? `- Blocker: ${truncateText(evidence.blocker, 600)}` : "- Evidence: verification-evidence.json is authoritative.",
+  ];
+  fs.writeFileSync(path.join(jobDir, "result.md"), `${resultLines.slice(0, 5).join("\n")}\n`, "utf8");
+  fs.writeFileSync(path.join(jobDir, "changed-files.txt"), "NONE\n", "utf8");
+  fs.writeFileSync(path.join(jobDir, "diff.patch"), "", "utf8");
+  recordWorkerTelemetry(workspace, jobDir, {
+    ...args,
+    resourceId: "bridge:verification",
+  }, {
+    provider: "bridge",
+    requestedModel: "no-model",
+    observedModel: "no-model",
+    success: evidence.passed === true,
+    failureCategory: evidence.passed === true ? "" : "verification-failed",
+    durationMs: Date.now() - startedMs,
+    inputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    outputTokens: 0,
+    reportedCostUsdEquivalent: 0,
+    promptChars: 0,
+    resultChars: resultLines.join("\n").length,
+  });
+  updateJobStatus(workspace, jobId, {
+    state: evidence.passed === true ? "completed" : "failed",
+    currentStep: evidence.passed === true ? "deterministic-verification-completed" : "deterministic-verification-failed",
+    completedAt: utcStamp(),
+    bridgeFinalized: true,
+    exitCode: evidence.passed === true ? 0 : 1,
+    observedModel: "no-model",
+    failureCategory: evidence.passed === true ? "" : "verification-failed",
+    bridgeVerificationState: evidence.state,
+    bridgeVerificationAt: evidence.generatedAt,
+    bridgeVerificationChecks: evidence.checks.length,
+    bridgeVerificationRequestHash: requestHash,
+    blocker: evidence.blocker || "",
+  });
+  return [
+    "BridgeVerificationWorkerResult:",
+    `JobId: ${jobId}`,
+    `State: ${evidence.passed === true ? "completed" : "failed"}`,
+    "ModelInvoked: false",
+    `JobFolder: ${jobDir}`,
+  ].join("\n");
+}
+
+function submitVerificationJob(args = {}) {
+  const verificationCommands = normalizeVerificationCommands(args.verificationCommands);
+  if (!verificationCommands.length) throw new Error("Bridge verification job requires structured verification commands.");
+  const created = createJob({ ...args, verificationCommands, worker: "bridge-verifier", mode: "review" });
+  const start = args.start !== false;
+  updateJobStatus(created.workspace, created.jobId, {
+    worker: "bridge-verifier",
+    currentStep: start ? "deterministic-verification-queued" : "deterministic-verification-created-not-started",
+    observedModel: "no-model",
+  });
+  if (!start) {
+    return [
+      "SubmitBridgeVerificationResult:",
+      `JobId: ${created.jobId}`,
+      `JobFolder: ${created.jobDir}`,
+      "State: queued",
+      "Started: false",
+      "ModelInvoked: false",
+    ].join("\n");
+  }
+  const payloadPath = path.join(created.jobDir, "verification-worker-payload.json");
+  writeJsonFile(payloadPath, {
+    ...args,
+    workspace: created.workspace,
+    jobId: created.jobId,
+    verificationCommands,
+  });
+  const child = spawn(process.execPath, [__filename, "verification-job-worker-cli", "--json-file", payloadPath], {
+    cwd: pluginRoot,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+  updateJobStatus(created.workspace, created.jobId, {
+    state: "running",
+    currentStep: "deterministic-verification-background-started",
+    workerPid: child.pid,
+    workerCommandMarker: created.jobId,
+    observedModel: "no-model",
+  });
+  return [
+    "SubmitBridgeVerificationResult:",
+    `JobId: ${created.jobId}`,
+    `JobFolder: ${created.jobDir}`,
+    "State: running",
+    "Started: true",
+    "ModelInvoked: false",
+    `WorkerPid: ${child.pid}`,
+  ].join("\n");
+}
+
 function verifyJob(args = {}) {
   const workspace = safeWorkspacePath(args.workspace);
   const jobId = resolveJobId(workspace, args.jobId || "latest");
@@ -9926,6 +10214,29 @@ function runSelfTest() {
     cursorHeadlessFound: false,
     workspaceState: { outcomes: {}, decisions: [] },
   };
+  const deterministicDecision = buildResourceOrchestrationDecision({
+    goal: "Run exact regression checks without spending model quota",
+    workItems: [{
+      id: "exact-checks",
+      objective: "Run the exact recorded regression checks and preserve their exit evidence.",
+      kind: "verification",
+      executionClass: "analysis",
+      complexity: "low",
+      readOnly: true,
+      verificationCommands: [{ name: "syntax", command: "node", args: ["--check", "scripts/ai-mobile-local-mcp.js"], timeoutSeconds: 30, expectedExitCode: 0 }],
+    }],
+  }, fakeContext);
+  assert(deterministicDecision.workItems[0]?.assignment === "bridge:verification"
+    && deterministicDecision.workItems[0]?.assignedModel === "no-model",
+  "command-complete verification routes to the durable zero-model bridge");
+  assert(!isDeterministicVerificationWorkItem(normalizeWorkItem({
+    id: "qualitative-review",
+    objective: "Diagnose the root cause and recommend an architecture correction after tests run.",
+    kind: "verification",
+    executionClass: "analysis",
+    readOnly: true,
+    verificationCommands: [{ name: "syntax", command: "node", args: ["--check", "scripts/ai-mobile-local-mcp.js"] }],
+  }, 0, "medium")), "qualitative verification still uses a reasoning model");
   const gatedAgy = buildResourceCandidates({}, fakeContext).filter((candidate) => candidate.platform === "antigravity");
   assert(gatedAgy.length > 0 && gatedAgy.every((candidate) => candidate.dispatchable === false && candidate.state === "authorization-required"), "Antigravity CLI cannot auto-dispatch when an OAuth popup was not explicitly authorized");
   const enabledAgy = buildResourceCandidates({ allowAntigravityCli: true }, fakeContext).filter((candidate) => candidate.platform === "antigravity");
@@ -10702,6 +11013,17 @@ function runSelfTest() {
     const fakeCodexStatus = findCodexCli();
     assert(fakeCodexStatus.found && fakeCodexStatus.auth?.authMode === "chatgpt", "Codex CLI passive probe verifies version and ChatGPT-plan authentication");
     const fakeVerificationCommands = [{ name: "fake-node-check", command: "node", args: ["--check", "verification-fixture.js"], timeoutSeconds: 10, expectedExitCode: 0 }];
+    const noModelJob = createJob({ goal: "Run deterministic fixture verification", workspace, mode: "review", readOnly: true, worker: "bridge-verifier", verificationCommands: fakeVerificationCommands });
+    const noModelWorkerResult = runVerificationJobWorker({ workspace, jobId: noModelJob.jobId, verificationCommands: fakeVerificationCommands });
+    const noModelJobStatus = readJsonFile(path.join(noModelJob.jobDir, "status.json"), {});
+    const noModelTelemetry = readJsonFile(path.join(noModelJob.jobDir, "worker-telemetry.json"), {});
+    const noModelEvidence = readJsonFile(path.join(noModelJob.jobDir, "verification-evidence.json"), {});
+    assert(/ModelInvoked: false/.test(noModelWorkerResult)
+      && noModelJobStatus.state === "completed"
+      && noModelTelemetry.provider === "bridge"
+      && noModelTelemetry.outputTokens === 0
+      && noModelEvidence.passed === true,
+    "durable zero-model verification records lifecycle, telemetry, and authoritative evidence");
     const fakeCodexJob = createJob({ goal: "Verify bounded Codex worker transport", workspace, mode: "review", readOnly: true, worker: "codex-cli", verificationCommands: fakeVerificationCommands });
     const fakeCodexWorkerResult = runCodexJobWorker({
       goal: "Verify bounded Codex worker transport",
@@ -11582,7 +11904,7 @@ async function handleRequest(message) {
   }
 }
 
-if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "list-jobs-cli", "read-job-cli", "verify-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
+if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", "efficiency-flow-cli", "run-efficient-task-cli", "codex-usage-cli", "context-capsule-cli", "project-manager-plan-cli", "run-project-manager-cli", "project-manager-status-cli", "orchestrator-profile-cli", "resource-inventory-cli", "orchestrate-project-cli", "team-orchestration-plan-cli", "run-team-task-cli", "read-team-run-cli", "submit-offload-cli", "switch-model-cli", "select-chat-cli", "create-job-cli", "submit-job-cli", "agy-status-cli", "agy-models-cli", "submit-agy-job-cli", "agy-job-worker-cli", "codex-cli-status-cli", "submit-codex-job-cli", "codex-job-worker-cli", "claude-status-cli", "claude-usage-cli", "submit-claude-job-cli", "claude-job-worker-cli", "cursor-status-cli", "open-cursor-cli", "submit-cursor-job-cli", "cursor-job-worker-cli", "verification-job-worker-cli", "list-jobs-cli", "read-job-cli", "verify-job-cli", "cancel-job-cli", "retry-job-cli"].includes(process.argv[2])) {
   let args = {};
   try {
     if (process.argv[3] === "--json-file") {
@@ -11638,6 +11960,7 @@ if (["self-test-cli", "orchestration-supervisor-cli", "orchestration-plan-cli", 
     "open-cursor-cli": async (value) => openCursorUi(value),
     "submit-cursor-job-cli": async (value) => submitCursorJob(value),
     "cursor-job-worker-cli": async (value) => runWorkerFailClosed("cursor-agent", value, runCursorJobWorker),
+    "verification-job-worker-cli": async (value) => runWorkerFailClosed("bridge-verifier", value, runVerificationJobWorker),
     "list-jobs-cli": async (value) => listJobs(value),
     "read-job-cli": async (value) => readJob(value),
     "verify-job-cli": async (value) => verifyJob(value),

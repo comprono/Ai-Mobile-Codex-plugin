@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 - 2026-07-13
+
+- Added a durable `bridge:verification` worker for command-complete read-only verification, so exact structured checks run without invoking Codex, Claude, Antigravity, or Cursor.
+- Kept qualitative diagnosis, architecture, critique, comparison, and recommendation work on reasoning models instead of over-applying the zero-model route.
+- Added bridge lifecycle, zero-token telemetry, workspace-mutation detection, capacity-checkpoint persistence, compact CEO status, and regression coverage for the new lane.
+
 ## 0.2.1 - 2026-07-13
 
 - Added a durable standalone Codex CLI provider that passively discovers the official client, requires ChatGPT-plan authentication, selects current catalog models/efforts, uses isolated JSONL stdin execution, and records measured usage without creating another Codex task.

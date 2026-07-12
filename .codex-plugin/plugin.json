@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Capacity-aware Codex control room for parallel standalone or native Codex, Claude Code, Antigravity, and optional Cursor workers on Windows, with bounded context, verified execution, failover, and durable continuity.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -74,6 +74,7 @@
       "Capacity-aware routing",
       "Per-run usage telemetry",
       "Bridge-owned deterministic verification",
+      "Zero-model verification workers",
       "Cooldown-aware bounded failover",
       "Project continuity",
       "Continuous objective orchestration",
