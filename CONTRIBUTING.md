@@ -4,7 +4,9 @@ Thanks for improving the AI Mobile Codex Plugin.
 
 ## Scope
 
-This repository is a community Codex plugin for connecting mobile-started OpenAI Codex sessions to local Windows AI workers. Contributions should keep the plugin focused on local MCP tools, Chromium DevTools integration for Antigravity, PowerShell helper commands, setup checks, model-limit inspection, safe handoff into visible Antigravity UI workflows, and optional Claude Code headless bridge jobs.
+This repository is a community Codex plugin for connecting mobile-started OpenAI Codex sessions to local Windows AI workers. Contributions should preserve the delivery-first contract: current Codex keeps the critical path, capacity is inspected once, only bounded independent work is delegated, results are collected once, and deterministic verification precedes model review. Antigravity direct CDP/UI behavior remains on demand; normal startup must stay passive.
+
+Do not add manager loops, automatic Goals, recurring chat heartbeats, repeated status polling, premium-on-premium review chains, or another always-loaded MCP server to the default workflow. Advanced compatibility code must remain outside the six-tool normal surface.
 
 Do not add claims that the plugin is official unless the project status changes and the repository owner documents that clearly.
 
@@ -17,7 +19,8 @@ powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
 node .\scripts\reliability-e2e.js
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
 git diff --check
-python -m pipx run plugin-scanner lint .
+python -m pipx run plugin-scanner lint . --profile public-marketplace
+python -m pipx run plugin-scanner lint . --profile strict-security
 python -m pipx run plugin-scanner verify . --format json
 ```
 

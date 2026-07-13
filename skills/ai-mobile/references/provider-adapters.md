@@ -38,7 +38,7 @@
 
 Use only when project/chat/model/composer visibility is required. Verify intended project, active chat, selected model, and idle composer before submission. Submission is successful only after the message is visibly accepted or a verified bridge job starts.
 
-If the DevTools MCP transport is closed, call `devtools-health` once. Repeated calls cannot revive the same dead transport. Use CLI or restart the host session only when UI control remains required.
+Normal startup has no separate DevTools MCP transport. On-demand direct CDP actions reconnect to the current Antigravity port for each call. Use `devtools-health` or `repair-live` once only when visible UI control is genuinely required; otherwise remain on CLI/current Codex.
 
 ## Cursor
 

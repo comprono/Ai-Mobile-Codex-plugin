@@ -1,1 +1,1 @@
-AI Mobile is a community Codex project-manager plugin that coordinates native Codex workers, local Antigravity models, Claude Code, and optional Cursor using current capacity and bounded context on Windows.
+AI Mobile is a community Codex plugin that keeps Codex working while selectively delegating bounded tasks to Codex CLI, Claude Code, Antigravity, and optional Cursor resources on Windows.

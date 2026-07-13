@@ -18,7 +18,8 @@ function assertPortableMcpConfig(root) {
   const config = readJson(path.join(root, ".mcp.json"));
   const servers = config.mcpServers || {};
   assert.ok(servers["ai-mobile-local"], "ai-mobile-local MCP entry is required");
-  assert.ok(servers["ai-mobile-devtools"], "ai-mobile-devtools MCP entry is required");
+  assert.equal(Object.keys(servers).length, 1, "normal startup must register only the passive local MCP server");
+  assert.ok(!servers["ai-mobile-devtools"], "a separate raw DevTools MCP must not be registered at startup");
 
   for (const [name, server] of Object.entries(servers)) {
     assert.equal(server.cwd, ".", `${name} must resolve from the installed plugin root`);
@@ -87,8 +88,14 @@ async function smokePortableLocalMcp(fixture, config) {
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
     const responses = await pending;
     assert.equal(responses.get(1)?.result?.serverInfo?.name, "ai-mobile-local", "portable MCP initializes from copied path");
-    const toolNames = new Set((responses.get(2)?.result?.tools || []).map((tool) => tool.name));
-    assert.ok(toolNames.has("run-project-manager") && toolNames.has("project-manager-status"), "portable MCP exposes the lean manager surface");
+    const exposedTools = responses.get(2)?.result?.tools || [];
+    const toolNames = new Set(exposedTools.map((tool) => tool.name));
+    for (const required of ["resource-inventory", "run-efficient-task", "read-job", "verify-job", "cancel-job", "orchestrator-profile"]) {
+      assert.ok(toolNames.has(required), `portable MCP exposes ${required}`);
+    }
+    assert.equal(exposedTools.length, 6, "portable MCP exposes only six normal delivery tools");
+    assert.ok(!toolNames.has("run-project-manager") && !toolNames.has("project-manager-status"), "legacy manager-loop tools are not loaded by default");
+    assert.ok(JSON.stringify({ tools: exposedTools }).length < 12000, "default tool-schema payload stays bounded");
   } finally {
     child.stdin.end();
     if (child.exitCode === null) child.kill();

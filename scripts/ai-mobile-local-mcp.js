@@ -99,9 +99,9 @@ const projectWorkItemSchema = {
   additionalProperties: false,
 };
 
-const PROACTIVE_REPORTING_MIN_MINUTES = 5;
+const PROACTIVE_REPORTING_MIN_MINUTES = 30;
 const PROACTIVE_REPORTING_MAX_MINUTES = 240;
-const PROACTIVE_REPORTING_DEFAULT_MINUTES = 20;
+const PROACTIVE_REPORTING_DEFAULT_MINUTES = 60;
 const REQUIRED_CONTROL_ROOM_REPORT_FIELDS = Object.freeze([
   "Objective",
   "Changed",
@@ -113,15 +113,15 @@ const REQUIRED_CONTROL_ROOM_REPORT_FIELDS = Object.freeze([
 ]);
 const proactiveReportingSchema = {
   type: "object",
-  description: "Explicitly request one host-managed heartbeat attached to the current control-room thread. The MCP server only emits an idempotent host action; it never creates an automation or invents a thread id.",
+  description: "Explicitly request one low-frequency host-managed heartbeat attached to the current control-room thread. Continuous management alone does not authorize it. The MCP server only emits an idempotent host action; it never creates an automation or invents a thread id.",
   properties: {
-    enabled: { type: "boolean", description: "Enable or disable proactive same-thread reporting." },
+    enabled: { type: "boolean", description: "Enable or disable explicitly requested periodic same-thread reporting." },
     intervalMinutes: {
       type: "integer",
       minimum: PROACTIVE_REPORTING_MIN_MINUTES,
       maximum: PROACTIVE_REPORTING_MAX_MINUTES,
       default: PROACTIVE_REPORTING_DEFAULT_MINUTES,
-      description: "Bounded heartbeat interval in minutes. The host must reuse one matching same-thread heartbeat.",
+      description: "Bounded low-frequency heartbeat interval in minutes. The host must reuse one matching same-thread heartbeat and pause it whenever no worker is active.",
     },
   },
   required: ["enabled"],
@@ -171,7 +171,7 @@ const tools = [
   },
   {
     name: "devtools-health",
-    description: "Low-token fallback for ai-mobile-devtools transport errors. Reports live pages and the recommended recovery step.",
+    description: "Advanced on-demand health check for Antigravity's direct CDP endpoint. Normal AI Mobile startup does not load a separate DevTools MCP server.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -238,14 +238,15 @@ const tools = [
   },
   {
     name: "run-efficient-task",
-    description: "One-call efficient execution: plan the route, safely start the chosen worker when possible, and return the compact readback instruction.",
+    description: "Delegate one bounded independent work item while the current Codex task continues the critical path. Returns immediately with a durable job id; it never creates a manager loop or waits for completion.",
     inputSchema: {
       type: "object",
       properties: {
-        goal: { type: "string", description: "User goal to route and start." },
+        goal: { type: "string", description: "One bounded worker objective, not the complete project or parent transcript." },
         workspace: { type: "string", description: "Local workspace path where durable job artifacts should be written." },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
         nextStep: { type: "string", description: "Specific next action for the selected worker.", default: "Inspect the relevant files and write compact artifacts." },
+        preferredProvider: { type: "string", enum: ["auto", "codex", "claude", "antigravity", "cursor"], description: "Provider selected from the preceding resource inventory. Explicit values avoid a second capacity probe.", default: "auto" },
         codexBudgetState: { type: "string", description: "Caller-observed Codex budget state.", default: "unknown" },
         estimatedCodexInputTokens: { type: "number", description: "Rough Codex tokens needed if handled directly.", default: 2000 },
         hasWorkspaceWork: { type: "boolean", description: "Whether the task needs files, diffs, logs, browser state, or project context.", default: true },
@@ -254,12 +255,20 @@ const tools = [
         expectedProject: { type: "string", description: "Optional visible Antigravity project text." },
         expectedChat: { type: "string", description: "Optional visible Antigravity chat/conversation title." },
         modelPreference: { type: "string", description: "Antigravity desktop model preference.", default: "auto" },
+        codexModel: { type: "string", description: "Exact standalone Codex worker model selected from inventory." },
+        codexEffort: { type: "string", enum: ["low", "medium", "high", "xhigh"], description: "Standalone Codex reasoning effort.", default: "medium" },
         agyModel: { type: "string", description: "Optional Antigravity CLI model id." },
         claudeModel: { type: "string", description: "Optional Claude Code alias override. Auto lets the route choose; routine work defaults to Sonnet.", default: "auto" },
         allowPremiumModels: { type: "boolean", description: "Explicitly allow premium Claude aliases outside the automatic policy. Auto reserves Fable for a healthy dedicated reset opportunity.", default: false },
         cursorModel: { type: "string", description: "Optional Cursor agent model." },
+        readOnly: { type: "boolean", description: "Keep the worker read-only. Writers require explicit expectedFiles.", default: true },
+        expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Exact workspace-relative file or directory boundary for a writer." },
+        verificationCommands: projectWorkItemSchema.properties.verificationCommands,
+        maxMinutes: { type: "number", minimum: 1, maximum: 180, description: "Bounded worker lease; this is not a project deadline.", default: 30 },
+        allowAntigravityCli: { type: "boolean", description: "Allow Antigravity CLI for this lane. Auto routing will not launch it without this permission.", default: false },
         start: { type: "boolean", description: "Start the selected worker when possible.", default: true },
         submit: { type: "boolean", description: "Submit into Antigravity desktop when that route is selected.", default: true },
+        includePlan: { type: "boolean", description: "Include verbose route diagnostics. Keep false for normal token-efficient use.", default: false },
       },
       required: ["goal", "workspace"],
       additionalProperties: false,
@@ -341,7 +350,7 @@ const tools = [
         currentCodexModel: { type: "string", description: "Current caller model label when visible." },
         currentCodexEffort: { type: "string", description: "Current caller effort when visible." },
         includeCursor: { type: "boolean", description: "Include Cursor only when a true headless agent exists.", default: false },
-        managerOnly: { type: "boolean", description: "Keep the calling Codex task as a management/reporting control room rather than an implementation worker.", default: true },
+        managerOnly: { type: "boolean", description: "Opt into a strict management/reporting-only parent task. Defaults to adaptive manager-and-integrator mode so Codex can take over a blocked critical path.", default: false },
         proactiveReporting: proactiveReportingSchema,
         allowAntigravityCli: { type: "boolean", description: "Explicitly allow Antigravity CLI dispatch even though its OAuth flow may open a browser window.", default: false },
         unattendedMode: { type: "boolean", description: "Plan for no-human continuity. Interactive workers are excluded unless their separately authorized non-interactive policy is active.", default: false },
@@ -352,7 +361,7 @@ const tools = [
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers sharing the measured Codex pool. Defaults to three so healthy capacity above the manager reserve is actively used.", default: 3 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 3 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
-        maxClaudeOutputTokens: { type: "number", description: "Fail closed when one Claude worker reports more output tokens than this budget.", default: 12000 },
+        maxClaudeOutputTokens: { type: "number", description: "Claude output efficiency target. Excess narration is compacted and warned; attributable work still proceeds through normal verification.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap. 0 (default) selects the auth-aware automatic policy: claude.ai subscription auth (Pro/Max/Team/Enterprise, no ANTHROPIC_API_KEY) omits --max-budget-usd and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic cap.", default: 0 },
         refreshInventory: { type: "boolean", description: "Force fresh provider probes.", default: false },
       },
@@ -392,7 +401,7 @@ const tools = [
         unattendedMode: { type: "boolean", description: "Run without waiting for a person at the PC. Interactive resources must be excluded or explicitly pre-authorized.", default: false },
         allowAntigravityPermissionBypass: { type: "boolean", description: "Explicitly allow --dangerously-skip-permissions only for sandboxed Antigravity CLI jobs. Does not authorize OAuth, authentication, CAPTCHA, or external effects.", default: false },
         includeCursor: { type: "boolean", description: "Use Cursor only when a true headless cursor-agent is available.", default: false },
-        managerOnly: { type: "boolean", description: "Keep the calling Codex task as a reporting and management control room. When true (default), ordinary project exploration, diagnostics, implementation, tests, and worker takeovers are delegated; only explicit user-boundary or externally consequential actions may return to the current Codex session.", default: true },
+        managerOnly: { type: "boolean", description: "Keep the calling Codex task strictly reporting and management only. Defaults to false; use true only when the user explicitly requests a manager-only chat.", default: false },
         proactiveReporting: proactiveReportingSchema,
         runDeadlineMinutes: { type: "number", description: "Optional project deadline in minutes. Zero keeps the objective continuous until verified, blocked, or explicitly stopped.", default: 0 },
         capacityCheckpointMinutes: { type: "number", description: "Minutes between rolling capacity reviews. This is not a project deadline.", default: 20 },
@@ -400,7 +409,7 @@ const tools = [
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; defaults to three while preserving the manager reserve.", default: 3 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries. Unscoped or overlapping writers remain serialized.", default: 3 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
-        maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
+        maxClaudeOutputTokens: { type: "number", description: "Claude output efficiency target used for warnings and compaction, not automatic rejection of verified changes.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns a dry plan.", default: true },
         waitSeconds: { type: "number", description: "Initial dispatch receipt wait. Keep 0 so the manager can report assignments immediately, then poll project-manager-status in short visible intervals.", default: 0 },
@@ -512,7 +521,7 @@ const tools = [
   },
   {
     name: "resource-inventory",
-    description: "Inspect the local AI team without starting apps or work: Codex local capacity metadata/catalog, Claude Code, Antigravity CLI/models/live quota when already running, Cursor, cooldowns, and evidence freshness.",
+    description: "Compact passive inventory of Codex, Claude Code, Antigravity, and optional Cursor capacity. It starts no app and preserves unknown limits as unknown.",
     inputSchema: {
       type: "object",
       properties: {
@@ -525,6 +534,7 @@ const tools = [
         hostCodexAvailable: { type: "boolean", description: "True when the current host exposes native Codex subagents.", default: false },
         includeCursor: { type: "boolean", description: "Probe for a true headless Cursor agent.", default: false },
         refresh: { type: "boolean", description: "Refresh CLI model/auth probes instead of accepting a recent safe cache.", default: false },
+        detail: { type: "string", enum: ["compact", "full"], description: "Compact is the normal low-token response; full is diagnostic only.", default: "compact" },
       },
       additionalProperties: false,
     },
@@ -567,7 +577,7 @@ const tools = [
         maxConcurrentCodexWorkers: { type: "number", description: "Maximum simultaneous standalone-or-host Codex workers; defaults to three while preserving the manager reserve.", default: 3 },
         maxParallelWriters: { type: "number", description: "Maximum concurrent writer processes with pairwise disjoint verified file boundaries.", default: 3 },
         maxWorkerMinutes: { type: "number", description: "Optional ceiling for one worker lease. Zero uses complexity-adaptive leases.", default: 0 },
-        maxClaudeOutputTokens: { type: "number", description: "Maximum reported output tokens accepted from one Claude worker.", default: 12000 },
+        maxClaudeOutputTokens: { type: "number", description: "Claude output efficiency target used for warnings and compaction, not automatic rejection of verified changes.", default: 12000 },
         maxClaudeBudgetUsd: { type: "number", description: "Explicit Claude per-worker USD cap; 0 (default) selects the auth-aware automatic policy.", default: 0 },
         start: { type: "boolean", description: "Dispatch selected workers. False returns the decision and work graph only.", default: true },
         waitSeconds: { type: "number", description: "Bounded wait for compact worker artifacts.", default: 30 },
@@ -750,7 +760,7 @@ const tools = [
         fallbackModel: { type: "string", description: "Optional Claude Code fallback model alias or id." },
         permissionMode: { type: "string", description: "Claude Code permission mode. Defaults to plan for review and acceptEdits otherwise." },
         maxBudgetUsd: { type: "number", description: "Optional explicit Claude Code USD cap for this job. When omitted, the auth-aware automatic policy applies: subscription auth runs uncapped against measured quota windows; API-key/PAYG/unknown billing gets a conservative automatic cap." },
-        maxOutputTokens: { type: "number", description: "Fail the worker result when Claude reports output above this token budget." },
+        maxOutputTokens: { type: "number", description: "Claude output efficiency target. Overages are compacted and warned unless the provider itself reports a real budget failure." },
         expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Enforced writer file boundary." },
         readOnly: { type: "boolean", description: "Treat this as a read-only worker assignment.", default: true },
         start: { type: "boolean", description: "Set false to create the job and payload without starting Claude Code.", default: true },
@@ -816,12 +826,13 @@ const tools = [
   },
   {
     name: "read-job",
-    description: "Read only compact result artifacts for one Antigravity bridge job.",
+    description: "Read one durable worker job once at an integration point. Compact mode omits raw status JSON, full diffs, logs, and telemetry dumps.",
     inputSchema: {
       type: "object",
       properties: {
         workspace: { type: "string", description: "Local workspace path containing .antigravity-bridge/jobs." },
         jobId: { type: "string", description: "Job id. Use latest to read the newest job.", default: "latest" },
+        detail: { type: "string", enum: ["compact", "full"], description: "Use full only for focused diagnosis after compact evidence is insufficient.", default: "compact" },
       },
       required: ["workspace"],
       additionalProperties: false,
@@ -958,16 +969,12 @@ const tools = [
 ];
 
 const defaultMcpToolNames = new Set([
-  "quick",
-  "setup",
-  "doctor",
-  "codex-usage",
-  "project-manager-plan",
-  "run-project-manager",
-  "project-manager-status",
   "orchestrator-profile",
   "resource-inventory",
-  "privacy",
+  "run-efficient-task",
+  "read-job",
+  "verify-job",
+  "cancel-job",
 ]);
 
 function exposedMcpTools(exposeAdvanced = process.env.AI_MOBILE_EXPOSE_ADVANCED_TOOLS) {
@@ -1327,31 +1334,79 @@ async function buildEfficiencyFlow(args = {}) {
 }
 
 async function runEfficientTask(args = {}) {
-  const flow = await buildEfficiencyFlow(args);
-  const route = valueFromPlan(flow, "Route") || "unknown";
   const workspace = String(args.workspace || "").trim();
   const start = args.start !== false;
   const submit = args.submit !== false;
+  const preferredProvider = String(args.preferredProvider || "auto").trim().toLowerCase();
+  const explicitRoutes = {
+    codex: "codex-cli",
+    claude: "claude-code",
+    antigravity: args.needsUi === true || args.needsVisibleAntigravityChat === true ? "antigravity-desktop-chat" : "antigravity-cli",
+    cursor: "cursor-headless",
+  };
+  let route = explicitRoutes[preferredProvider] || "";
+  let plan = "";
+  if (!route) {
+    plan = await buildOrchestrationPlan(args);
+    route = valueFromPlan(plan, "Route") || "unknown";
+    if (route === "antigravity-cli" && args.allowAntigravityCli !== true) {
+      route = /ClaudeCode:\s*true/i.test(plan) ? "claude-code" : "codex-direct";
+    }
+  }
   const base = {
     goal: args.goal,
     workspace,
     mode: args.mode || "fast",
     nextStep: args.nextStep || "Inspect the relevant files and write compact artifacts.",
+    readOnly: args.readOnly !== false,
+    expectedFiles: Array.isArray(args.expectedFiles) ? args.expectedFiles : [],
+    verificationCommands: Array.isArray(args.verificationCommands) ? args.verificationCommands : [],
+    maxMinutes: Math.max(1, Math.min(180, Number(args.maxMinutes || 30))),
+    maxResultBullets: 8,
   };
+
+  if (base.readOnly === false && base.expectedFiles.length === 0) {
+    return [
+      "AiMobileDispatch:",
+      "Started: false",
+      `Provider: ${preferredProvider}`,
+      "Reason: a writer requires an explicit expectedFiles boundary.",
+      "ParentAction: keep the critical path in current Codex or retry with a narrow non-overlapping boundary.",
+    ].join("\n");
+  }
 
   if (!start) {
     return [
-      flow,
-      "",
-      "RunEfficientTaskResult:",
+      "AiMobileDispatch:",
       "Started: false",
-      "Reason: start=false; returned only the flow.",
+      `Provider: ${route}`,
+      "Reason: start=false; no worker was launched.",
+      args.includePlan === true && plan ? "" : null,
+      args.includePlan === true && plan ? plan : null,
+    ].filter(Boolean).join("\n");
+  }
+
+  if (route === "antigravity-cli" && args.allowAntigravityCli !== true) {
+    return [
+      "AiMobileDispatch:",
+      "Started: false",
+      "Provider: antigravity-cli",
+      "Reason: Antigravity CLI was not authorized for this lane; no app, OAuth flow, or permission popup was opened.",
+      "ParentAction: choose Claude/Codex, or explicitly allow Antigravity CLI for this bounded lane.",
     ].join("\n");
   }
 
   let action = "";
   let selectedTool = "";
-  if (route === "antigravity-cli") {
+  if (route === "codex-cli") {
+    selectedTool = "submit-codex-job";
+    action = submitCodexJob({
+      ...base,
+      model: args.codexModel || "",
+      effort: args.codexEffort || "medium",
+      start: true,
+    });
+  } else if (route === "antigravity-cli") {
     selectedTool = "submit-agy-job";
     action = submitAgyJob({
       ...base,
@@ -1363,6 +1418,7 @@ async function runEfficientTask(args = {}) {
     action = submitClaudeJob({
       ...base,
       model: normalizeClaudeDispatchModel(args.claudeModel),
+      allowPremiumModels: args.allowPremiumModels === true,
       start: true,
     });
   } else if (route === "cursor-headless") {
@@ -1381,15 +1437,13 @@ async function runEfficientTask(args = {}) {
       });
       if (!/Ok:\s*true/i.test(selectResult)) {
         return [
-          flow,
-          "",
-          selectResult,
-          "",
-          "RunEfficientTaskResult:",
+          "AiMobileDispatch:",
           "Started: false",
           "Submitted: false",
+          "Provider: antigravity-desktop",
           "Reason: expected Antigravity chat was not verified; refusing to submit into the wrong chat.",
-          "Next: make the target chat visible/active or rerun with the correct expectedChat.",
+          `Evidence: ${truncateText(selectResult.replace(/\s*\r?\n\s*/g, " "), 700)}`,
+          "ParentAction: continue current Codex work; repair/select the UI only when that visible chat is genuinely required.",
         ].join("\n");
       }
     }
@@ -1402,38 +1456,36 @@ async function runEfficientTask(args = {}) {
     });
   } else {
     return [
-      flow,
-      "",
-      "RunEfficientTaskResult:",
+      "AiMobileDispatch:",
       "Started: false",
       "Submitted: false",
-      `Route: ${route}`,
-      "Reason: route is Codex-direct/minimal or unknown; no external worker should be started.",
-      "Next: Codex should perform one targeted command/read or ask for a narrower task.",
-    ].join("\n");
+      `Provider: ${route}`,
+      "Reason: this lane is cheaper or safer in the current Codex task; no external worker was started.",
+      "ParentAction: execute the bounded lane directly.",
+      args.includePlan === true && plan ? "" : null,
+      args.includePlan === true && plan ? plan : null,
+    ].filter(Boolean).join("\n");
   }
 
   const jobId = valueFromResult(action, "JobId");
+  const state = valueFromResult(action, "State") || "unknown";
+  const blocker = valueFromResult(action, "Blocker");
   const started = /\bStarted:\s*true\b/i.test(action) || /\bState:\s*running\b/i.test(action);
   const submitted = /\bSubmitted:\s*true\b/i.test(action);
   const failed = /\bState:\s*failed\b/i.test(action) || /\bOk:\s*false\b/i.test(action);
-  const readCommand = jobId
-    ? `ai-mobile-local.read-job with workspace=${workspace} and jobId=${jobId}`
-    : "read-job unavailable until a JobId is returned";
   return [
-    flow,
-    "",
-    "SelectedAction:",
-    `Tool: ${selectedTool}`,
-    action,
-    "",
-    "RunEfficientTaskResult:",
+    "AiMobileDispatch:",
     `Started: ${started && !failed}`,
     `Submitted: ${submitted}`,
+    `Provider: ${route}`,
+    `Tool: ${selectedTool}`,
+    `State: ${failed ? "failed" : state}`,
     jobId ? `JobId: ${jobId}` : null,
-    `ReadBack: ${readCommand}`,
-    failed ? "Status: failed-or-unverified" : "Status: dispatched-or-ready",
-    "Next: do not watch the worker chat. Wait, then read only compact artifacts via read-job.",
+    blocker ? `Blocker: ${truncateText(blocker, 700)}` : null,
+    jobId ? `ReadBack: call read-job once with jobId=${jobId} at the natural integration point.` : null,
+    "ParentAction: continue the current Codex critical path now; do not wait, poll, create a Goal, or start a manager loop.",
+    args.includePlan === true && plan ? "" : null,
+    args.includePlan === true && plan ? plan : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -1815,7 +1867,8 @@ async function getTeamCapacityContext(args = {}) {
   }
 
   let agyModels = Array.isArray(cache.antigravity?.models) ? cache.antigravity.models : [];
-  if (agy.found && (refresh || !isFreshTimestamp(cache.antigravity?.modelsCheckedAt) || agyModels.length === 0)) {
+  const allowAntigravityCliProbe = args.allowAntigravityCli === true;
+  if (agy.found && allowAntigravityCliProbe && (refresh || !isFreshTimestamp(cache.antigravity?.modelsCheckedAt) || agyModels.length === 0)) {
     const modelProbe = commandCheck(agy.command, ["models"], { timeout: 15000 });
     if (modelProbe.ok) {
       agyModels = parseAgyModelRoster(modelProbe.stdout);
@@ -2303,6 +2356,63 @@ function buildNativeCodexCandidates(args = {}, context = {}) {
   });
 }
 
+function formatCompactResourceInventory(args = {}, context = {}, candidates = []) {
+  const byPlatform = new Map();
+  for (const candidate of candidates) {
+    if (!byPlatform.has(candidate.platform)) byPlatform.set(candidate.platform, []);
+    byPlatform.get(candidate.platform).push(candidate);
+  }
+  const rank = (candidate) => {
+    const state = ({ available: 5, constrained: 3, "manager-reserve": 2, "authorization-required": 1 })[candidate.state] || 0;
+    const dispatch = candidate.dispatchable ? 2 : candidate.id === "codex:current" ? 1 : 0;
+    const remaining = Number.isFinite(Number(candidate.remainingPercent)) ? Number(candidate.remainingPercent) / 100 : 0;
+    return state * 1000 + dispatch * 100 + remaining * 10 + Number(candidate.quality || 0) / 100;
+  };
+  const compactCandidates = (platform, limit = 2) => (byPlatform.get(platform) || [])
+    .slice()
+    .sort((left, right) => rank(right) - rank(left))
+    .slice(0, limit);
+  const candidateLine = (candidate) => {
+    const remaining = candidate.remainingPercent !== null
+      && candidate.remainingPercent !== undefined
+      && candidate.remainingPercent !== ""
+      && Number.isFinite(Number(candidate.remainingPercent))
+      ? `${candidate.remainingPercent}%`
+      : "unknown";
+    const reset = candidate.resetAt ? `; reset=${candidate.resetAt}` : "";
+    return `${candidate.displayName || candidate.model} | state=${candidate.state}; remaining=${remaining}${reset}; dispatchable=${candidate.dispatchable}`;
+  };
+  const codexWindows = (context.codexTelemetry?.windows || []).slice(0, 2);
+  const claudeWindows = (context.claudeUsage?.windows || []).slice(0, 3);
+  const lines = [
+    "AiMobileResourceInventory:",
+    `GeneratedAtUtc: ${utcStamp()}`,
+    `Evidence: ${context.capacityProbe}`,
+    `Codex: cli=${context.codexCliFound === true}; auth=${context.codexCliAuth?.authMode || "unknown"}; plan=${context.codexTelemetry?.planType || "unknown"}; effectiveRemaining=${context.codexTelemetry?.effectiveRemainingPercent ?? context.codexRemainingPercent ?? "unknown"}%`,
+    ...codexWindows.map((window) => `  window ${window.id}: remaining=${window.remainingPercent ?? "unknown"}%; reset=${window.resetAt || "unknown"}`),
+    `Claude: cli=${context.claudeFound === true}; plan=${context.claudeAuth?.subscriptionType || "unknown"}`,
+    ...claudeWindows.map((window) => `  window ${window.id}: remaining=${window.remainingPercent ?? "unknown"}%; reset=${window.resetAt || window.resetText || "unknown"}; applies=${window.scope || "unknown"}`),
+    `Antigravity: cli=${context.agyFound === true}; desktopLive=${context.antigravityLiveReady === true}; autoDispatchAuthorized=${args.allowAntigravityCli === true}`,
+    `Cursor: ui=${context.cursorUiFound === true}; headless=${context.cursorHeadlessFound === true}`,
+    "BestAvailableByTeam:",
+  ];
+  for (const [platform, label] of [["codex", "Codex"], ["claude", "Claude"], ["antigravity", "Antigravity"], ["cursor", "Cursor"]]) {
+    const selected = compactCandidates(platform, ["codex", "claude"].includes(platform) ? 3 : 2);
+    if (!selected.length) {
+      lines.push(`- ${label}: unavailable or not probed`);
+      continue;
+    }
+    for (const candidate of selected) lines.push(`- ${label}: ${candidateLine(candidate)}`);
+  }
+  lines.push(
+    "RoutingBoundary:",
+    "- This inventory starts no desktop app and launches no worker.",
+    "- Unknown capacity remains unknown. Refresh only after a reset, provider failure, or stale evidence; do not probe before every lane.",
+    "- Current Codex owns the critical path. Delegate only independent work whose time or context savings exceed dispatch and integration overhead.",
+  );
+  return lines.join("\n");
+}
+
 function formatResourceInventory(args = {}, context = {}, candidates = buildResourceCandidates(args, context)) {
   const horizonHours = Math.max(1, Math.min(12, Number(args.horizonHours || 5)));
   const localProfile = args.localProfile || readProfile();
@@ -2373,7 +2483,9 @@ async function getResourceInventory(args = {}) {
   const context = await getTeamCapacityContext(args);
   const profiledArgs = { ...args, localProfile: readProfile() };
   const candidates = [...buildResourceCandidates(profiledArgs, context), ...buildNativeCodexCandidates(profiledArgs, context)];
-  return formatResourceInventory(profiledArgs, context, candidates);
+  return String(args.detail || "compact").toLowerCase() === "full"
+    ? formatResourceInventory(profiledArgs, context, candidates)
+    : formatCompactResourceInventory(profiledArgs, context, candidates);
 }
 
 function formatCodexUsage(telemetry = readCodexUsageTelemetry()) {
@@ -2794,11 +2906,10 @@ async function buildProjectManagerPlan(args = {}) {
   return lines.join("\n");
 }
 
-// Single source of truth for the manager-only default: every orchestration entrypoint must call this
-// before reading args.managerOnly, so an omitted/undefined value never silently falls through to the
-// less-safe manager-and-integrator mode.
+// The parent Codex task is adaptive by default. Strict manager-only behavior is opt-in because it
+// can otherwise turn a failed worker lane into a permanent delivery blocker.
 function normalizeManagerOnly(args = {}) {
-  return { ...args, managerOnly: args.managerOnly !== false };
+  return { ...args, managerOnly: args.managerOnly === true };
 }
 
 function normalizedProactiveReporting(args = {}) {
@@ -5547,7 +5658,10 @@ function sameThreadHeartbeatDedupeKey(workspace) {
 function sameThreadHeartbeatAction(workspace, snapshot = {}) {
   const reporting = proactiveReportingFromManifest(snapshot);
   if (!reporting.enabled) return null;
-  const active = isActiveOrchestrationRun(snapshot);
+  const activeWorkItemStates = new Set(["running", "host-running", "host-reserved", "host-dispatch-required"]);
+  const activeWorkerRecorded = (snapshot.workItems || []).some((item) => activeWorkItemStates.has(String(item.state || "")))
+    || (snapshot.jobs || []).some((job) => ["running", "queued", "reserved"].includes(String(job.state || "")));
+  const active = isActiveOrchestrationRun(snapshot) && snapshot.state === "running" && activeWorkerRecorded;
   const runId = String(snapshot.runId || "").trim();
   return {
     schemaVersion: 1,
@@ -5562,7 +5676,7 @@ function sameThreadHeartbeatAction(workspace, snapshot = {}) {
     resumeExistingGoal: active,
     statusCall: active ? {
       tool: "project-manager-status",
-      arguments: { workspace, expectedRunId: runId, waitSeconds: 120 },
+      arguments: { workspace, expectedRunId: runId, waitSeconds: 0 },
     } : null,
     transitionFirst: true,
     neverSilent: true,
@@ -5570,6 +5684,8 @@ function sameThreadHeartbeatAction(workspace, snapshot = {}) {
     unchangedCheckpointFields: ["State", "Team now", "Elapsed", "Next intervention"],
     constraints: {
       reuseMatchingHeartbeat: true,
+      pauseWhenNoActiveWorker: true,
+      stopPhraseTakesPriority: true,
       createDetachedChat: false,
       createGoal: false,
       createRun: false,
@@ -5589,7 +5705,7 @@ function proactiveReportingStatusLines(workspace, snapshot = {}) {
   lines.push(
     `SameThreadHeartbeatAction: ${JSON.stringify(sameThreadHeartbeatAction(workspace, snapshot))}`,
     "ReportingHostBoundary: execute the action in the host only; this MCP server created no automation and supplied no thread id.",
-    "ReportingDelivery: report a recorded transition with all required fields; otherwise emit one concise unchanged checkpoint and never silently yield.",
+    "ReportingDelivery: report a recorded transition with all required fields; otherwise emit one concise unchanged checkpoint. Never wait inside a heartbeat, and pause it when no worker is active.",
   );
   return lines;
 }
@@ -5602,6 +5718,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
   const reportAddress = truncateText(String(reportProfile.address || "").trim(), 80);
   const reportStyle = truncateText(String(reportProfile.updateStyle || "concise-executive").trim(), 40);
   const reporting = proactiveReportingFromManifest(snapshot);
+  const reportingHeartbeatAction = reporting.enabled ? sameThreadHeartbeatAction(workspace, snapshot) : null;
   const reportWait = snapshot.reportWait || {
     requestedSeconds: waitedSeconds,
     elapsedSeconds: waitedSeconds,
@@ -5664,9 +5781,11 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
     orchestrated && reportWait.refreshError ? `StatusRefreshWarning: ${reportWait.refreshError}; returning the last verified snapshot. Do not infer a terminal state.` : null,
     !orchestrated ? `Jobs: ${snapshot.counts?.total || 0}; completed=${snapshot.counts?.completed || 0}; running=${snapshot.counts?.running || 0}; failed=${snapshot.counts?.failed || 0}` : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid
-      ? (reporting.enabled
+      ? (reportingHeartbeatAction?.action === "ensure"
         ? `NextCheck: the host must reuse the one same-thread heartbeat at ${reporting.intervalMinutes}m; each firing makes the exact project-manager-status call in SameThreadHeartbeatAction and never creates another chat, Goal, run, or heartbeat.`
-        : "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop. No automation is authorized unless explicitly requested.")
+        : reporting.enabled
+          ? "NextCheck: pause the same-thread heartbeat because no worker is active; resume only after a worker starts."
+          : "NextCheck: one project-manager-status call with waitSeconds=120; it returns early on transition. No 20-second polling loop. No automation is authorized unless explicitly requested.")
       : null,
     orchestrated ? `RequiredProgressReport: ${reportAddress ? `address the user as \"${reportAddress}\"; ` : ""}style=${reportStyle}. Relay CEOControlRoom exactly: Objective, Changed, Team now, Capacity, Progress, Blocker/Decision, Next. Do not freeform, omit the root objective/owners/capacity, repeat history, or answer only \"running\".` : null,
     orchestrated && !graphIntegrity.valid && snapshot.state !== "completed"
@@ -5675,7 +5794,7 @@ function formatTeamRunSnapshot(workspace, snapshot, waitedSeconds = 0, reportPro
         : "RequiredManagerAction: do not resume, integrate, or verify this malformed graph. Call run-project-manager once with the same goal and canonical workItems using objective, executionClass, expectedFiles, and only real dependsOn edges. Contract replacement must stop old workers before dispatch.")
       : null,
     orchestrated && snapshot.state === "running" && graphIntegrity.valid
-      ? `RequiredManagerAction: after the initial assignment receipt, make one transition-aware project-manager-status call with waitSeconds=120. Report the transition or one two-minute activity checkpoint, then yield to this task's single active Goal; do not create another Codex task, Goal, or run${reporting.enabled ? ", and reuse only the heartbeat identified by SameThreadHeartbeatAction" : ", or any automation"}.`
+      ? `RequiredManagerAction: after the initial assignment receipt, make at most one transition-aware project-manager-status call with waitSeconds=120 in this human turn. Report the transition or one two-minute activity checkpoint, then yield; do not create another Codex task, Goal, or run${reportingHeartbeatAction?.action === "ensure" ? ", and reuse only the heartbeat identified by SameThreadHeartbeatAction" : ", or any automation"}.`
       : null,
     orchestrated && isContinuousManagement(snapshot) && snapshot.state === "ready-for-codex"
       ? (["verified", "failed"].includes(snapshot.activeCycle?.state)
@@ -7219,6 +7338,37 @@ function readJob(args = {}) {
   const repair = repairStaleRunningJob(workspace, jobId, jobDir, readJsonFile(statusPath, {}));
   const statusObject = repair.status;
   const runningHint = readRunningJobHint(statusObject);
+  if (String(args.detail || "compact").toLowerCase() !== "full") {
+    const oneLine = (value, maxChars) => truncateText(String(value || "").replace(/\s*\r?\n\s*/g, " ").trim(), maxChars);
+    const result = oneLine(summarizeFile(path.join(jobDir, "result.md"), 1200), 1200);
+    const changed = oneLine(summarizeFile(path.join(jobDir, "changed-files.txt"), 500), 500);
+    const tests = oneLine(summarizeFile(path.join(jobDir, "test-output-summary.md"), 700), 700);
+    const verification = readJsonFile(path.join(jobDir, "verification-evidence.json"), null);
+    const telemetry = readJsonFile(path.join(jobDir, "worker-telemetry.json"), null);
+    const state = String(statusObject.state || "unknown");
+    const active = ["queued", "running", "submitted", "unknown"].includes(state.toLowerCase());
+    return [
+      "AiMobileJob:",
+      `JobId: ${jobId}`,
+      `State: ${state}`,
+      `Worker: ${statusObject.worker || telemetry?.provider || "unknown"}`,
+      `Model: ${statusObject.observedModel || statusObject.requestedModel || telemetry?.observedModel || telemetry?.requestedModel || "unknown"}`,
+      `Step: ${statusObject.currentStep || "unknown"}`,
+      `UpdatedAtUtc: ${statusObject.updatedAt || statusObject.completedAt || "unknown"}`,
+      statusObject.blocker ? `Blocker: ${oneLine(statusObject.blocker, 700)}` : null,
+      repair.repaired ? `StateRepair: ${repair.source || "process-gone"}` : null,
+      result ? `Result: ${result}` : "Result: pending",
+      changed ? `Changed: ${changed}` : "Changed: none recorded",
+      tests ? `Checks: ${tests}` : "Checks: none recorded",
+      verification ? `DeterministicVerification: state=${verification.state || "unknown"}; checks=${verification.checks?.length || 0}; passed=${verification.passed ?? "unknown"}` : "DeterministicVerification: not recorded",
+      telemetry ? `Usage: durationSec=${Number.isFinite(Number(telemetry.durationMs)) ? Math.round(Number(telemetry.durationMs) / 1000) : "unknown"}; outputTokens=${telemetry.outputTokens ?? "unknown"}; promptChars=${telemetry.promptChars ?? "unknown"}; resultChars=${telemetry.resultChars ?? "unknown"}` : "Usage: not recorded",
+      active
+        ? "Next: continue parent Codex work. Read this job again only at the natural integration point or after its lease, not in a polling loop."
+        : state.toLowerCase() === "completed"
+          ? "Next: inspect the bounded diff and deterministic evidence once, then integrate or reject."
+          : "Next: classify the concrete blocker; fail over once only when another provider is clearly suitable, otherwise take the lane back into Codex.",
+    ].filter(Boolean).join("\n");
+  }
   const status = summarizeFile(statusPath, 4000);
   const result = summarizeFile(path.join(jobDir, "result.md"), 8000);
   const changed = summarizeFile(path.join(jobDir, "changed-files.txt"), 4000);
@@ -9319,19 +9469,22 @@ function runClaudeJobWorker(args = {}) {
   const quality = executionFailed ? { ok: true, reason: "" } : validateWorkerResult(resultText, args);
   const boundaryEvidence = executionFailed ? { ok: true, reason: "" } : validateBoundaryEvidenceContract(args, resultText);
   const writerCompletion = executionFailed ? { ok: true, reason: "" } : validateWriterCompletion(args, gitOutcome, resultText);
-  const preVerificationOk = !executionFailed && !modelMismatch && !tokenBudgetExceeded && !claudeBudgetError && boundary.ok && quality.ok && boundaryEvidence.ok && writerCompletion.ok;
+  // Excess narration is an efficiency warning, not evidence that attributable code is invalid.
+  // Keep the compact artifact and run deterministic verification instead of paying another model
+  // to rediscover the same diff. A real provider budget error still fails closed.
+  const preVerificationOk = !executionFailed && !modelMismatch && !claudeBudgetError && boundary.ok && quality.ok && boundaryEvidence.ok && writerCompletion.ok;
   const deterministicVerification = preVerificationOk
     ? verificationRunner.run(workspace, jobDir, args, gitOutcome)
     : verificationRunner.skip(jobDir, args);
   const verificationFailed = preVerificationOk && deterministicVerification.required && deterministicVerification.passed !== true;
-  const failed = executionFailed || modelMismatch || tokenBudgetExceeded || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
+  const failed = executionFailed || modelMismatch || claudeBudgetError || !boundary.ok || !quality.ok || !boundaryEvidence.ok || !writerCompletion.ok || verificationFailed;
   const failureCategory = !boundary.ok
     ? "scope-violation"
     : verificationFailed
       ? "verification-failed"
     : modelMismatch
       ? "model-unavailable"
-    : (tokenBudgetExceeded || claudeBudgetError)
+    : claudeBudgetError
       ? "budget-exceeded"
     : executionFailed
       ? failureCategoryFromText(`${result.error?.message || ""} ${stderr} ${parsedOutput.resultText || stdout}`)
@@ -9371,13 +9524,14 @@ function runClaudeJobWorker(args = {}) {
     claudeSessionId: parsedOutput.sessionId,
     failureCategory,
     descendantCleanup,
-    warning: gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
+    warning: [
+      gitOutcome.reviewWorkspaceChanged ? "Workspace changed during this review, but Claude plan mode could not edit files; no diff was accepted." : "",
+      tokenBudgetExceeded ? `Claude output exceeded the efficiency target (${parsedOutput.outputTokens} > ${maxOutputTokens}); the result was compacted and accepted only through normal boundary and deterministic verification gates.` : "",
+    ].filter(Boolean).join(" "),
     blocker: !boundary.ok
       ? `Worker changed files outside its boundary: ${boundary.violations.join(", ")}`
       : verificationFailed
         ? deterministicVerification.blocker || "Bridge-owned deterministic verification failed."
-      : tokenBudgetExceeded
-        ? `Claude output budget exceeded: ${parsedOutput.outputTokens} > ${maxOutputTokens} tokens. Do not auto-fail over; inspect the bounded artifact or rescope.`
       : claudeBudgetError
         ? `Claude reported a budget-exceeded error (${parsedOutput.errorSubtype}). Do not auto-fail over; inspect the bounded artifact or rescope.`
       : modelMismatch
@@ -10367,8 +10521,8 @@ function buildDevToolsHealthAdvice(result) {
   const port = result?.DevToolsPort || "<unknown>";
   const status = running && pageCount > 0 ? "ready" : "not-ready";
   const next = status === "ready"
-    ? "If ai-mobile-devtools still says Transport closed, do not retry the same MCP transport. Restart Codex so the DevTools MCP server is re-created, or use handoff-template/manual paste for this turn."
-    : "Run ai-mobile-local.repair-live once. If it restarts Antigravity, restart Codex before calling ai-mobile-devtools again.";
+    ? "The on-demand direct CDP route is ready. Do not start a separate DevTools MCP process."
+    : "Run repair-live only when visible Antigravity UI state is genuinely required; otherwise keep the task on CLI workers or current Codex.";
 
   return [
     `DevToolsHealth: ${status}`,
@@ -10377,7 +10531,7 @@ function buildDevToolsHealthAdvice(result) {
     `PageCount: ${pageCount}`,
     `Next: ${next}`,
     "",
-    "Rule: ai-mobile-local can report health even when ai-mobile-devtools/list_pages fails with Transport closed. A closed transport means the DevTools MCP child process died; it is not fixed by repeatedly calling list_pages in the same session.",
+    "Rule: normal AI Mobile startup has no separate DevTools MCP transport to become stale. Direct CDP reconnects on each on-demand UI call.",
   ].join("\n");
 }
 
@@ -10433,14 +10587,14 @@ function runSelfTest() {
     && managerToolSchema?.proactiveReporting?.properties?.intervalMinutes?.maximum === PROACTIVE_REPORTING_MAX_MINUTES
     && managerPlanSchema?.proactiveReporting === proactiveReportingSchema,
   "manager run and plan schemas expose one bounded explicit proactive-reporting contract");
-  assert(JSON.stringify(normalizedProactiveReporting({ proactiveReporting: { enabled: true, intervalMinutes: 15 } })) === JSON.stringify({ enabled: true, intervalMinutes: 15 })
+  assert(JSON.stringify(normalizedProactiveReporting({ proactiveReporting: { enabled: true, intervalMinutes: 30 } })) === JSON.stringify({ enabled: true, intervalMinutes: 30 })
     && normalizedProactiveReporting({}).enabled === false,
   "proactive reporting is explicit and normalizes to a bounded durable configuration");
   for (const invalidReporting of [
     { enabled: true, intervalMinutes: PROACTIVE_REPORTING_MIN_MINUTES - 1 },
     { enabled: true, intervalMinutes: PROACTIVE_REPORTING_MAX_MINUTES + 1 },
-    { enabled: true, intervalMinutes: 10.5 },
-    { intervalMinutes: 20 },
+    { enabled: true, intervalMinutes: 30.5 },
+    { intervalMinutes: 60 },
   ]) {
     let rejected = false;
     try {
@@ -10451,17 +10605,23 @@ function runSelfTest() {
     assert(rejected, `invalid proactive reporting is rejected: ${JSON.stringify(invalidReporting)}`);
   }
   const defaultToolNames = exposedMcpTools("").map((tool) => tool.name);
-  assert(defaultToolNames.length === 10 && defaultToolNames.includes("run-project-manager") && defaultToolNames.includes("project-manager-status") && !defaultToolNames.includes("submit-agy-job"), "default MCP discovery exposes only the lean manager control surface");
+  const defaultToolPayloadChars = JSON.stringify({ tools: exposedMcpTools("") }).length;
+  assert(defaultToolNames.length === 6
+    && ["orchestrator-profile", "resource-inventory", "run-efficient-task", "read-job", "verify-job", "cancel-job"].every((name) => defaultToolNames.includes(name))
+    && !defaultToolNames.includes("run-project-manager")
+    && !defaultToolNames.includes("project-manager-status")
+    && defaultToolPayloadChars < 12000,
+  "default MCP discovery exposes only the compact delivery surface");
   assert(exposedMcpTools("true").length === tools.length, "advanced MCP discovery remains available through one explicit environment switch");
   assert(/^\d+\.\d+\.\d+/.test(pluginVersion), "MCP server version follows the plugin manifest");
   const managerSkill = fs.readFileSync(path.join(pluginRoot, "skills", "ai-mobile", "SKILL.md"), "utf8");
-  assert(managerSkill.includes("do not create another Codex control-room task")
-    && managerSkill.includes("Provider worker sessions/jobs are not Codex control-room tasks and remain allowed")
-    && managerSkill.includes("Never use `create_thread` to create a worker")
-    && managerSkill.includes("`Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`")
-    && managerSkill.includes("never call `update_goal complete`")
-    && managerSkill.includes("Do not search the filesystem"),
-  "skill preserves the root objective, skips self-discovery waste, allows provider workers, and requires the seven-field CEO brief");
+  assert(managerSkill.length < 14000
+    && managerSkill.includes("Codex keeps working")
+    && managerSkill.includes("Inventory once")
+    && managerSkill.includes("No orchestration loops")
+    && managerSkill.includes("No premium-on-premium review chain")
+    && managerSkill.toLowerCase().includes("do not search the filesystem"),
+  "skill is compact and preserves the delivery-first token-efficiency contract");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");
@@ -11035,8 +11195,8 @@ function runSelfTest() {
   const hostCheckpoint = applyCapacityCheckpointCandidates(hostStarted, nativeCodexDecision.candidates, { localProfile: privateRoutingProfile }).manifest;
   assert(hostCheckpoint.workItems[0]?.state === "host-running" && hostCheckpoint.workItems[0]?.hostAgent?.agentId === "agent-1", "capacity refresh never interrupts or reroutes a running native Codex worker");
 
-  assert(normalizeManagerOnly({}).managerOnly === true && normalizeManagerOnly({ managerOnly: undefined }).managerOnly === true, "every orchestration entrypoint defaults managerOnly to true when the caller omits it");
-  assert(normalizeManagerOnly({ managerOnly: false }).managerOnly === false, "an explicit managerOnly=false is preserved instead of being forced back to manager-only");
+  assert(normalizeManagerOnly({}).managerOnly === false && normalizeManagerOnly({ managerOnly: undefined }).managerOnly === false, "orchestration defaults to adaptive manager-and-integrator mode when the caller omits managerOnly");
+  assert(normalizeManagerOnly({ managerOnly: true }).managerOnly === true, "strict manager-only mode remains available when explicitly requested");
   const parsedActionSummary = actionSummary("SubmitWorkerResult:\nJobId: worker-test\nWorkerPid: 321\nStarted: true", "worker-tool", pluginRoot);
   assert(parsedActionSummary.workerPid === 321 && parsedActionSummary.workerCommandMarker === "worker-test", "new worker reservations retain process identity before the first status refresh");
 
@@ -11820,6 +11980,16 @@ function runSelfTest() {
     fs.writeFileSync(path.join(compactJob.jobDir, "test-output-summary.md"), "Result: success\n", "utf8");
     const compactArtifact = compactResultArtifact(path.join(compactJob.jobDir, "result.md"), { maxResultBullets: 5 });
     assert(compactArtifact.split(/\r?\n/).length === 5, "result artifact compaction enforces the assigned bullet budget");
+    updateJobStatus(workspace, compactJob.jobId, { state: "completed", bridgeFinalized: true, currentStep: "self-test-completed", completedAt: utcStamp() });
+    const compactReadback = readJob({ workspace, jobId: compactJob.jobId });
+    assert(compactReadback.includes("AiMobileJob:")
+      && compactReadback.includes("State: completed")
+      && !compactReadback.includes("status.json:")
+      && !compactReadback.includes("diff.patch:")
+      && compactReadback.length < 6000,
+    "default job readback omits raw diagnostic artifacts and remains compact");
+    const fullReadback = readJob({ workspace, jobId: compactJob.jobId, detail: "full" });
+    assert(fullReadback.includes("status.json:") && fullReadback.includes("diff.patch:"), "full job readback remains available for focused diagnosis");
     const compactSnapshot = formatTeamRunSnapshot(workspace, {
       version: 2,
       state: "ready-for-codex",
@@ -11886,7 +12056,7 @@ function runSelfTest() {
       && activeProgressSnapshot.includes("one existing Codex control-room task")
       && activeProgressSnapshot.includes("provider worker sessions/jobs are allowed and expected")
       && activeProgressSnapshot.includes("waitSeconds=120")
-      && activeProgressSnapshot.includes("single active Goal")
+      && activeProgressSnapshot.includes("at most one transition-aware project-manager-status call")
       && activeProgressSnapshot.includes("Activity: started=")
       && activeProgressSnapshot.length < 4000,
     `running manager snapshots expose a bounded seven-field CEO brief, root goal, owners, capacity, and one transition-aware wait (${activeProgressSnapshot.length} chars)`);
@@ -11900,7 +12070,7 @@ function runSelfTest() {
       state: "running",
       rootGoal: "Continuously deliver verified improvements.",
       completionPolicy: "continuous-management",
-      reporting: { enabled: true, intervalMinutes: 15 },
+      reporting: { enabled: true, intervalMinutes: 30 },
       activeCycle: { id: "cycle-1", number: 1, state: "running", itemIds: ["reporting-work"] },
       workItems: [{ id: "reporting-work", objective: "Complete the current bounded improvement", state: "running", assignment: "claude:sonnet", assignedModel: "sonnet", dependsOn: [], readOnly: true }],
       jobs: [{ jobId: "proactive-worker", state: "running", workItemIds: ["reporting-work"], assignedTasks: ["reporting-work"], model: "sonnet", transport: "claude-cli", startedAt: utcStamp() }],
@@ -11916,10 +12086,12 @@ function runSelfTest() {
       && heartbeatAction.executor === "host"
       && heartbeatAction.sameThread === true
       && heartbeatAction.cardinality === 1
-      && heartbeatAction.intervalMinutes === 15
+      && heartbeatAction.intervalMinutes === 30
       && heartbeatAction.runId === proactiveManifest.runId
       && heartbeatAction.statusCall.arguments.expectedRunId === proactiveManifest.runId
-      && heartbeatAction.statusCall.arguments.waitSeconds === 120
+      && heartbeatAction.statusCall.arguments.waitSeconds === 0
+      && heartbeatAction.constraints.pauseWhenNoActiveWorker === true
+      && heartbeatAction.constraints.stopPhraseTakesPriority === true
       && heartbeatAction.neverSilent === true
       && JSON.stringify(heartbeatAction.requiredReportingFields) === JSON.stringify(REQUIRED_CONTROL_ROOM_REPORT_FIELDS)
       && !JSON.stringify(heartbeatAction).includes("threadId"),
@@ -11928,7 +12100,7 @@ function runSelfTest() {
       .split(/\r?\n/)
       .find((line) => line.startsWith("SameThreadHeartbeatAction: "));
     assert(repeatedHeartbeatLine === heartbeatLines[0]
-      && proactiveSnapshot.includes("never silently yield")
+      && proactiveSnapshot.includes("Never wait inside a heartbeat")
       && proactiveSnapshot.includes("RequiredReportingFields:"),
     "repeated status renders the same dedupe action and proactive reporting never silently yields");
     const stoppedProactiveSnapshot = formatTeamRunSnapshot(workspace, {
@@ -11942,6 +12114,12 @@ function runSelfTest() {
       .find((line) => line.startsWith("SameThreadHeartbeatAction: "))
       .slice("SameThreadHeartbeatAction: ".length));
     assert(disableHeartbeatAction.action === "disable" && disableHeartbeatAction.statusCall === null, "terminal proactive status tells the host to disable the same heartbeat");
+    const idleHeartbeatAction = sameThreadHeartbeatAction(workspace, {
+      ...proactiveManifest,
+      workItems: proactiveManifest.workItems.map((item) => ({ ...item, state: "pending" })),
+      jobs: [],
+    });
+    assert(idleHeartbeatAction.action === "disable" && idleHeartbeatAction.statusCall === null, "proactive reporting pauses while no worker is active instead of burning a model turn on unchanged status");
 
     const reportingWorkspace = fs.mkdtempSync(path.join(tempRoot, "ai-mobile-reporting-self-test-"));
     const legacyReportingManifest = {

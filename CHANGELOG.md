@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 - 2026-07-13
+
+- Replaced the orchestration-heavy default after a live control-room audit found 115 automated turns, 315 status calls, and no shipped milestone. Current Codex now keeps the critical path and delegates only bounded independent lanes.
+- Reduced the always-loaded skill from about 33,590 to 10,500 characters and the default MCP schema from 10 tools / 31,574 characters to 6 tools / about 10,200 characters.
+- Made the normal workflow one passive inventory, immediate background dispatch, one compact result read, deterministic verification, and at most one justified failover.
+- Removed the separate raw DevTools MCP process and obsolete launcher. Antigravity UI remains available through on-demand direct CDP and is never opened merely because Codex starts.
+- Moved project-manager cycles, status polling, Goals, supervisors, and heartbeat controls behind the explicit advanced-tool compatibility flag.
+- Stopped continuous/unattended wording from implicitly creating a heartbeat. Periodic reports now require an explicit cadence, are limited to 30-240 minutes, use non-waiting status reads, and pause whenever no worker is active or a run is blocked/decision-ready/terminal.
+- Made `use no plugin` and equivalent stop wording an immediate heartbeat pause that occurs before any AI Mobile call.
+- Defined material progress separately from worker activity and required Codex to take back a critical-path item after one failed or no-change delegation in adaptive mode.
+- Added verification economics: deterministic gates and one compact parent review first; no premium-on-premium reassurance review; exceptional independent review is cheaper and capped to 10% of producer output.
+- Changed excess Claude narration from an automatic failed implementation into a compacted efficiency warning when attributable changes still pass scope, quality, and deterministic verification gates.
+
 ## 0.2.8 - 2026-07-13
 
 - Defined a three-layer continuity contract that distinguishes the detached execution supervisor, the active Codex Goal, and at most one same-thread reporting heartbeat, with none of the layers restricting Codex or provider workers.

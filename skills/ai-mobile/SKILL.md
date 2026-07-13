@@ -1,204 +1,128 @@
 ---
 name: ai-mobile
-description: Use one Codex task as a capacity-aware CEO control room across standalone or host-native Codex workers, Claude Code, Antigravity, and optional Cursor. Use when a project should be decomposed, assigned by current capability and quota, executed CLI-first in parallel where safe, actively managed, verified, and resumed without replaying the parent task.
+description: Coordinate the current Codex task with bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers. Use for nontrivial project work when capacity-aware parallel delegation can reduce elapsed time or context cost without turning the parent task into a polling control room.
 ---
 
 # AI Mobile
 
-Use one existing Codex task/thread as the project control room. By default, that parent task is manager-only: it owns the goal, workstreams, capacity decisions, steering, compact evidence review, user-boundary decisions, and reporting. Claude Code, Antigravity, Cursor when headless-capable, and standalone or host-native Codex workers own bounded project execution.
+## Aim
 
-When this skill is invoked, it is already loaded. Do not search the filesystem, installed-plugin cache, or memory skills for another `ai-mobile` `SKILL.md`. Do not replace this contract with an older memory workflow. Search only for the normalized MCP/host tools needed to execute it.
+AI Mobile helps the current Codex task deliver a project outcome faster and with less wasted model capacity. It is a resource orchestrator, not a scheduler, status dashboard, or replacement for Codex judgment.
 
-The phrase **do not create another Codex control-room task** applies only to user-visible Codex tasks/threads. It never means do not create workers. Standalone Codex CLI jobs, native Codex subagents, headless Claude Code sessions, Antigravity CLI jobs, and optional Cursor jobs are expected execution lanes. Never use `create_thread` to create a worker; use AI Mobile's durable CLI jobs or host-native subagents behind this existing control-room task. Manager-only applies to the parent task, not to the Codex platform.
+The current Codex task normally remains the goal owner, architect, critical-path worker, integrator, verifier, and user contact. It delegates only bounded independent work whose expected time or context savings exceed dispatch and integration overhead.
 
-## Goal-First Continuity
+When this skill is loaded, do not search the filesystem, plugin cache, or memory for another AI Mobile skill. Use the normalized `ai-mobile-local` tools already exposed to this task.
 
-Keep one Codex control-room task and one exact root objective per project. **"Manage this project as my CEO control room" is an operating-mode instruction, not the root objective.** Never rewrite the root objective into "monitor", "review", "operate the control room", or another smaller heartbeat task.
+## Non-Negotiable Defaults
 
-If the host exposes `get_goal`, call it once before starting or resuming orchestration. When an active Goal exists, pass its objective verbatim as `run-project-manager.goal`. Otherwise use the user's explicit project outcome verbatim. If neither exists and no active run already records `RootGoal`, ask once for the outcome. Never create a Goal unless the user explicitly asks to start one or sends the request through the Goal UI.
+- **Codex keeps working.** Dispatching a worker never means waiting for it. Continue the current Codex-owned critical path immediately.
+- **Inventory once.** Read capacity at task start, then reuse it. Refresh only after a quota reset, provider failure, material model change, or 60 minutes of active work.
+- **Delegate selectively.** Start zero to two independent lanes normally; use three only when boundaries and integration are unusually clear.
+- **No orchestration loops.** Do not create a Goal, Codex task, recurring automation, heartbeat, continuous cycle, or repeated status poll merely because this skill is used.
+- **One collection read.** Read each worker at its natural integration point or after its lease. Do not repeatedly ask whether it is done.
+- **Verification costs less than production.** Prefer tests, validators, diffs, type checks, and policy gates. No premium-on-premium review chain; do not send successful premium-model work to another premium model for reassurance.
+- **UI is fallback.** Startup is passive. Do not open Antigravity, Claude, Cursor, Chrome, or another desktop app unless visible state, authentication, or a verified CLI gap requires it.
+- **Unknown stays unknown.** Never invent model limits, reset times, authentication, completion, or savings.
 
-Reuse the workspace's active AI Mobile run instead of creating another Codex control-room task, Goal, run, heartbeat, or cron job. Provider worker sessions/jobs are not Codex control-room tasks and remain allowed.
+## When To Use It
 
-Capacity checkpoints are internal routing reviews persisted in the AI Mobile run. They are not chat schedules and must not create messages or tasks. Continuity uses three distinct layers, and none of them restricts Codex or provider workers:
+Use AI Mobile when all are true:
 
-1. **Execution supervisor**: the detached zero-model-token process that advances eligible external CLI stages between Codex turns. It is not a chat, not a heartbeat, and never reports to the user.
-2. **Active Goal**: the Codex Goal in this same task. Goal continuations resume monitoring, management decisions, and native Codex actions, including `HostCodexActions` handoffs.
-3. **Same-thread reporting heartbeat**: at most one recurring automation attached to this same control-room task/thread that wakes the manager to resume the same Goal and durable run and report.
+1. The task is nontrivial.
+2. At least one work item is genuinely independent of the current Codex critical path.
+3. Another available provider has suitable capability or independent capacity.
+4. The expected saved time/context is greater than the handoff and integration cost.
 
-An explicit user request for proactive, continuous, unattended, or 24/7 management authorizes exactly one same-thread reporting heartbeat by itself; no separate timed-report request is needed. First find and reuse an existing matching heartbeat; create one only when none exists; never create a detached or standalone chat, a second heartbeat, or a heartbeat for a non-continuous request. Each heartbeat firing resumes the same Goal and run, may execute pending native Codex handoffs, and never duplicates workers, runs, Goals, or chats. Disable or remove the heartbeat when the user stops continuous management or the run reaches a terminal state. Without explicit continuous/proactive wording, create an automation only for an explicitly requested wall-clock reminder or timed report.
+Skip delegation for quick answers, tightly coupled edits, tiny single-file fixes, user decisions, sensitive live-state checks, or work the current Codex task can finish faster than it can specify and integrate.
 
-During Goal-driven work, each continuation starts with one `project-manager-status` call for the existing workspace run. Use `waitSeconds=120`; the bridge returns early on a recorded transition, so do not add a 20-second polling loop. Keep the Goal active while useful progress is possible. Mark it complete only for a finite run that explicitly returns `CompletionClaimAllowed: true`. A `continuous-management` run never permits `update_goal complete`; it ends only on explicit user stop. Apply the host's blocked-goal threshold exactly and never mark it blocked for a temporary quota reset or a running external worker.
+## Efficient Workflow
 
-When the user explicitly asks Codex to keep managing or improving a project until a stated objective is reached, check the current host Goal once. If no Goal exists, create exactly one Goal containing the immutable root objective; if one already exists, resume it. This permission applies only to explicit continuous/Goal wording from the user. Never create a second Goal, Codex task, recurring automation, or replacement orchestration run for the same project.
+1. Understand the measurable outcome, constraints, current state, acceptance gates, and smallest useful verification.
+2. Call `resource-inventory` once with `detail=compact`. Do not start apps while inventorying.
+3. Make a short execution split:
+   - one current-Codex critical path;
+   - zero to two independent worker lanes;
+   - explicit ownership boundaries for every writer;
+   - a clear integration point.
+4. Select providers from current evidence, not a fixed UI/backend/testing map. Call `run-efficient-task` once per external lane with an explicit `preferredProvider` whenever inventory already identified the provider. Send only the bounded objective, relevant boundary, acceptance check, and next step. Never send the parent transcript.
+5. After each dispatch receipt, continue the Codex-owned work. Do not wait, poll, narrate the worker, or launch a reviewer.
+6. At the integration point, call `read-job` once with `detail=compact`. Use `detail=full` only when the compact blocker is insufficient for focused diagnosis.
+7. Inspect the bounded diff and run deterministic verification. Accept, repair narrowly, or reject the result.
+8. On one failed or no-change lane, either fail over once to a clearly better available provider or take the bounded lane back into current Codex. Never create a review/retry chain.
+9. Report material results, not orchestration activity.
 
-If status reports `WorkGraphIntegrity: invalid`, do not continue polling or integrate that cycle. For `continuous-management`, wait for or cancel active cycle workers, then use the returned `expectedRunId` and `expectedCycleId` with `cycleVerificationFailed` plus canonical `nextWorkItems` under the same root run. For a finite objective, rebuild from the same goal using canonical `objective`, `executionClass`, `expectedFiles`, and only real `dependsOn` edges, then call `run-project-manager` once; replacement must stop old workers and refuse overlap when a stop is unconfirmed.
+## Resource Routing
 
-Manager-only means the parent control-room task does not search memory for project implementation context, inspect project files, run project diagnostics or tests, edit source, or duplicate a worker after `run-project-manager` succeeds. Its normal tool path is one `run-project-manager` call followed by compact `project-manager-status` calls. The only direct exceptions are explicit user-boundary actions that cannot safely be delegated: authorization, protected live session/authentication checks, externally consequential operations, steering, and final acceptance of recorded evidence.
+Choose by task fit, measured availability, quota/reset horizon, reliability, ownership, and integration cost.
 
-Every normal orchestration call defaults to `managerOnly=true`; omit the field or pass true. Set it to false only when the user explicitly asks this parent Codex task itself to implement or diagnose a bounded item.
+- **Current Codex:** architecture, ambiguous debugging, critical-path implementation, integration, final judgment, and all protected or externally consequential actions.
+- **Standalone/native Codex worker:** a high-value independent lane when shared Codex capacity remains above the configured 15% reserve. It shares the Codex pool, so it is not a free external resource.
+- **Claude Code:** bounded code implementation, refactoring, architecture review, and repository reasoning. Prefer Sonnet-class models for normal substantial work. Use Fable/Opus-class capacity only for genuinely hard work, explicit user choice, or a valuable dedicated window near reset. Do not use premium Claude merely to review premium Claude.
+- **Antigravity CLI:** broad read-only file inspection, inexpensive research, browser-oriented analysis, drafting, and low-cost validation. Auto routing must not launch it without explicit CLI authorization because authentication or permission prompts may appear.
+- **Antigravity UI:** only for a named visible project/chat, model switch, authentication, or a proven CLI limitation. Verify the expected project and chat before submission.
+- **Cursor:** only when a true headless agent exists and the task benefits from its editor context. The Cursor UI launcher is not a headless worker.
+- **No-model bridge verification:** deterministic commands and artifact checks. Use this before any reasoning reviewer.
 
-## CEO Management Contract
+Models and limits change. Discover current catalogs and quota windows; do not encode today's model names as permanent truth. A private local profile may express user preferences, but public defaults remain capability-based.
 
-Act as an active CEO/project manager, not a passive status poller:
+## Capacity Policy
 
-- Maintain the outcome, acceptance gates, workstreams, dependency graph, owners, models/efforts, capacity plan, risks, and protected user decisions.
-- Assign dependency-ready work to separate native Codex and provider workers. Use independent resources concurrently when the work is genuinely distinct and writer boundaries are safe.
-- On every continuation, read one authoritative status, compare the recorded transition, and make the next management decision. Wait only while existing workers are healthy and inside their leases.
-- Intervene when a worker stalls, fails, exhausts quota, loses authorization, produces weak evidence, or releases a dependency. Rescope, correct, reassign, cool down, or fail over the narrow lane without restarting the project.
-- If one provider owns all work while another eligible independent resource is idle, reconsider the graph and routing. Do not create duplicate work merely to keep a model busy.
-- Accept or reject compact evidence, coordinate integration and verification, and keep the user-facing Codex task focused on steering, decisions, and verified reporting.
+- Plan over the next five hours only to decide what can run now and what resets soon. It is not a work deadline.
+- Protect 15% of shared Codex capacity for integration, steering, and recovery. Capacity above the reserve should be used when useful work exists; the reserve is not an excuse for idle Codex capacity.
+- If Codex capacity is unknown, keep current Codex productive and limit speculative Codex-worker dispatch to one lane.
+- Apply the most restrictive capacity window that governs a model.
+- Treat a dedicated model window near reset as an opportunity only when a suitable high-value task exists. Never manufacture work to consume quota.
+- Cool down a failed provider and allow one justified failover. Do not retry the same broken transport repeatedly.
 
-## Steering First
+## Manager-Only Requests
 
-When a user changes the goal, adds a safety constraint, says stop, or withdraws permission while a run exists, handle that before any other work. Call `project-manager-status` with `steeringDirective`, any `addConstraints`, and `interruptRunningWorkers=true` (or `stopRun=true`). Do not merely acknowledge the instruction while an old worker continues. Start a new objective run only if the user still wants continuation.
+If the user explicitly asks for a manager-only or reporting-only parent task, keep that parent task out of project edits, but still dispatch real Codex/provider workers. Manager-only applies to the parent task, not the Codex platform.
 
-If `run-project-manager` is called again, reuse the active run only when its goal, work graph, constraints, acceptance/verification gates, routing authorization, and budgets are unchanged. Accumulate existing same-goal constraints and gates with later additions, including across a stopped/completed run; do not require the user to restate them.
+Use the same efficient workflow: one inventory, bounded dispatches, no polling, one result read, cheap verification, concise reports. If no worker can execute the critical path, report that concrete blocker immediately and offer adaptive mode. Do not spend turns maintaining an empty control room.
 
-Routine cycle correction is not user steering. Never use `steeringDirective` for model choice, capacity use, transport repair, provider failover, worker reassignment, boundary correction, or the next improvement batch. Record `cycleVerificationFailed` when appropriate, then pass a bounded correction through `nextWorkItems` in the same run. Reserve `steeringDirective` for an actual user root-goal change, revoked permission, or stop instruction, and pass `interruptRunningWorkers=true` for that real change.
+The legacy `run-project-manager`, `project-manager-status`, continuous-cycle, and heartbeat surfaces are advanced compatibility tools. Do not use them in the normal workflow. Use them only when the user explicitly requests the legacy durable control-room protocol and accepts its additional overhead.
 
-Examples requiring immediate interruption include: "do not access email", "stop", "do not use Antigravity", "do not change my browser profile", a new project goal, or revoked authorization for a live operation.
+## Reporting
 
-## Operating Frame
+Give the user short evidence-backed updates at meaningful transitions:
 
-- Objective lifetime: continuous until verified, genuinely blocked, or explicitly stopped.
-- Capacity horizon: rolling five-hour forecast for model selection, never a countdown.
-- Capacity checkpoint: default 20 minutes, accelerating to five minutes near the protected Codex manager reserve, or on the next status call; refresh resources without interrupting active workers.
-- Manager runway: reserve 15% of shared Codex capacity and allow up to three Codex workers while measured headroom is healthy, scaling down to two, one, then zero as capacity approaches the reserve; external CLI providers retain independent parallelism.
-- Writer concurrency: allow up to three simultaneous writers only when every pair has explicit, disjoint workspace-relative file or directory boundaries. Peer-owned changes are recorded separately from each worker's attributable files; overlapping, unscoped, or unexplained changes still fail closed.
-- Worker lease: role-aware provider-call watchdog (5-30 minutes for read-only work, 10-90 minutes for writers), not a project deadline.
-- Utilization: keep appropriate healthy resources working on distinct dependency-ready items; never duplicate work just to use every model.
-- Persistent control room: set `completionPolicy=continuous-management`. Worker completion closes only the current numbered cycle; the root objective and Codex Goal remain active.
+- `Done`: accepted changes or verified outcomes.
+- `Active`: current Codex work and genuinely running worker lanes.
+- `Blocked`: concrete blocker and owner.
+- `Capacity`: only fresh relevant provider/model evidence.
+- `Next`: the next delivery action or decision.
 
-## Visible Progress Loop
+Worker dispatch, waiting, polling, retries, unchanged reviews, and a running supervisor are activity, not progress. Never present them as completed work.
 
-The initial `run-project-manager` result is a dispatch receipt, not a user closeout. Pass `waitSeconds=0` and immediately report each exact work item, provider/model, and whether it is active, dependency-blocked, or waiting for a native Codex reservation.
+Do not create periodic reporting unless the user explicitly asks for a cadence. If requested, use one same-task report no more frequently than every 30 minutes, make its status read non-waiting, and pause it when no worker is active. `Use no plugin`, `stop AI Mobile`, `pause AI Mobile`, and equivalent wording stop plugin activity before any further AI Mobile call.
 
-After dispatch, make one `project-manager-status` call with `waitSeconds=120`. It returns early when a work item, worker, final-verification, termination, or capacity-checkpoint state changes. Do not loop with repeated 20-second calls. If no transition occurs in two minutes, give one activity checkpoint and yield until the next Goal continuation.
+## Verification Economics
 
-Read the runtime `CEOControlRoom`, `RequiredUserStatus`, and `RequiredProgressReport` fields and honor the private local address/style. Relay the seven `CEOControlRoom` fields exactly: `Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`. `Objective` must remain the exact root goal; `Team now` shows active owners/models and elapsed time; `Capacity` shows current platform/model capacity and reset evidence. Do not replace this block with freeform prose, repeat unchanged completed work, or answer only `running`.
+1. Run deterministic checks first.
+2. Current Codex reviews the compact changed-file list, bounded diff, and check evidence once.
+3. Use an independent reasoning reviewer only for security, architecture, or irreversible-risk cases where tests cannot establish confidence.
+4. Such a reviewer receives only the bounded diff and acceptance gates, uses a cheaper capable model, and targets at most 10% of the producer output.
+5. Excess narration is compacted and warned; it does not invalidate attributable changes that pass boundary and deterministic checks.
 
-When the user explicitly asks for continuous, proactive, unattended, or 24/7 management, run all three continuity layers in this same task: keep the Codex Goal active, let the detached supervisor advance eligible external CLI work between turns, and reuse or create exactly one same-thread reporting heartbeat as defined in Goal-First Continuity. Reporting is transition-first: a heartbeat firing or Goal continuation that finds a recorded transition relays the full `CEOControlRoom` block; one that finds no transition posts a single concise unchanged checkpoint (state, active owners, elapsed time, next intervention threshold) and yields — never a duplicate full report and never silence past the checkpoint bound. When the user stops continuous management, disable or remove that heartbeat as part of executing the stop.
+## Safety And Ownership
 
-## Default Workflow
+- Writers require explicit non-overlapping `expectedFiles` boundaries. Read-only workers do not modify files.
+- Preserve concurrent user and worker changes. Never revert unrelated work.
+- Real submissions, sends, deploys, purchases, destructive operations, login, OAuth, CAPTCHA, credentials, cookies, email/SMS codes, and other protected live state remain with current Codex and require the user's applicable authorization.
+- Antigravity permission auto-approval is never implicit. It does not authorize authentication, external effects, or work outside the declared boundary.
+- Worker completion is evidence, not project completion. Current Codex integrates and verifies the project outcome.
 
-For a nontrivial project goal:
+## Default Tool Surface
 
-1. Understand the outcome, constraints, risk, current state, acceptance criteria, and focused verification.
-   In manager-only mode, derive this from the user's request and existing AI Mobile run state. Do not pre-read project files, search implementation memory, or run health commands before dispatch; make project discovery a bounded work item.
-   Build the graph for maximum safe concurrency, not artificial sequence. Independent UI, backend, documentation, investigation, and testing-preparation lanes have no `dependsOn` edge when their inputs and file boundaries are already known. Add dependencies only for real evidence, data, or integration prerequisites.
-2. Look for the normalized direct MCP tool `mcp__ai_mobile_local__run_project_manager` and any callable native host `spawn_agent` tool, including the `collaboration` namespace. The manager passively discovers the official standalone Codex CLI and uses it automatically when it is authenticated through the ChatGPT plan. If any native `spawn_agent` tool is callable, `hostCodexAvailable=true` is mandatory; do not persist false merely because its namespace differs from an older example. Native Codex is the writable fallback when the standalone lane is read-only.
-   Treat a verified standalone Codex `workspace-write` rejection as a transport capability failure, not a model-quality failure. Keep that CLI available for read-only work, route writers to host-native Codex when callable or another healthy provider, and re-evaluate after the CLI version changes or the recorded retry window expires. Never solve this by granting unrestricted filesystem access.
-3. Call `run-project-manager` once with the exact root `goal`, `workspace`, `managerOnly=true`, measured caller-visible Codex state when available, `hostCodexAvailable`, `horizonHours=5`, `runDeadlineMinutes=0`, `capacityCheckpointMinutes=20`, `codexManagerReservePercent=15`, `maxConcurrentCodexWorkers=3`, `maxParallelWriters=3`, `maxWorkerMinutes=0`, `maxClaudeOutputTokens=12000`, `waitSeconds=0`, `start=true`, and a dependency-aware `workItems` graph. When the user explicitly requests continuous, proactive, unattended, or 24/7 management, also pass `proactiveReporting={enabled:true}` so the durable run emits the one host-owned `SameThreadHeartbeatAction`; include `intervalMinutes` only when the user specified a cadence. For a large task, create enough genuinely independent bounded lanes to use three Codex workers when remaining capacity exceeds 60% above reserve, two when headroom is moderate, and one near reserve; idle eligible Codex slots while dependency-ready work exists are an orchestration defect. For persistent management pass `completionPolicy=continuous-management`, plus a bounded `cycleObjective`, `cycleAcceptanceCriteria`, and `cycleVerification`. Top-level `acceptanceCriteria` and `verification` belong to the root objective and must not be replaced by small review-cycle gates. Use canonical work-item fields: `id`, `objective`, `executionClass`, `complexity`, `requiredCapabilities`, `dependsOn`, `expectedFiles`, `readOnly`, `preferredPlatform`, `acceptanceCriteria`, `verification`, and structured `verificationCommands`. Every material code or test claim should have at least one shell-free bridge check with `command`, argument array, timeout, and expected exit code; worker-written test prose is not independent evidence.
-   For explicitly unattended or 24/7 work, pass `unattendedMode=true`. Antigravity is eligible only when sandboxed permission auto-approval was explicitly authorized in the run or private profile; otherwise route that lane to native Codex or Claude instead of waiting on a popup. Read-only Antigravity jobs use explicit `plan` mode and writers use explicit `accept-edits` mode. If a prompt remains, classify it as authentication, workspace trust, or an external-action gate and fail over once instead of repeatedly reopening the UI. This permission policy never authorizes login, OAuth, CAPTCHA, external effects, destructive operations, or work outside the declared boundary.
-4. Do not read `project-manager-plan.json`, reconstruct submit commands, or manually call provider workers after a successful run call. The orchestrator dispatches eligible CLI work and returns `HostCodexActions` plus non-delegable `ManagerBoundaryActions` directly.
-5. For every returned `HostCodexReservationAction`, first acknowledge `reserved` through `project-manager-status.hostWorkerEvents` with the exact run id, work item id, attempt id, and dispatch token. Only if the next status response still returns the exact `HostCodexAction`, call `multi_agent_v1__spawn_agent` with its bounded model, effort, role, and message. Immediately acknowledge the returned agent id as `started`; completion or failure uses the same attempt and token. Never mark native output as parent-chat Codex evidence.
-6. While workers run, stay in the control room. Use `project-manager-status` and native host wait/close tools to monitor, steer, intervene, and report. Do not merely poll: on a recorded failure, stall, capacity transition, or released dependency, execute the returned correction, reassignment, cancellation, or native-worker action. Perform a returned manager-boundary action directly only when it is an authorization, protected live-state check, externally consequential operation, or other non-delegable user boundary. Do not fill worker idle time with repository exploration or implementation.
-7. Use `project-manager-status` for compact continuation. Every `completedCodexItems` id must have a matching `codexEvidence` entry containing a concise verified summary and optional artifact refs. Pass blocked ids in `failedCodexItems`. Host workers use `hostWorkerEvents`, never these parent-action fields.
-8. Read compact results once. Accept objective-specific evidence, request one bounded correction, or let the orchestrator perform its single provider-diverse failover. Manager-only mode forbids `takeoverCodexItems`; rescope or reassign the worker item instead.
-9. For `continuous-management`, review the current cycle once, then call `project-manager-status` with the exact `expectedRunId` and `expectedCycleId` from the latest status, `cycleVerified=true` or `cycleVerificationFailed=true`, a concrete `cycleVerificationSummary`, and dependency-aware `nextWorkItems` for the next cycle. The identity pair makes retries fail closed if another cycle or run has already started. This keeps the same run id. Never call `projectVerified`, never start a replacement run, and never call `update_goal complete` for a cycle checkpoint.
-10. For a finite objective only, after every root work item and root verification gate is complete, call `project-manager-status` with `projectVerified=true` or `projectVerificationFailed=true` and concrete `projectVerificationSummary`. A failed gate remains a blocker.
+Normal operation uses only:
 
-Do not ask the user to choose models manually. Do not use every provider merely because it is installed.
-Do not preload all reference files. Open one only when its specific edge case is active.
+- `resource-inventory`: passive compact capacity evidence;
+- `run-efficient-task`: dispatch one bounded lane and return immediately;
+- `read-job`: collect one compact result;
+- `verify-job`: run no-model checks for an existing job;
+- `cancel-job`: stop one worker;
+- `orchestrator-profile`: read or update private local preferences when needed.
 
-## Execution Contract
+If these tools are not exposed after a plugin update, tell the user that the current Codex task has stale plugin tools and needs one Codex restart. Do not search caches, reconstruct internal provider commands, or fall back to the legacy manager loop.
 
-- Normal path: `run-project-manager` owns standalone Codex, Claude, Antigravity, and optional headless Cursor dispatch. Do not duplicate those calls.
-- Manager-only control room: after a successful run call, do not use shell/project tools except for a specifically returned non-delegable manager-boundary action. Do not create another Codex task/thread for workers. Never run broad `rg`, recursive file listings, memory searches, harness diagnostics, tests, or edits as background activity.
-- Standalone Codex worker: when the official CLI is installed and `codex login status` confirms ChatGPT-plan authentication, AI Mobile may launch an isolated `codex exec` job with the selected catalog model/effort, stdin prompt, ephemeral session, bounded sandbox, and durable artifacts. This shares the measured Codex pool and manager reserve. The parent task must not reconstruct or manually launch this command.
-- Host-native Codex fallback: use `multi_agent_v1__spawn_agent` only for an exact `HostCodexAction` that remains exposed after its token-bound reservation acknowledgement. The native worker is separate from the parent control-room task, uses the selected current-catalog model/effort, never spawns workers, and is acknowledged with token-bound `hostWorkerEvents`. Manager-only must never be interpreted as "do not use Codex workers."
-- Current Codex action: perform only returned `ManagerBoundaryActions` directly and narrowly. Ordinary diagnostics, implementation, testing, and failed-worker recovery remain delegated.
-- Steering or stop with a running native Codex worker returns `HostCodexCancellationActions`. Call `multi_agent_v1__close_agent`, acknowledge `cancelled` or `cancellation-unconfirmed`, and never start a replacement while cancellation remains unconfirmed.
-- Real submissions, sends, deploys, purchases, destructive changes, and other externally consequential operations always remain current-Codex actions with authorization and live safety checks. External workers may analyze or verify them but may not perform them.
-- Protect browser and account state. Never log out, clear cookies/storage, switch or create browser profiles, change the signed-in account, inspect saved credentials, install a connector, request OAuth consent, or access email/SMS verification codes unless the user explicitly authorized that exact action. Use task-owned automation tabs and stop at human authentication gates.
-- Keep live checks of signed-in sessions, browser profiles, cookies, accounts, credentials, OAuth, email/SMS authentication, and CAPTCHA with the current Codex session. CLI workers may review bounded source code about those systems but may not inspect the user's live protected state.
-- Git status, tracked deletions, ignored files, and source layout are not runtime-liveness evidence. Workers must use recorded dependency evidence or an explicitly allowed current health check.
-- External writers require a verified file boundary. Completed dependency evidence must expose the exact machine-readable `BOUNDARY <work-item-id>:` marker; incidental paths never authorize edits. Every boundary marker explicitly named in a scope objective, acceptance criterion, or verification rule remains mandatory even when downstream writers already declare `expectedFiles`, and compact result handling must preserve those marker lines. Otherwise manager-only mode blocks and requests bounded discovery instead of returning implementation to current Codex.
-- A writer also requires attributable in-boundary file changes and a non-blocked result. `BLOCKED`, `no code changed`, or no changed files is failed implementation evidence; rescope or fail over before releasing its verifier.
-- A `ready-for-codex` run is still active until final verification or explicit termination. Stop it before changed-goal replacement, and refuse the replacement if any old worker process cannot be confirmed stopped.
-- In `continuous-management`, `ready-for-codex` is a cycle boundary. Record cycle verification and submit `nextWorkItems`; it is never permission to complete the root Goal.
-- Antigravity desktop UI is reserved for visible project/chat state or verified CLI gaps. Startup remains passive.
-
-The bridge may start external CLI jobs, but an MCP server cannot invoke host-native Codex agent tools. The active skill must execute those host actions itself.
-
-## Capacity Rules
-
-- `run-project-manager` discovers installed CLIs, model catalogs, quotas, resets, cooldowns, and recent outcomes before assignment. `project-manager-plan` is a plan-only diagnostic.
-- The parent Codex model is the manager; standalone and host-native Codex workers are separate resource candidates. Discover exact model ids and supported efforts from the current catalog, apply the private local allow pattern, and route by task quality, speed, capacity, transport readiness, and observed project outcomes.
-- All Codex workers share the manager's five-hour pool. Penalize them as reserve headroom shrinks, stop new dispatch at `codexManagerReservePercent`, and honor `maxConcurrentCodexWorkers` across standalone and host transports. Before reaching the reserve, prefer durable Claude or authorized Antigravity CLI work for remaining dependency-ready items.
-- `codex-usage` reads only bounded local `token_count` metadata. It discards prompts, responses, paths, and thread ids. This is Codex agentic-usage evidence, not a complete ChatGPT product-limit API.
-- Preserve unknown or stale capacity as unknown/stale. Never invent token allowances, reset times, or model availability.
-- Apply every quota window that governs a model and route using the most restrictive remaining window.
-- Discover models and supported effort levels from current catalogs/tool schemas. Honor the local model allow-pattern, and flag it when its review date is due.
-- Use the cheapest/fastest model that safely meets the quality floor. Reserve highest efforts and premium models for materially critical reasoning, not routine work.
-- Use all appropriate healthy resources when the graph has genuinely independent ready work. Native Codex, Claude, and Antigravity may run simultaneously; writers require pairwise-disjoint verified boundaries, while readers must avoid duplicate analysis.
-- The 15% Codex manager reserve is a floor, not a spending target or excuse to leave the rest idle. Actively consume capacity above that floor through separate native or standalone Codex workers, scaled by current headroom and bounded by disjoint ownership.
-- A provider outage, exhausted window, invalid model, timeout, or insufficient result triggers cooldown and one narrow failover. Do not loop retries.
-- `horizonHours` is a rolling capacity forecast, never a countdown. Project duration is continuous by default; `capacityCheckpointMinutes` refreshes remaining capacity without terminating the objective.
-- Worker calls use role-aware safety leases when `maxWorkerMinutes=0`: read-only work gets 5-30 minutes by provider and complexity, while writers get 10-90 minutes. A lease timeout rescoping/failover protects against a silent or dead provider process but does not terminate the project.
-- At a capacity checkpoint, refresh catalogs, quota windows, resets, cooldowns, and recent outcomes. Preserve running assignments; reroute only pending or resource-blocked work.
-- The detached CLI supervisor uses no model tokens. It advances sequential external stages while the run is `running` and exits when current Codex input or a terminal decision is required.
-- If the parent Codex window is exhausted, do not abandon or reconstruct the project. External jobs and the supervisor continue from `.antigravity-bridge`; after reset, call `project-manager-status` and resume the same run.
-- Claude budgeting is auth-aware: claude.ai subscription auth (Pro/Max/Team/Enterprise, no API key) omits the USD cap and relies on measured quota windows plus output-token and lease guards; API-key/PAYG/unknown billing keeps a conservative automatic USD cap, and an explicit user cap always wins. `budget-exceeded` stops the lane without failover so cost is not doubled.
-- Claude workers use feature-detected scout, reviewer, verifier, or writer contracts. Isolated bridge sessions use `--safe-mode`, non-persistence, structured output when supported, and no nested Agent tool. The bundled `claude-plugin/` roles are for direct Claude Code use; safe-mode bridge jobs receive equivalent explicit role instructions because safe mode suppresses plugins.
-- Antigravity CLI may launch a browser OAuth flow. Do not auto-dispatch it unless the user explicitly enables `allowAntigravityCli=true` or supplies a specific `agyModel`. In unattended mode, use sandboxed tool-permission auto-approval only when explicitly enabled, with `plan` for readers and `accept-edits` for writers; if authentication or workspace trust is required, fail over rather than opening repeated prompts. Prefer Claude/native Codex when authorization is absent.
-
-Detailed policy: [capacity-and-routing.md](references/capacity-and-routing.md).
-
-## Context And Continuity
-
-Workers receive a project capsule, not the parent transcript. It includes only the goal, constraints, work graph, ownership, file fingerprints, decisions, blockers, acceptance gates, verification, and compact artifact references. File contents and broad logs remain local and are read only when relevant.
-
-Durable control artifacts live under:
-
-```text
-.antigravity-bridge/orchestrator/project-capsule.json
-.antigravity-bridge/orchestrator/project-manager-plan.json
-.antigravity-bridge/orchestrator/task-capsules/<workItemId>.json
-.antigravity-bridge/jobs/<jobId>/
-```
-
-Read only compact worker artifacts: `result.md`, `changed-files.txt`, `diff.patch`, `test-output-summary.md`, bridge-owned `verification-evidence.json`, `worker-telemetry.json`, and `status.json`. Treat `WorkerReportedSummary` as a claim; accept a requested command check only from `BridgeDeterministicVerification` and `verification-evidence.json`.
-
-When an older terminal job has only `WorkerReportedSummary`, use no-model `verify-job` with the exact structured command instead of launching another model. An identical passing request is idempotently reused.
-
-For new work, make command-complete checks a read-only item with `kind=verification` or `kind=testing`, `executionClass=analysis`, and structured `verificationCommands`. AI Mobile assigns these items to the durable `bridge:verification / no-model` lane automatically. Do not spend Codex, Claude, Antigravity, or Cursor quota merely to restate exit codes. Keep diagnosis, explanation, architecture, comparison, critique, and recommendations in a separate model-routed item.
-
-Detailed contract: [context-capsules.md](references/context-capsules.md).
-
-## Lifecycle Gates
-
-Use `define -> plan -> execute -> verify -> review -> ship`. Worker completion is never project completion. Stop for user input on unresolved ambiguity, irreversible risk, missing authorization, or verification failure.
-
-Detailed operating procedure and anti-rationalization checks: [project-manager.md](references/project-manager.md).
-
-## Truthful Closeout
-
-Before answering the user, call `project-manager-status` once and treat its root/cycle state as authoritative.
-
-- Start with the exact `CEOControlRoom` block, including `Objective` and root/cycle progress.
-- Report only models/resources that actually ran, the Codex-owned action, and compact evidence.
-- If `CompletionClaimAllowed: false`, do not say the root objective is done or successful. For `continuous-management`, state that the root remains active and name the next cycle or real blocker.
-- A `completed` run is possible only for a finite objective that passed root verification. A continuous control room remains active across verified cycles until explicit user stop and must not claim a worker is active when none is recorded.
-- Distinguish the target application's own watchdog/runner from AI Mobile's run state.
-- A low-complexity review that only rechecks terminal evidence from a current-Codex operation stays with Codex; do not launch another provider merely to restate the same evidence.
-
-## CLI And UI
-
-Startup is passive. Do not open, close, or repair desktop apps when Codex starts. Use CLI first to reduce RAM and latency; use UI only for visible state, authentication, unsupported CLI actions, or a verified CLI failure.
-
-Detailed provider behavior: [provider-adapters.md](references/provider-adapters.md).
-
-## Local Communication Profile
-
-Call `orchestrator-profile` when a local communication or model policy is needed. The public default is professional. A private local profile may request a concise royal form of address and a technical-steward role; honor it respectfully without excessive flattery or unsupported certainty. Never commit the local profile.
-
-## Fallback
-
-If no `mcp__ai_mobile_local__*` tool is exposed after an actual tool-name search, use:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" run-project-manager -Goal "<goal>" -Workspace "<path>" -HorizonHours 5 -WaitSeconds 0
-```
-
-Continue with `project-manager-status`, not manual JSON or provider-command reconstruction. Tool discovery failure is a route change, not permission to guess.
+Load an advanced reference only when its edge case is active: [capacity and routing](references/capacity-and-routing.md), [provider adapters](references/provider-adapters.md), [context capsules](references/context-capsules.md), or [legacy project manager](references/project-manager.md).

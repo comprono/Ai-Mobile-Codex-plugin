@@ -2,13 +2,15 @@
 
 AI Mobile treats Codex, Claude Code, Antigravity, and optional Cursor workers as one local delivery team. It does not assign work by a fixed UI/backend/testing split. It first inventories the resources that are actually available, then chooses a model for each bounded work item by capability, quality, capacity, reset timing, speed, reliability, and continuity.
 
+Normal operation is intentionally smaller than the full architecture described here: current Codex keeps the critical path, calls compact inventory once, dispatches zero to two independent lanes, collects each result once, and verifies deterministically. Project-manager cycles and supervisors remain advanced compatibility mechanisms, not the default workflow.
+
 ## Evidence Model
 
 The orchestrator preserves the source and freshness of every capacity fact:
 
 | Resource | Models | Capacity and reset evidence | Dispatch |
 | --- | --- | --- | --- |
-| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Separate native host agents; parent Codex control-room task remains manager-only |
+| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Current Codex owns the critical path; separate workers are optional bounded lanes |
 | Claude Code | Installed aliases plus exact ids learned from CLI help or completed-run telemetry | Built-in `/usage` output, cached for 10 minutes | Headless CLI |
 | Antigravity CLI | `agy models` | CLI roster plus recent outcomes | Headless CLI |
 | Antigravity desktop | Full named model roster | Per-model remaining percentage and reset time while the local service is already running | UI only when visible project/chat state is required |
@@ -26,9 +28,9 @@ Codex capacity windows currently apply to the shared Codex agent pool unless the
 
 Because standalone and host-native Codex workers consume that same shared pool, AI Mobile protects a configurable manager reserve (15% by default), penalizes Codex dispatch as headroom shrinks, and stops new Codex workers at the reserve. Default shared Codex-worker concurrency is one. A ChatGPT-authenticated standalone CLI is preferred for unattended durable work; the host-native transport is the fallback. Claude and Antigravity CLI workers use independent capacity and can continue in parallel through the durable supervisor.
 
-## Visible Progress And Scope Recovery
+## Advanced Control-Room Compatibility
 
-`run-project-manager` returns initial assignments without a long silent wait. The manager then makes one transition-aware `project-manager-status` call with `waitSeconds=120`; it returns early when recorded state changes. Runtime reporting emits a seven-field `CEOControlRoom` brief: `Objective`, `Changed`, `Team now`, `Capacity`, `Progress`, `Blocker/Decision`, and `Next`. The immutable root objective stays visible while progress separately identifies the numbered cycle. For a continuous objective, prefer one active Codex Goal in the same project task; the detached supervisor remains responsible for zero-token external progression.
+The legacy `run-project-manager` and `project-manager-status` tools remain available behind the advanced tool flag for existing durable runs. They are not loaded into normal Codex tasks because their schemas and lifecycle add material context and management cost. New work should use compact inventory, bounded dispatch, one result read, and direct Codex integration.
 
 Persistent control rooms use `completionPolicy=continuous-management`. `projectVerified` and `projectVerificationFailed` are rejected by the bridge. A finished batch is recorded with `cycleVerified` or `cycleVerificationFailed`, guarded by the exact latest `RunId` and `ActiveCycleId`; `nextWorkItems` starts the next bounded cycle under the same run id while compact prior evidence is archived. Delayed retries and stale plans fail closed. Thus a read-only health check or no-op review cannot complete or replace the root project Goal.
 
@@ -66,7 +68,7 @@ The baseline family roles follow [Claude Code model configuration](https://code.
 7. Permit at most two simultaneous writers only when their verified workspace-relative file or directory boundaries are pairwise disjoint. Serialize overlaps, wildcards, missing boundaries, and shared integration surfaces; honor the separate native Codex concurrency ceiling.
 8. Record successful task affinity, failures, cooldowns, exact observed model ids, duration, and available token telemetry.
 9. On quota, outage, timeout, auth, model-unavailable, or insufficient output, fail over the narrow work item once to a provider-diverse alternate.
-10. Keep the parent Codex task on planning, assignment, steering, intervention, evidence review, user decisions, and reporting; project execution belongs to separate native or CLI workers.
+10. Keep current Codex productive on the critical path, integration, and final verification while separate workers handle only genuinely independent bounded lanes.
 
 Claude jobs feature-detect the installed CLI instead of relying on a fixed version. On Windows the bridge prefers Claude's native executable for exact argument transport, uses isolated non-persistent sessions, assigns bounded scout/reviewer/verifier/writer contracts, and accepts structured final evidence when supported. A small optional Claude plugin with the same roles lives under `claude-plugin/`; bridge safe mode uses explicit equivalent role instructions because safe mode suppresses plugin components.
 
@@ -85,7 +87,7 @@ The default horizon is five hours because it captures the immediate work period 
 
 Provider snapshots are cached to avoid repeatedly calling local CLIs or the Antigravity language server. Codex local capacity is read from a recent event with a shorter freshness boundary. `refresh=true` or `-RefreshInventory true` forces a fresh provider probe when a quota change, outage, or reset makes the cache stale in practice.
 
-The nominal capacity checkpoint is 20 minutes, reduced to five minutes when Codex reaches or approaches the manager reserve. It is an internal refresh deadline, not a recurring Codex task. External CLI jobs and their dependency state are durable under `.antigravity-bridge`, so they can continue without parent-task tokens; after a Codex reset, the same Goal/task calls `project-manager-status` and resumes the same run.
+Normal operation reuses inventory for up to 60 minutes and refreshes earlier only after a provider failure, quota reset, or material model change. Legacy durable project-manager runs retain internal checkpoints, but those checkpoints never create recurring Codex tasks. External jobs remain durable under `.antigravity-bridge` and can be read once after a Codex reset without reconstructing their prompts.
 
 ## Privacy Boundary
 

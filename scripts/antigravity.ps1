@@ -67,6 +67,7 @@ param(
   [object] $StopRun = $false,
   [string] $StopReason = "",
   [string] $ModelPreference = "auto",
+  [string] $PreferredProvider = "auto",
   [string] $AgyModel = "",
   [string] $AgyProject = "",
   [string] $AgyConversation = "",
@@ -85,6 +86,9 @@ param(
   [object] $CursorNewWindow = $false,
   [object] $CursorReuseWindow = $true,
   [string] $Mode = "fast",
+  [object] $ReadOnly = $true,
+  [ValidateSet("compact", "full")]
+  [string] $Detail = "compact",
   [string] $JobId = "latest",
   [string] $Reason = "Cancelled by Codex.",
   [int] $Limit = 10,
@@ -94,7 +98,7 @@ param(
   [object] $SkipModelSwitch = $false,
   [object] $HasWorkspaceWork = $true,
   [object] $IncludeCursor = $false,
-  [object] $ManagerOnly = $true,
+  [object] $ManagerOnly = $false,
   [object] $AllowPremiumModels = $false,
   [object] $AllowAntigravityCli = $false,
   [object] $UnattendedMode = $false,
@@ -104,7 +108,7 @@ param(
   [int] $RunDeadlineMinutes = 0,
   [int] $CapacityCheckpointMinutes = 20,
   [int] $CodexManagerReservePercent = 15,
-  [int] $MaxConcurrentCodexWorkers = 1,
+  [int] $MaxConcurrentCodexWorkers = 3,
   [int] $MaxParallelWriters = 2,
   [int] $MaxWorkerMinutes = 0,
   [int] $MaxClaudeOutputTokens = 12000,
@@ -224,23 +228,6 @@ function Stop-AntigravityForRepair {
   }
 }
 
-function Stop-DevToolsMcpProcesses {
-  $stopped = @()
-  $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*chrome-devtools-mcp*" })
-
-  foreach ($process in $processes) {
-    try {
-      Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-      $stopped += [int]$process.ProcessId
-    } catch {
-      # Ignore processes that exited between enumeration and stop.
-    }
-  }
-
-  $stopped
-}
-
 function Start-AntigravityAndWait {
   param(
     [int] $TimeoutSeconds = 20
@@ -272,10 +259,8 @@ function Repair-LiveDevTools {
     }
   }
 
-  $stoppedMcpBefore = @(Stop-DevToolsMcpProcesses)
   Stop-AntigravityForRepair
   Start-AntigravityAndWait -TimeoutSeconds 25
-  $stoppedMcpAfter = @(Stop-DevToolsMcpProcesses)
   $after = Get-LiveReportObject
 
   [PSCustomObject]@{
@@ -285,8 +270,7 @@ function Repair-LiveDevTools {
     Reason = "Live DevTools had no inspectable pages."
     Before = $before
     After = $after
-    StoppedDevToolsMcpProcessIds = @($stoppedMcpBefore + $stoppedMcpAfter)
-    StaleMcpNote = "If repair-live restarted Antigravity, any already-started ai-mobile-devtools MCP process must reconnect to the new DevTools port before UI actions."
+    ReconnectNote = "AI Mobile direct CDP actions reconnect to the current DevTools port on each on-demand call."
     ReadyForLiveUiInspection = [bool]($after.Running -and $after.PageCount -gt 0)
   }
 }
@@ -536,7 +520,7 @@ function Get-LiveReportObject {
     DevToolsPort = $status.DevToolsPort
     PageCount = @($pages).Count
     Pages = @($pages)
-    Note = "Use the DevTools page WebSocket or the ai-mobile-devtools MCP server for verified live UI inspection and interaction."
+    Note = "Use AI Mobile's on-demand direct CDP actions for verified live UI inspection and interaction."
   }
 }
 
@@ -914,9 +898,9 @@ function Get-DevToolsHealthText {
   $ready = $live.Running -and $pageCount -gt 0
   $status = if ($ready) { "ready" } else { "not-ready" }
   $next = if ($ready) {
-    "If ai-mobile-devtools still says Transport closed, do not retry the same MCP transport. Restart Codex so the DevTools MCP server is re-created, or use handoff-template/manual paste for this turn."
+    "The on-demand direct CDP route is ready. Do not start a separate DevTools MCP process."
   } else {
-    "Run repair-live once. If it restarts Antigravity, restart Codex before calling ai-mobile-devtools again."
+    "Run repair-live only when visible Antigravity UI state is genuinely required; otherwise keep the task on CLI workers or current Codex."
   }
 
   @(
@@ -926,7 +910,7 @@ function Get-DevToolsHealthText {
     "PageCount: $pageCount",
     "Next: $next",
     "",
-    "Rule: local helper commands can report health even when ai-mobile-devtools/list_pages fails with Transport closed."
+    "Rule: normal AI Mobile startup has no separate DevTools MCP transport to become stale."
   ) -join [Environment]::NewLine
 }
 
@@ -1143,6 +1127,26 @@ function Invoke-RunEfficientTask {
   $needsVisibleChatValue = -not [string]::IsNullOrWhiteSpace($ExpectedChat)
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $submitValue = ConvertTo-BooleanValue -Value $Submit -Default $true
+  $readOnlyValue = ConvertTo-BooleanValue -Value $ReadOnly -Default $true
+  $allowAntigravityCliValue = ConvertTo-BooleanValue -Value $AllowAntigravityCli -Default $false
+  $includePlanValue = ConvertTo-BooleanValue -Value $IncludePlan -Default $false
+  $workerMaxMinutes = if ($MaxWorkerMinutes -gt 0) { $MaxWorkerMinutes } else { 30 }
+  $expectedFileValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedFilesJson)) {
+    try {
+      $expectedFileValues = @(ConvertFrom-Json -InputObject $ExpectedFilesJson | ForEach-Object { [string]$_ })
+    } catch {
+      throw "ExpectedFilesJson must be a valid JSON array of workspace-relative paths. $($_.Exception.Message)"
+    }
+  }
+  $verificationCommandValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($VerificationCommandsJson)) {
+    try {
+      $verificationCommandValues = @(ConvertFrom-Json -InputObject $VerificationCommandsJson | ForEach-Object { $_ })
+    } catch {
+      throw "VerificationCommandsJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
   $runAgyModel = ""
   if ($PSBoundParameters.ContainsKey("AgyModel")) {
     $runAgyModel = $AgyModel
@@ -1157,6 +1161,7 @@ function Invoke-RunEfficientTask {
     workspace = $Workspace
     mode = $Mode
     nextStep = $NextStep
+    preferredProvider = $PreferredProvider
     codexBudgetState = $CodexBudgetState
     estimatedCodexInputTokens = $EstimatedCodexInputTokens
     hasWorkspaceWork = $hasWorkspaceWorkValue
@@ -1165,13 +1170,21 @@ function Invoke-RunEfficientTask {
     expectedProject = $ExpectedProject
     expectedChat = $ExpectedChat
     modelPreference = $ModelPreference
+    codexModel = $CodexWorkerModel
+    codexEffort = $CodexWorkerEffort
     agyModel = $runAgyModel
     claudeModel = $ClaudeModel
     allowPremiumModels = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
     cursorModel = $CursorModel
+    readOnly = $readOnlyValue
+    expectedFiles = $expectedFileValues
+    verificationCommands = $verificationCommandValues
+    maxMinutes = $workerMaxMinutes
+    allowAntigravityCli = $allowAntigravityCliValue
     start = $startValue
     submit = $submitValue
-  } | ConvertTo-Json -Compress
+    includePlan = $includePlanValue
+  } | ConvertTo-Json -Depth 8 -Compress
 
   $payloadFile = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-mobile-run-efficient-task-{0}.json" -f ([guid]::NewGuid().ToString("N")))
   try {
@@ -1192,7 +1205,7 @@ function Invoke-TeamCommand {
 
   $startValue = ConvertTo-BooleanValue -Value $Start -Default $true
   $includeCursorValue = ConvertTo-BooleanValue -Value $IncludeCursor -Default $false
-  $managerOnlyValue = ConvertTo-BooleanValue -Value $ManagerOnly -Default $true
+  $managerOnlyValue = ConvertTo-BooleanValue -Value $ManagerOnly -Default $false
   $allowPremiumModelsValue = ConvertTo-BooleanValue -Value $AllowPremiumModels -Default $false
   $allowAntigravityCliValue = ConvertTo-BooleanValue -Value $AllowAntigravityCli -Default $false
   $unattendedModeValue = ConvertTo-BooleanValue -Value $UnattendedMode -Default $false
@@ -1235,6 +1248,7 @@ function Invoke-TeamCommand {
     maxClaudeOutputTokens = $MaxClaudeOutputTokens
     maxClaudeBudgetUsd = $MaxClaudeBudgetUsd
     includePlan = $includePlanValue
+    detail = $Detail
     refreshInventory = $refreshInventoryValue
     refresh = $refreshInventoryValue
     waitSeconds = $WaitSeconds
@@ -1507,6 +1521,7 @@ function Invoke-BridgeJobCommand {
     jobId = $JobId
     reason = $Reason
     limit = $Limit
+    detail = $Detail
     waitSeconds = $WaitSeconds
     completedCodexItems = $completedCodexItemValues
     failedCodexItems = $failedCodexItemValues
