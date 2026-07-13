@@ -242,6 +242,7 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
+        projectGoal: { type: "string", description: "Complete immutable project outcome for orientation only. The worker must stay inside its bounded lane." },
         goal: { type: "string", description: "One bounded worker objective, not the complete project or parent transcript." },
         workspace: { type: "string", description: "Local workspace path where durable job artifacts should be written." },
         mode: { type: "string", description: "fast, deep, review, or patch.", default: "fast" },
@@ -263,6 +264,7 @@ const tools = [
         cursorModel: { type: "string", description: "Optional Cursor agent model." },
         readOnly: { type: "boolean", description: "Keep the worker read-only. Writers require explicit expectedFiles.", default: true },
         expectedFiles: { type: "array", items: { type: "string" }, maxItems: 20, description: "Exact workspace-relative file or directory boundary for a writer." },
+        acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 4, description: "Compact objective-specific evidence required from this lane." },
         verificationCommands: projectWorkItemSchema.properties.verificationCommands,
         maxMinutes: { type: "number", minimum: 1, maximum: 180, description: "Bounded worker lease; this is not a project deadline.", default: 30 },
         allowAntigravityCli: { type: "boolean", description: "Allow Antigravity CLI for this lane. Auto routing will not launch it without this permission.", default: false },
@@ -1333,6 +1335,25 @@ async function buildEfficiencyFlow(args = {}) {
   ].filter(Boolean).join("\n");
 }
 
+function efficientWorkerGoal(args = {}) {
+  const laneGoal = String(args.goal || "").trim();
+  const projectGoal = String(args.projectGoal || "").trim();
+  if (!projectGoal || projectGoal === laneGoal) return laneGoal;
+  return [
+    `Project outcome (orientation only): ${truncateText(projectGoal, 1200)}`,
+    `Your bounded lane: ${truncateText(laneGoal, 1600)}`,
+    "Advance the project outcome, but do not expand beyond this lane or duplicate the parent Codex critical path.",
+  ].join("\n");
+}
+
+function efficientWorkerNextStep(args = {}) {
+  const nextStep = String(args.nextStep || "Inspect the relevant files and write compact artifacts.").trim();
+  const criteria = Array.isArray(args.acceptanceCriteria)
+    ? args.acceptanceCriteria.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 4)
+    : [];
+  return criteria.length ? `${nextStep}\nAcceptance evidence: ${criteria.join(" | ")}` : nextStep;
+}
+
 async function runEfficientTask(args = {}) {
   const workspace = String(args.workspace || "").trim();
   const start = args.start !== false;
@@ -1354,10 +1375,10 @@ async function runEfficientTask(args = {}) {
     }
   }
   const base = {
-    goal: args.goal,
+    goal: efficientWorkerGoal(args),
     workspace,
     mode: args.mode || "fast",
-    nextStep: args.nextStep || "Inspect the relevant files and write compact artifacts.",
+    nextStep: efficientWorkerNextStep(args),
     readOnly: args.readOnly !== false,
     expectedFiles: Array.isArray(args.expectedFiles) ? args.expectedFiles : [],
     verificationCommands: Array.isArray(args.verificationCommands) ? args.verificationCommands : [],
@@ -1478,6 +1499,7 @@ async function runEfficientTask(args = {}) {
     `Started: ${started && !failed}`,
     `Submitted: ${submitted}`,
     `Provider: ${route}`,
+    args.projectGoal ? `ProjectOutcome: ${truncateText(args.projectGoal, 400)}` : null,
     `Tool: ${selectedTool}`,
     `State: ${failed ? "failed" : state}`,
     jobId ? `JobId: ${jobId}` : null,
@@ -10619,9 +10641,20 @@ function runSelfTest() {
     && managerSkill.includes("Codex keeps working")
     && managerSkill.includes("Inventory once")
     && managerSkill.includes("No orchestration loops")
+    && managerSkill.includes("RootOutcome")
+    && managerSkill.includes("Advance after success")
+    && managerSkill.includes("Do not stop merely to recommend the next known action")
     && managerSkill.includes("No premium-on-premium review chain")
     && managerSkill.toLowerCase().includes("do not search the filesystem"),
   "skill is compact and preserves the delivery-first token-efficiency contract");
+  const rootedLane = efficientWorkerGoal({ projectGoal: "Deliver one verified result every seven minutes.", goal: "Implement the bounded queue repair." });
+  assert(rootedLane.includes("Project outcome (orientation only)")
+    && rootedLane.includes("Your bounded lane")
+    && rootedLane.includes("seven minutes")
+    && rootedLane.includes("queue repair"),
+  "efficient worker handoffs preserve the root outcome without expanding the bounded lane");
+  assert(efficientWorkerNextStep({ nextStep: "Patch the queue.", acceptanceCriteria: ["Focused tests pass."] }).includes("Focused tests pass."),
+  "efficient worker handoffs include compact acceptance evidence");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "running" }]) === "running", "running team never reports completion");
   assert(teamStateFromJobs([{ state: "completed" }, { state: "failed" }]) === "partial", "mixed terminal team reports partial");
   const roster = parseAgyModelRoster("Gemini 3.5 Flash (Medium)\nClaude Opus 4.6 (Thinking)\n");

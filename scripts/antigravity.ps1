@@ -4,6 +4,7 @@ param(
   [string] $Command = "status",
 
   [string] $Goal = "",
+  [string] $ProjectGoal = "",
   [string] $Workspace = "",
   [string] $StatusFile = "notes/antigravity-status.md",
   [string] $NextStep = "Inspect the relevant files and write a compact status checkpoint.",
@@ -1147,6 +1148,14 @@ function Invoke-RunEfficientTask {
       throw "VerificationCommandsJson must be a valid JSON array. $($_.Exception.Message)"
     }
   }
+  $acceptanceValues = @()
+  if (-not [string]::IsNullOrWhiteSpace($AcceptanceCriteriaJson)) {
+    try {
+      $acceptanceValues = @(ConvertFrom-Json -InputObject $AcceptanceCriteriaJson | ForEach-Object { [string]$_ })
+    } catch {
+      throw "AcceptanceCriteriaJson must be a valid JSON array. $($_.Exception.Message)"
+    }
+  }
   $runAgyModel = ""
   if ($PSBoundParameters.ContainsKey("AgyModel")) {
     $runAgyModel = $AgyModel
@@ -1178,6 +1187,7 @@ function Invoke-RunEfficientTask {
     cursorModel = $CursorModel
     readOnly = $readOnlyValue
     expectedFiles = $expectedFileValues
+    acceptanceCriteria = $acceptanceValues
     verificationCommands = $verificationCommandValues
     maxMinutes = $workerMaxMinutes
     allowAntigravityCli = $allowAntigravityCliValue
@@ -1598,6 +1608,7 @@ function Invoke-CodexBridgeCommand {
     }
   }
   $payload = [PSCustomObject]@{
+    projectGoal = $ProjectGoal
     goal = $Goal
     workspace = $Workspace
     mode = $Mode

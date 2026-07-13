@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-07-13
+
+- Fixed milestone-only stopping: a passing slice now advances the same root project outcome instead of becoming an implicit completion boundary.
+- Added compact `RootOutcome`, `CompletionEvidence`, `CurrentBatch`, and dependency `Frontier` guidance for broad projects without restoring manager loops or polling.
+- Required healthy independent capacity to be used when it saves time, while current Codex continues the critical path and protects the 15% reserve.
+- Added `projectGoal` and lane acceptance evidence to `run-efficient-task`, preserving the complete outcome in every bounded worker handoff without sending the parent transcript.
+- Changed `Next` reporting to mean work already started or a concrete blocker, preventing known dependency-ready work from being deferred as a suggestion.
+
 ## 0.3.0 - 2026-07-13
 
 - Replaced the orchestration-heavy default after a live control-room audit found 115 automated turns, 315 status calls, and no shipped milestone. Current Codex now keeps the critical path and delegates only bounded independent lanes.

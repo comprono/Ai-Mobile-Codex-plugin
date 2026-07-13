@@ -11,11 +11,15 @@ AI Mobile helps the current Codex task deliver a project outcome faster and with
 
 The current Codex task normally remains the goal owner, architect, critical-path worker, integrator, verifier, and user contact. It delegates only bounded independent work whose expected time or context savings exceed dispatch and integration overhead.
 
+Keep the user's complete project outcome fixed until it is verified or explicitly changed. A passing milestone advances that outcome; it does not replace it and is not, by itself, a reason to stop.
+
 When this skill is loaded, do not search the filesystem, plugin cache, or memory for another AI Mobile skill. Use the normalized `ai-mobile-local` tools already exposed to this task.
 
 ## Non-Negotiable Defaults
 
 - **Codex keeps working.** Dispatching a worker never means waiting for it. Continue the current Codex-owned critical path immediately.
+- **The root outcome survives.** Never shrink a broad project objective into the first safe fix, review, or feature slice.
+- **Advance after success.** When a milestone passes, integrate it and start the next dependency-ready milestone in the same turn while useful capacity and authority remain.
 - **Inventory once.** Read capacity at task start, then reuse it. Refresh only after a quota reset, provider failure, material model change, or 60 minutes of active work.
 - **Delegate selectively.** Start zero to two independent lanes normally; use three only when boundaries and integration are unusually clear.
 - **No orchestration loops.** Do not create a Goal, Codex task, recurring automation, heartbeat, continuous cycle, or repeated status poll merely because this skill is used.
@@ -23,6 +27,25 @@ When this skill is loaded, do not search the filesystem, plugin cache, or memory
 - **Verification costs less than production.** Prefer tests, validators, diffs, type checks, and policy gates. No premium-on-premium review chain; do not send successful premium-model work to another premium model for reassurance.
 - **UI is fallback.** Startup is passive. Do not open Antigravity, Claude, Cursor, Chrome, or another desktop app unless visible state, authentication, or a verified CLI gap requires it.
 - **Unknown stays unknown.** Never invent model limits, reset times, authentication, completion, or savings.
+
+## Root Outcome And Delivery Batches
+
+For a broad project request, keep four compact facts in working context:
+
+- `RootOutcome`: the complete measurable user outcome;
+- `CompletionEvidence`: the proof required before the project can be called complete;
+- `CurrentBatch`: two to four dependency-aware milestones that materially advance the root outcome;
+- `Frontier`: the next ready work after the current batch.
+
+Do not turn `CurrentBatch` into a manager run. It is an execution batch inside the current Codex turn. Assign at least one milestone to current Codex. Use healthy external capacity for independent lanes when it saves elapsed time or context; if no lane is delegated, continue directly and state the concrete reason only in the final report.
+
+A milestone passing is an integration point. Continue to the next ready milestone without asking the user or ending the turn unless one of these is true:
+
+1. `RootOutcome` and `CompletionEvidence` are verified;
+2. a real authorization, safety, product decision, or missing fact requires the user;
+3. no dependency-ready work remains because of a concrete external blocker;
+4. protected Codex reserve has been reached and no suitable external capacity can continue; or
+5. the host turn must end, in which case report the exact verified frontier so the same project task can resume without rediscovery.
 
 ## When To Use It
 
@@ -37,19 +60,20 @@ Skip delegation for quick answers, tightly coupled edits, tiny single-file fixes
 
 ## Efficient Workflow
 
-1. Understand the measurable outcome, constraints, current state, acceptance gates, and smallest useful verification.
+1. Fix the `RootOutcome`, `CompletionEvidence`, constraints, current state, and acceptance gates. Do not substitute a nearby milestone for the root outcome.
 2. Call `resource-inventory` once with `detail=compact`. Do not start apps while inventorying.
-3. Make a short execution split:
+3. Build a two-to-four item `CurrentBatch` from the dependency frontier:
    - one current-Codex critical path;
    - zero to two independent worker lanes;
    - explicit ownership boundaries for every writer;
-   - a clear integration point.
-4. Select providers from current evidence, not a fixed UI/backend/testing map. Call `run-efficient-task` once per external lane with an explicit `preferredProvider` whenever inventory already identified the provider. Send only the bounded objective, relevant boundary, acceptance check, and next step. Never send the parent transcript.
+   - a clear integration point and following milestone.
+4. Select providers from current evidence, not a fixed UI/backend/testing map. Call `run-efficient-task` once per external lane with the immutable `projectGoal`, bounded lane `goal`, relevant boundary, acceptance criteria, and next step. Use an explicit `preferredProvider` whenever inventory already identified it. Never send the parent transcript.
 5. After each dispatch receipt, continue the Codex-owned work. Do not wait, poll, narrate the worker, or launch a reviewer.
 6. At the integration point, call `read-job` once with `detail=compact`. Use `detail=full` only when the compact blocker is insufficient for focused diagnosis.
 7. Inspect the bounded diff and run deterministic verification. Accept, repair narrowly, or reject the result.
 8. On one failed or no-change lane, either fail over once to a clearly better available provider or take the bounded lane back into current Codex. Never create a review/retry chain.
-9. Report material results, not orchestration activity.
+9. After integrating a milestone, immediately advance the dependency frontier and continue the batch. Do not stop merely to recommend the next known action.
+10. Report material results and the verified frontier, not orchestration activity.
 
 ## Resource Routing
 
@@ -69,6 +93,7 @@ Models and limits change. Discover current catalogs and quota windows; do not en
 
 - Plan over the next five hours only to decide what can run now and what resets soon. It is not a work deadline.
 - Protect 15% of shared Codex capacity for integration, steering, and recovery. Capacity above the reserve should be used when useful work exists; the reserve is not an excuse for idle Codex capacity.
+- When a broad goal has two or more genuinely independent ready lanes and healthy external capacity, dispatch at least one suitable lane unless the handoff would cost more than doing it directly. Never leave all independent capacity idle merely because the first Codex milestone is clear.
 - If Codex capacity is unknown, keep current Codex productive and limit speculative Codex-worker dispatch to one lane.
 - Apply the most restrictive capacity window that governs a model.
 - Treat a dedicated model window near reset as an opportunity only when a suitable high-value task exists. Never manufacture work to consume quota.
@@ -90,7 +115,7 @@ Give the user short evidence-backed updates at meaningful transitions:
 - `Active`: current Codex work and genuinely running worker lanes.
 - `Blocked`: concrete blocker and owner.
 - `Capacity`: only fresh relevant provider/model evidence.
-- `Next`: the next delivery action or decision.
+- `Next`: work already started, or the precise condition that prevented it from starting. Do not present a known dependency-ready action as a future suggestion and then stop.
 
 Worker dispatch, waiting, polling, retries, unchanged reviews, and a running supervisor are activity, not progress. Never present them as completed work.
 

@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Token-efficient Codex resource orchestration across bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Let Codex work with local AI workers without orchestration waste.",
-    "longDescription": "AI Mobile adds a compact capacity-aware worker layer to the current Codex task on Windows. Codex keeps the critical path and delegates only independent bounded work to authenticated Codex CLI, Claude Code, explicitly authorized Antigravity, and optional headless Cursor workers. Normal operation uses one passive inventory, immediate background dispatch, one compact result read, deterministic verification, and at most one justified failover. It creates no manager loop, Goal, heartbeat, schedule, or desktop popup by default.",
+    "longDescription": "AI Mobile adds a compact capacity-aware worker layer to the current Codex task on Windows. Codex preserves the complete project outcome, executes the critical path, advances through dependency-ready milestones, and delegates independent bounded work to authenticated Codex CLI, Claude Code, explicitly authorized Antigravity, and optional headless Cursor workers. Normal operation uses one passive inventory, immediate background dispatch, one compact result read, deterministic verification, and at most one justified failover. It creates no manager loop, Goal, heartbeat, schedule, or desktop popup by default.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -44,6 +44,7 @@
     "category": "Productivity",
     "capabilities": [
       "Token-efficient AI worker orchestration",
+      "Root-outcome delivery batches",
       "Passive resource inventory",
       "Current Codex critical-path ownership",
       "Standalone Codex CLI worker execution",
@@ -72,9 +73,9 @@
       "Public repo privacy scan"
     ],
     "defaultPrompt": [
-      "Use AI Mobile to finish this project efficiently",
+      "Use AI Mobile to drive this project to its complete verified outcome, advancing through dependency-ready milestones",
       "Show the compact AI Mobile resource inventory",
-      "Delegate one independent bounded review while Codex keeps working"
+      "Use available capacity for independent bounded work while Codex advances the critical path"
     ],
     "brandColor": "#14B8A6"
   }

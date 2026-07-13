@@ -15,6 +15,7 @@ AI Mobile follows five foundation rules:
 3. Only genuinely independent bounded work is delegated, normally to no more than two workers.
 4. Codex continues its own work immediately after dispatch; there is no polling or heartbeat loop.
 5. Deterministic checks run before any model review, and premium work is not sent to another premium model merely for reassurance.
+6. The complete project outcome remains fixed; a passing milestone triggers the next dependency-ready milestone instead of ending the work.
 
 Provider jobs are durable and write compact artifacts locally. A failed lane gets at most one justified failover; otherwise current Codex takes the bounded work back.
 
@@ -30,12 +31,15 @@ Constraints: <important boundaries>
 
 That is enough. The skill should:
 
+- preserve the complete outcome and its completion evidence;
 - inspect compact capacity once;
+- build a two-to-four item delivery batch from the current dependency frontier;
 - keep the critical path in the current Codex task;
 - dispatch only useful independent lanes;
 - continue Codex work instead of waiting;
 - collect each worker once at the integration point;
 - verify with tests, diffs, and policy gates;
+- advance to the next ready milestone in the same turn instead of stopping after the first passing slice;
 - report `Done / Active / Blocked / Capacity / Next` using evidence.
 
 Do not ask AI Mobile to create a control room, Goal, automation, schedule, or heartbeat unless that behavior is independently required. Continuous project work does not require recurring chat turns.
@@ -82,6 +86,8 @@ Model catalogs, effort levels, quota windows, reset times, and provider health a
 - Worker dispatch, waiting, retries, and unchanged reviews do not count as progress.
 
 The current Codex task protects a configurable 15% shared-capacity reserve, but capacity above that floor remains available for useful Codex work. A five-hour horizon influences routing; it is not a project deadline.
+
+For broad goals, the plugin keeps a compact `RootOutcome`, `CompletionEvidence`, `CurrentBatch`, and dependency `Frontier`. It stops only on verified completion, a real user/safety decision, a concrete external blocker, exhausted usable capacity, or a forced host-turn boundary. `Next` should describe work already started or the exact condition that prevented it.
 
 ## Durable Artifacts
 
