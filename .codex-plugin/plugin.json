@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Token-efficient Codex resource orchestration across bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -52,7 +52,7 @@
       "Portable plugin-relative MCP launch",
       "Lean MCP tool surface",
       "Codex usage-window telemetry",
-      "Protected Codex manager reserve",
+      "Protected Codex integration reserve",
       "Rolling five-hour capacity forecast",
       "Claude quota-window inspection",
       "Capability-aware model selection",

@@ -1,0 +1,62 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { boundaryAllows, changedFingerprints, collectDiff, fingerprint, statusPaths } = require("./git-evidence");
+const { event, jobDirectory, setStatus } = require("./job-store");
+const { runVerification } = require("./verification");
+const { bounded, readJson, redact, safeWorkspace, utcNow, writeJson } = require("./utils");
+const { runProvider } = require("../providers");
+
+function promptFor(contract) {
+  return [
+    "You are one bounded worker inside a larger project. Complete only this lane.",
+    `Project outcome: ${contract.projectGoal || "Not supplied"}`,
+    `Your lane: ${contract.goal}`,
+    `Workspace: ${contract.workspace}`,
+    `Mode: ${contract.readOnly ? "read-only" : "writer"}`,
+    contract.expectedFiles.length ? `Allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
+    contract.acceptanceCriteria.length ? `Acceptance criteria:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
+    contract.nextStep ? `Useful next step after this lane: ${contract.nextStep}` : "",
+    "Do not run another agent, start a manager loop, create recurring work, or broaden scope.",
+    "Finish with concise evidence: result, files changed, checks run, and one concrete blocker if any.",
+  ].filter(Boolean).join("\n\n");
+}
+
+function executeWorker(payload) {
+  const workspace = safeWorkspace(payload.workspace);
+  const dir = jobDirectory(workspace, payload.id);
+  const contract = readJson(path.join(dir, "contract.json"), null);
+  if (!contract) throw new Error("Missing job contract.");
+  const beforeStatus = statusPaths(workspace);
+  const observedBoundaries = contract.readOnly ? ["."] : [...contract.expectedFiles, ...beforeStatus.paths];
+  const before = fingerprint(workspace, observedBoundaries, 5000);
+  setStatus(dir, { state: "running", pid: process.pid, startedAt: readJson(path.join(dir, "status.json"), {}).startedAt || utcNow() });
+  const providerState = { [contract.provider]: { available: true, authenticated: true, command: contract.providerCommand } };
+  const response = runProvider(providerState, contract, promptFor(contract));
+  fs.writeFileSync(path.join(dir, "provider-output.txt"), redact(bounded(response.text, 80000)), "utf8");
+  const afterStatus = statusPaths(workspace);
+  const after = fingerprint(workspace, observedBoundaries, 5000);
+  const changed = [...new Set([...changedFingerprints(before, after), ...afterStatus.paths.filter((file) => !beforeStatus.paths.includes(file))])];
+  const outside = changed.filter((file) => !boundaryAllows(file, contract.expectedFiles));
+  const mutationViolation = contract.readOnly && changed.length > 0;
+  writeJson(path.join(dir, "changed-files.json"), changed);
+  fs.writeFileSync(path.join(dir, "worker.diff"), collectDiff(workspace, changed), "utf8");
+  writeJson(path.join(dir, "usage.json"), { provider: contract.provider, ...response.usage, capturedAt: utcNow() });
+  let verification = null;
+  let blocker = response.typedBlocker ? `${response.typedBlocker}: ${bounded(response.text, 500)}` : "";
+  if (outside.length) blocker = `Writer boundary violation: ${outside.join(", ")}`;
+  if (mutationViolation) blocker = `Read-only worker modified files: ${changed.join(", ")}`;
+  if (!blocker && response.ok) {
+    verification = runVerification(workspace, dir, contract.verificationCommands);
+    if (verification.required && !verification.passed) blocker = verification.blocker;
+  }
+  const state = !response.ok || blocker ? "failed" : "completed";
+  const result = [bounded(response.text, 7000), changed.length ? `\nChanged: ${changed.join(", ")}` : "\nChanged: none", blocker ? `\nBlocker: ${blocker}` : ""].join("").trim();
+  fs.writeFileSync(path.join(dir, "result.md"), `${result}\n`, "utf8");
+  setStatus(dir, { state, finishedAt: utcNow(), blocker, exitCode: response.exitCode ?? null, verificationState: verification?.state || "not-requested" });
+  event(dir, "worker.finished", { state, changedCount: changed.length });
+  return state === "completed" ? 0 : 1;
+}
+
+module.exports = { executeWorker, promptFor };

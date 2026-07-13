@@ -8,7 +8,7 @@ The goal is simple: **finish useful project work faster without spending more to
 
 ## Operating Model
 
-AI Mobile follows five foundation rules:
+AI Mobile follows six foundation rules:
 
 1. Current Codex owns the goal, critical path, integration, verification, and user communication.
 2. Capacity is inventoried once and refreshed only when evidence becomes stale or changes.
@@ -59,8 +59,6 @@ Only six tools are exposed to Codex by default:
 
 The default surface excludes project-manager cycles, status polling, setup tools, raw DevTools, and provider-specific internals. This materially reduces tool-schema context in every Codex turn.
 
-Set `AI_MOBILE_EXPOSE_ADVANCED_TOOLS=1` before starting Codex only for focused debugging or legacy compatibility. Advanced tools remain available, but they are not the normal workflow.
-
 ## Resource Selection
 
 - **Current Codex:** critical reasoning, integration, ambiguous debugging, final verification, protected live state, and external effects.
@@ -94,15 +92,17 @@ For broad goals, the plugin keeps a compact `RootOutcome`, `CompletionEvidence`,
 Worker jobs live under the project workspace:
 
 ```text
-.antigravity-bridge/jobs/<jobId>/
+.ai-mobile/jobs/<jobId>/
+  contract.json
   request.md
   status.json
+  events.jsonl
   result.md
-  changed-files.txt
-  diff.patch
+  changed-files.json
+  worker.diff
   test-output-summary.md
   verification-evidence.json
-  worker-telemetry.json
+  usage.json
 ```
 
 `read-job` returns a bounded summary by default. Raw status JSON, full diffs, and telemetry dumps require `detail=full` and should be used only for focused diagnosis.
@@ -137,16 +137,14 @@ The PowerShell helper remains available for setup and focused diagnostics:
 ```powershell
 # Setup and passive capacity checks
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" codex-usage
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Refresh
 
 # Direct bounded worker and compact result
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" submit-claude-job -Goal "<bounded lane>" -Workspace "<path>" -Mode review -ClaudeModel sonnet
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId latest
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<bounded lane>" -Workspace "<path>" -Provider claude -ReadOnly
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId "<job-id>"
 ```
 
-Legacy project-manager and continuous-cycle commands remain in the helper for compatibility. They are intentionally excluded from the default MCP surface because they add substantial context and management overhead.
+Old `.antigravity-bridge/jobs` artifacts remain readable, but the legacy manager, heartbeat, polling, and continuous-cycle commands are removed from the executable surface.
 
 ## Privacy And Safety
 
@@ -170,7 +168,7 @@ python -m pipx run plugin-scanner lint .
 python -m pipx run plugin-scanner verify .
 ```
 
-See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the evidence model and advanced routing details. The progressive-disclosure approach is informed by [Addy Osmani's agent-skills repository](https://github.com/addyosmani/agent-skills).
+See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the current evidence model and [AI Mobile Implementation Report](docs/IMPLEMENTATION_REPORT.md) for the researched target architecture, subtractive migration plan, and falsifiable release gates. The progressive-disclosure approach is informed by [Addy Osmani's agent-skills repository](https://github.com/addyosmani/agent-skills).
 
 ## License
 

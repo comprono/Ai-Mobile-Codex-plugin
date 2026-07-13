@@ -37,7 +37,7 @@ function copyPortableFixture() {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "ai mobile portable "));
   fs.cpSync(pluginRoot, fixture, {
     recursive: true,
-    filter: (source) => ![".git", ".antigravity-bridge", "node_modules"].includes(path.basename(source)),
+    filter: (source) => ![".git", ".ai-mobile", ".antigravity-bridge", "node_modules"].includes(path.basename(source)),
   });
   return fixture;
 }

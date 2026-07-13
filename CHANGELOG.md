@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 - 2026-07-14
+
+- Replaced the 733 KB orchestration monolith with a small modular MCP runtime and six public tools.
+- Removed executable manager, control-room, heartbeat, polling, supervisor, schedule, and continuous-cycle paths instead of hiding them behind a flag.
+- Added passive native CLI discovery for Codex, Claude Code, Antigravity, and real headless Cursor, with unknown quotas kept unknown.
+- Added a finite `.ai-mobile/jobs` lifecycle, append-only transitions, strict read-only and writer-boundary enforcement, compact results, and deterministic verification.
+- Made Antigravity CLI use the sandboxed default CLI project plus the declared workspace; normal execution never opens the desktop app.
+- Preserved read-only access to legacy `.antigravity-bridge/jobs` artifacts without retaining their runtime.
+- Reduced the runtime self-test from about 105 seconds and 289 legacy assertions to a focused sub-second contract suite.
+
 ## 0.3.1 - 2026-07-13
 
 - Fixed milestone-only stopping: a passing slice now advances the same root project outcome instead of becoming an implicit completion boundary.

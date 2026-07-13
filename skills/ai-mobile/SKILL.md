@@ -99,14 +99,6 @@ Models and limits change. Discover current catalogs and quota windows; do not en
 - Treat a dedicated model window near reset as an opportunity only when a suitable high-value task exists. Never manufacture work to consume quota.
 - Cool down a failed provider and allow one justified failover. Do not retry the same broken transport repeatedly.
 
-## Manager-Only Requests
-
-If the user explicitly asks for a manager-only or reporting-only parent task, keep that parent task out of project edits, but still dispatch real Codex/provider workers. Manager-only applies to the parent task, not the Codex platform.
-
-Use the same efficient workflow: one inventory, bounded dispatches, no polling, one result read, cheap verification, concise reports. If no worker can execute the critical path, report that concrete blocker immediately and offer adaptive mode. Do not spend turns maintaining an empty control room.
-
-The legacy `run-project-manager`, `project-manager-status`, continuous-cycle, and heartbeat surfaces are advanced compatibility tools. Do not use them in the normal workflow. Use them only when the user explicitly requests the legacy durable control-room protocol and accepts its additional overhead.
-
 ## Reporting
 
 Give the user short evidence-backed updates at meaningful transitions:
@@ -150,4 +142,4 @@ Normal operation uses only:
 
 If these tools are not exposed after a plugin update, tell the user that the current Codex task has stale plugin tools and needs one Codex restart. Do not search caches, reconstruct internal provider commands, or fall back to the legacy manager loop.
 
-Load an advanced reference only when its edge case is active: [capacity and routing](references/capacity-and-routing.md), [provider adapters](references/provider-adapters.md), [context capsules](references/context-capsules.md), or [legacy project manager](references/project-manager.md).
+Load a reference only when its edge case is active: [capacity and routing](references/capacity-and-routing.md), [provider adapters](references/provider-adapters.md), or [context capsules](references/context-capsules.md).

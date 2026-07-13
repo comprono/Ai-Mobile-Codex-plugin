@@ -1,104 +1,57 @@
 # Capacity-Aware Resource Orchestration
 
-AI Mobile treats Codex, Claude Code, Antigravity, and optional Cursor workers as one local delivery team. It does not assign work by a fixed UI/backend/testing split. It first inventories the resources that are actually available, then chooses a model for each bounded work item by capability, quality, capacity, reset timing, speed, reliability, and continuity.
+AI Mobile is a thin execution layer for the current Codex task. Codex keeps the project outcome, critical path, integration, verification, and user conversation. The plugin discovers usable local CLIs, delegates only independent bounded work with positive expected value, and returns compact evidence.
 
-Normal operation is intentionally smaller than the full architecture described here: current Codex keeps the critical path, calls compact inventory once, dispatches zero to two independent lanes, collects each result once, and verifies deterministically. Project-manager cycles and supervisors remain advanced compatibility mechanisms, not the default workflow.
+## Evidence Contract
 
-## Evidence Model
+Every provider record includes availability, authentication mode, source, freshness, and confidence. Exact quota or reset values are reported only when a supported local interface exposes them. Unknown remains unknown; the plugin never converts a subscription into an invented dollar balance.
 
-The orchestrator preserves the source and freshness of every capacity fact:
+| Provider | Passive evidence | Normal execution |
+| --- | --- | --- |
+| Codex | Native CLI version and ChatGPT login status | Current Codex by default; one bounded CLI worker only when shared reserve permits |
+| Claude Code | Native executable, version, and auth status | Noninteractive bounded CLI job using the existing subscription unless an API key is explicitly configured |
+| Antigravity | `agy` version and CLI availability | Sandboxed `default-cli-project` plus the declared workspace; named project id only when supplied |
+| Cursor | Real `cursor-agent` detection | Unavailable unless the headless agent actually exists |
 
-| Resource | Models | Capacity and reset evidence | Dispatch |
-| --- | --- | --- | --- |
-| Codex | Host agent schema plus local Codex model catalog | Bounded local `token_count` capacity windows when fresh; caller-visible fallback | Current Codex owns the critical path; separate workers are optional bounded lanes |
-| Claude Code | Installed aliases plus exact ids learned from CLI help or completed-run telemetry | Built-in `/usage` output, cached for 10 minutes | Headless CLI |
-| Antigravity CLI | `agy models` | CLI roster plus recent outcomes | Headless CLI |
-| Antigravity desktop | Full named model roster | Per-model remaining percentage and reset time while the local service is already running | UI only when visible project/chat state is required |
-| Cursor | UI and `cursor-agent` detection | Unknown unless a real headless agent reports it | UI fallback or headless agent when installed |
+Discovery is passive. It does not open, close, restart, or repair desktop applications. UI is a typed blocker for the current Codex task to handle only when visible state or authentication is genuinely required.
 
-Evidence is classified as measured, observed, cached, caller-provided, or unknown. Unknown values stay unknown.
+## Routing Contract
 
-## Codex Capacity And Effort
+1. Current Codex keeps tightly coupled, ambiguous, sensitive, and critical-path work.
+2. Small work stays direct because dispatch and review would cost more than execution.
+3. Claude Code is preferred for substantial independent repository work when authenticated.
+4. Explicitly authorized Antigravity CLI handles suitable read-only, research, browser-oriented, and inexpensive inspection lanes.
+5. Cursor is considered only when `cursor-agent` is installed.
+6. A separate Codex worker is last in automatic routing because it consumes the shared Codex plan.
+7. Writers require explicit, non-overlapping `expectedFiles`; read-only mutations and outside-boundary writes fail closed.
+8. The parent reads a worker once at its integration point and uses deterministic checks before any reasoning review.
+9. One concrete failure may justify one provider-diverse retry. There is no retry chain.
 
-The local reader scans only bounded tails of recent Codex JSONL session files and accepts only `event_msg` rows whose payload type is `token_count`. It normalizes current five-hour, seven-day, and future window shapes, plus numeric session token totals. Prompts, responses, file paths, and thread identifiers are discarded. Because this is an undocumented local event shape, stale or incompatible data fails closed.
+Model names and plan limits are deliberately not hardcoded as permanent truth. The private local profile can express user preferences without publishing personal usage data.
 
-Host-native model ids and reasoning efforts come from the current spawn-agent schema when exposed, with the local model catalog as a passive fallback. The planner selects only an effort supported by that model. Maximum efforts are reserved for material criticality or risk; availability alone is not a reason to spend them. The parent control-room task never impersonates a selected Codex worker: it first records a token-bound reservation, exposes the exact spawn action while reserved, binds the returned agent id on `started`, and requires compact completion evidence.
+## Finite Lifecycle
 
-Codex capacity windows currently apply to the shared Codex agent pool unless the observed source explicitly identifies a model-specific window. A private local allow pattern can restrict eligible catalog models without hardcoding those names into the public plugin.
+Each job has a finite state machine:
 
-Because standalone and host-native Codex workers consume that same shared pool, AI Mobile protects a configurable manager reserve (15% by default), penalizes Codex dispatch as headroom shrinks, and stops new Codex workers at the reserve. Default shared Codex-worker concurrency is one. A ChatGPT-authenticated standalone CLI is preferred for unattended durable work; the host-native transport is the fallback. Claude and Antigravity CLI workers use independent capacity and can continue in parallel through the durable supervisor.
-
-## Advanced Control-Room Compatibility
-
-The legacy `run-project-manager` and `project-manager-status` tools remain available behind the advanced tool flag for existing durable runs. They are not loaded into normal Codex tasks because their schemas and lifecycle add material context and management cost. New work should use compact inventory, bounded dispatch, one result read, and direct Codex integration.
-
-Persistent control rooms use `completionPolicy=continuous-management`. `projectVerified` and `projectVerificationFailed` are rejected by the bridge. A finished batch is recorded with `cycleVerified` or `cycleVerificationFailed`, guarded by the exact latest `RunId` and `ActiveCycleId`; `nextWorkItems` starts the next bounded cycle under the same run id while compact prior evidence is archived. Delayed retries and stale plans fail closed. Thus a read-only health check or no-op review cannot complete or replace the root project Goal.
-
-"Do not create another chat" is intentionally not part of the runtime contract. The precise rule is: do not create another user-facing Codex control-room task/thread. Native Codex subagents and headless Claude Code, Antigravity, and optional Cursor worker sessions/jobs remain allowed and expected behind that one task.
-
-An external writer still requires a verified file boundary. If discovery does not return one, the run inserts one bounded read-only scope-discovery item with a machine-readable `BOUNDARY <writer-id>:` contract. This is a scoping correction, not a provider failure: it does not consume the writer's failover allowance, and the original writer resumes only after exact existing files are recorded.
-
-## Claude Quota Windows
-
-Claude `/usage` can expose several overlapping windows:
-
-- a shared five-hour session window;
-- a shared seven-day all-model window;
-- zero or more model-specific seven-day windows, such as a Fable window.
-
-A model's effective remaining capacity is the most restrictive applicable window. For example:
-
-- Sonnet uses the shared five-hour and all-model weekly windows when no Sonnet-specific row is returned;
-- Fable uses both shared windows and the Fable-specific weekly window when that row is returned;
-- if a future account exposes a Sonnet, Opus, or other model-specific row, the same rule applies automatically.
-
-The plugin reads percentages and reset timestamps. It does not infer a raw token allowance from percentages.
-It also does not infer model quality from a separate quota bucket. Fable availability and its dedicated window are local runtime evidence; routing still applies a task-quality threshold and user preference.
-
-## Routing Policy
-
-The baseline family roles follow [Claude Code model configuration](https://code.claude.com/docs/en/model-config) and [cost guidance](https://code.claude.com/docs/en/costs); local alias ids and quota rows remain runtime evidence because they can change before public documentation does.
-
-1. Apply a quality floor before considering cost or reset timing.
-2. Apply the private local model allow/preference patterns before scoring; public defaults remain neutral.
-3. Use efficient Antigravity Flash models for tightly bounded browser/file-reading, discovery, summaries, and low-risk checks when their capability and quota evidence fit.
-4. Prefer Sonnet for substantial Claude implementation, architecture, debugging, and tests when its shared windows are healthy and the local profile permits it.
-5. Reserve Opus/Fable for complex premium reasoning or a justified dedicated-capacity opportunity.
-6. Penalize any resource below 15 percent effective remaining capacity and stop dispatching it when an applicable window is exhausted.
-7. Permit at most two simultaneous writers only when their verified workspace-relative file or directory boundaries are pairwise disjoint. Serialize overlaps, wildcards, missing boundaries, and shared integration surfaces; honor the separate native Codex concurrency ceiling.
-8. Record successful task affinity, failures, cooldowns, exact observed model ids, duration, and available token telemetry.
-9. On quota, outage, timeout, auth, model-unavailable, or insufficient output, fail over the narrow work item once to a provider-diverse alternate.
-10. Keep current Codex productive on the critical path, integration, and final verification while separate workers handle only genuinely independent bounded lanes.
-
-Claude jobs feature-detect the installed CLI instead of relying on a fixed version. On Windows the bridge prefers Claude's native executable for exact argument transport, uses isolated non-persistent sessions, assigns bounded scout/reviewer/verifier/writer contracts, and accepts structured final evidence when supported. A small optional Claude plugin with the same roles lives under `claude-plugin/`; bridge safe mode uses explicit equivalent role instructions because safe mode suppresses plugin components.
-
-Direct manual provider jobs default to 30 minutes. Orchestrated read-only calls receive shorter provider-aware leases (Antigravity 5-20 minutes; other providers 8-30 minutes), while writers retain complexity-adaptive 10-90 minute safety leases unless an explicit lower ceiling is supplied. Worker timeout/failover never limits the continuous project duration.
-
-## Five-Hour Planning Horizon
-
-The default horizon is five hours because it captures the immediate work period and Claude's short usage window. The planner compares:
-
-- work-item dependency order;
-- current effective remaining percentage;
-- model-specific and shared reset times;
-- recent platform success/failure evidence;
-- whether a result is needed before or after a reset;
-- whether waiting, using an alternate, or spending premium capacity gives the best expected outcome.
-
-Provider snapshots are cached to avoid repeatedly calling local CLIs or the Antigravity language server. Codex local capacity is read from a recent event with a shorter freshness boundary. `refresh=true` or `-RefreshInventory true` forces a fresh provider probe when a quota change, outage, or reset makes the cache stale in practice.
-
-Normal operation reuses inventory for up to 60 minutes and refreshes earlier only after a provider failure, quota reset, or material model change. Legacy durable project-manager runs retain internal checkpoints, but those checkpoints never create recurring Codex tasks. External jobs remain durable under `.antigravity-bridge` and can be read once after a Codex reset without reconstructing their prompts.
-
-## Privacy Boundary
-
-The machine cache stores model ids, safe software/version facts, quota percentages and reset times, and compact reliability telemetry. The project capsule stores bounded planning metadata and file fingerprints, not source contents. Neither stores prompts, chat transcripts, cookies, credentials, organization ids, email addresses, or active Antigravity chat titles.
-
-## Inspect The Current Team
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Workspace "<path>" -HorizonHours 5
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" codex-usage
-powershell -ExecutionPolicy Bypass -File "$HOME\plugins\ai-mobile\scripts\antigravity.ps1" claude-usage
+```text
+queued -> running -> completed | failed | cancelled
 ```
 
-Use `-RefreshInventory true` only when a fresh software/model/quota probe is needed. Normal orchestration reuses the safe short-lived snapshot.
+Artifacts live at `.ai-mobile/jobs/<jobId>/`. They contain the bounded contract, append-only transitions, compact result, attributable changed files, bounded diff, deterministic verification, and available usage evidence. Existing `.antigravity-bridge/jobs` artifacts are read-only compatibility inputs.
+
+There is no project manager, control room, heartbeat, schedule, repeated status poll, or continuous-cycle runtime. Long projects continue because the current Codex task advances verified dependency milestones, not because the plugin manufactures activity.
+
+## Efficiency Standard
+
+The plugin is useful only when all of these remain true:
+
+- exactly six small MCP tools are exposed;
+- startup opens no desktop application;
+- trivial work starts no worker;
+- inventory is cached and refreshed only after staleness or material failure;
+- a worker receives a bounded task capsule, never the parent transcript;
+- successful premium work is not sent to another premium model for reassurance;
+- dispatch, waiting, polling, and retries are never reported as project progress;
+- project completion remains a current-Codex judgment backed by end-to-end evidence.
+
+See [the implementation report](IMPLEMENTATION_REPORT.md) for the migration rationale and falsifiable release gates.
