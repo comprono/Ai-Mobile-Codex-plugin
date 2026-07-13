@@ -4,7 +4,7 @@ Use this reference only when automatic selection is uncertain.
 
 ## Evidence
 
-- `resource-inventory` is passive and cached for five minutes by the runtime. The skill may reuse a known snapshot longer when no provider event changed.
+- `resource-inventory` is passive and cached for up to one active hour. A known quota reset, provider failure, material model change, or explicit refresh invalidates it earlier. With a workspace, it also returns recent provider outcomes and cooldown evidence.
 - Availability means a native CLI exists and its authentication check passed where supported.
 - Capacity facts retain source and confidence. `null` means unknown, not empty or unlimited.
 - Current Codex has the best knowledge of its own visible usage window. Protect the user's configured integration reserve before starting a separate Codex worker.
@@ -19,7 +19,7 @@ expected execution/context saving
   > startup + task-capsule + integration + expected-failure cost
 ```
 
-Small or tightly coupled work stays with current Codex. For substantial independent work, prefer an explicitly eligible provider, otherwise authenticated Claude Code, authorized read-only Antigravity, real headless Cursor, then a separate Codex worker. This order protects shared Codex capacity; it is not a permanent quality ranking.
+Small, tightly coupled, semantically overlapping, or path-overlapping work stays with current Codex. For substantial independent work, the runtime scores task fit, capacity, billing mode, recent reliability, model policy, handoff size, bounded output, and integration cost. It does not use a permanent Claude-first or model-leaderboard order.
 
 Writers require explicit workspace-relative `expectedFiles`. Keep parallel writer boundaries disjoint. When evidence is unknown or stale, reduce concurrency instead of guessing.
 

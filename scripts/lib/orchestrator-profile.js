@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 4,
+  schemaVersion: 5,
   communicationStyle: "professional",
   communicationMode: "smart-compact",
   address: "",
@@ -14,12 +14,17 @@ const DEFAULT_PROFILE = Object.freeze({
   codexModelAllowPattern: "^gpt-",
   claudeModelAllowPattern: ".*",
   claudePreferredModelPattern: "(?!)",
-  antigravityPreferredTaskPattern: "(?!)",
+  antigravityPreferredTaskPattern: "browser|research|repository-scan|docs|discovery|scout|summary",
   modelPolicyReviewAfter: "",
   adaptiveRouting: true,
   cliFirst: true,
   uiFallbackOnly: true,
   antigravityAutoApprovePermissions: false,
+  subscriptionOnlyClaude: true,
+  codexReservePercent: 15,
+  maxExternalWorkers: 2,
+  minimumDelegationSavingsPercent: 20,
+  useExpiringPremiumCapacity: false,
 });
 
 function profilePath() {
@@ -45,7 +50,7 @@ function normalizeProfile(value = {}) {
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     communicationStyle: style,
     communicationMode: ["smart-compact", "standard", "detailed"].includes(String(value.communicationMode || "").toLowerCase())
       ? String(value.communicationMode).toLowerCase()
@@ -64,6 +69,11 @@ function normalizeProfile(value = {}) {
     cliFirst: value.cliFirst !== false,
     uiFallbackOnly: value.uiFallbackOnly !== false,
     antigravityAutoApprovePermissions: value.antigravityAutoApprovePermissions === true,
+    subscriptionOnlyClaude: value.subscriptionOnlyClaude !== false,
+    codexReservePercent: Math.max(5, Math.min(50, Number(value.codexReservePercent ?? DEFAULT_PROFILE.codexReservePercent))),
+    maxExternalWorkers: Math.max(1, Math.min(2, Number(value.maxExternalWorkers ?? DEFAULT_PROFILE.maxExternalWorkers))),
+    minimumDelegationSavingsPercent: Math.max(10, Math.min(70, Number(value.minimumDelegationSavingsPercent ?? DEFAULT_PROFILE.minimumDelegationSavingsPercent))),
+    useExpiringPremiumCapacity: value.useExpiringPremiumCapacity === true,
   };
 }
 

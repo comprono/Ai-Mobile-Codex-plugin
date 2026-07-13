@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 - 2026-07-14
+
+- Added a hard coordination contract: every dispatch declares the current-Codex lane, worker lane, independence reason, relevant files, and integration point; semantic overlap and path overlap stay in current Codex.
+- Replaced Claude-first automatic routing with transparent task-fit, capacity, billing, reliability, model-policy, and token-economics scoring.
+- Added duplicate active-lane rejection, a two-worker workspace ceiling, one-hour failure/reset-aware inventory caching, and one-hour provider cooldown after two consecutive transport failures.
+- Added real Claude subscription capacity discovery through the built-in `/usage` command, including five-hour, shared weekly, and Fable-specific windows, without a model call or account identity capture.
+- Removed dollar caps and dollar-balance output from Claude subscription lanes. PAYG caps appear only after explicit API billing authorization.
+- Restricted Claude workers to a minimal fixed system prompt and bounded local file tools. Read-only lanes get Read/Glob/Grep; writer lanes add Edit/Write while deterministic checks stay in the bridge.
+- Made Claude's structured-output schema derive from the lane's 1,200-2,000 token budget instead of using one oversized fixed schema.
+- Made the private Antigravity permission preference effective only for sandboxed read-only CLI lanes; automatic desktop launch and writer auto-approval remain forbidden.
+- Added provider reliability history, optional already-running Antigravity quota evidence, model-aware Flash selection, and automatic fallback away from a recently failing transport.
+- Added typed transport, timeout, capacity, authentication, authorization, and process blockers. A confirmed transport, timeout, or authentication outage cools that route immediately instead of requiring another wasted attempt.
+- Made terminal worker results collect once: compact rereads omit repeated output, carry usage/ownership evidence, and explicitly require integration before Codex redoes that lane. One read can wait locally for up to 60 seconds without model-side polling.
+- Added a real-project duplicate-analysis regression plus economic, billing, model-window, permission, collection, portability, and lifecycle tests.
+
 ## 0.4.1 - 2026-07-14
 
 - Added Smart Compact Communication: deep reasoning with answer-first, scan-friendly output and no filler, repeated prompts, tool narration, waiting commentary, or routine postambles.

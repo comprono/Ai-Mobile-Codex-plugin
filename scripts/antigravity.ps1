@@ -3,12 +3,15 @@ param(
   [string]$Workspace = (Get-Location).Path,
   [string]$Goal = '',
   [string]$ProjectGoal = '',
+  [string]$CurrentCodexGoal = '',
+  [string]$IndependenceReason = '',
   [ValidateSet('auto','codex','claude','antigravity','cursor')][string]$Provider = 'auto',
   [string[]]$ExpectedFiles = @(),
   [switch]$ReadOnly,
   [switch]$AllowAntigravity,
   [string]$JobId = '',
   [ValidateSet('compact','full')][string]$Detail = 'compact',
+  [ValidateRange(0,60)][int]$WaitSeconds = 0,
   [int]$TimeoutSeconds = 900,
   [switch]$Refresh
 )
@@ -40,11 +43,15 @@ switch ($Command) {
   }
   'run-efficient-task' {
     if (-not $Goal) { throw '-Goal is required.' }
+    if (-not $CurrentCodexGoal) { throw '-CurrentCodexGoal is required so the bridge can reject duplicate work.' }
+    if (-not $IndependenceReason) { throw '-IndependenceReason is required so the bridge can prove delegation value.' }
     if (-not $ReadOnly -and $ExpectedFiles.Count -eq 0) { throw 'Writer lanes require -ExpectedFiles.' }
     $payload = [ordered]@{
       workspace = (Resolve-Path -LiteralPath $Workspace).Path
       projectGoal = $ProjectGoal
       goal = $Goal
+      currentCodexGoal = $CurrentCodexGoal
+      independenceReason = $IndependenceReason
       preferredProvider = $Provider
       expectedFiles = @($ExpectedFiles)
       readOnly = [bool]$ReadOnly
@@ -60,7 +67,7 @@ switch ($Command) {
   }
   'read-job' {
     if (-not $JobId) { throw '-JobId is required.' }
-    Invoke-Node @('read-job-cli','--workspace',(Resolve-Path -LiteralPath $Workspace).Path,'--job-id',$JobId,'--detail',$Detail)
+    Invoke-Node @('read-job-cli','--workspace',(Resolve-Path -LiteralPath $Workspace).Path,'--job-id',$JobId,'--detail',$Detail,'--wait-seconds',"$WaitSeconds")
   }
   'verify-job' {
     if (-not $JobId) { throw '-JobId is required.' }

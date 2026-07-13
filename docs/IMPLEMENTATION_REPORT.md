@@ -1,8 +1,8 @@
 # AI Mobile Implementation Report
 
-Status: implemented in v0.4.0
+Status: lean runtime implemented in v0.5.0; comparative real-project measurement remains ongoing
 Research baseline: 2026-07-14
-Target: the release after `0.3.1`
+Target: `0.5.0`
 
 ## Executive Summary
 
@@ -10,7 +10,7 @@ AI Mobile should become a thin adaptive execution layer for one existing Codex p
 
 The implementation must optimize successful delivery, not worker activity. A resource is used only when its expected contribution is greater than its handoff, waiting, merge, review, failure, RAM, and billing costs. Small or tightly coupled work stays with current Codex. Independent bounded work can run in parallel. Deterministic tools handle deterministic checks. Premium reasoning is used only where the quality or risk justifies it.
 
-The current public skill already describes much of this operating model. The main defect is that the runtime still carries the previous control-room, continuous-management, heartbeat, polling, and large project-manager implementation inside a 12,000-line monolith. The next release must therefore be subtractive. It should move the six useful default tools onto a small native-first core, prove that core against direct-Codex baselines, and then remove the legacy machinery.
+The `0.3.1` runtime carried the previous control-room, continuous-management, heartbeat, polling, and large project-manager implementation inside a 12,000-line monolith. Version `0.5.0` is the subtractive release described here: the six useful tools now run on a small native-first core, and the legacy manager machinery is absent from the executable surface.
 
 This design does not claim that using more models always produces better work. It aims to be the strongest practical local orchestration system by combining four properties that are rarely present together:
 
@@ -105,9 +105,9 @@ These rules are ordered. A later rule cannot override an earlier one.
 - These bridges depend on browser state and are not official hidden APIs. They are unsuitable for default unattended orchestration.
 - A future adapter may support explicit, visible, user-directed ChatGPT consultation. It must reuse the user-selected conversation, expose structured stop reasons, avoid hidden authentication, and never launch or manipulate ChatGPT merely because AI Mobile was invoked.
 
-## Current-System Diagnosis
+## Pre-0.5.0 Diagnosis
 
-### What Already Works
+### Foundations Retained
 
 - The skill keeps current Codex on the critical path.
 - The default MCP surface contains only six high-level tools.
@@ -116,16 +116,16 @@ These rules are ordered. A later rule cannot override an earlier one.
 - Desktop applications are not supposed to open during startup or passive inventory.
 - The public docs already reject polling, heartbeat loops, and premium-on-premium review.
 
-### What Prevents The Design From Working Reliably
+### Problems Removed Or Isolated In 0.5.0
 
-1. `scripts/ai-mobile-local-mcp.js` is approximately 733 KB and over 12,000 lines. Tool registration, provider discovery, routing, process lifecycle, project management, result parsing, compatibility behavior, and self-tests share one file.
-2. The hidden advanced implementation still includes `run-project-manager`, `project-manager-status`, continuous cycles, manager-only behavior, heartbeat actions, large schemas, and repeated status semantics.
-3. Documentation says these paths are not normal, but keeping them inside the normal server preserves maintenance risk, contradictory behaviors, startup parsing cost, and accidental fallback paths.
-4. Codex capacity currently depends partly on undocumented local session telemetry even though app-server now provides supported rate-limit, model, usage, and lifecycle APIs.
-5. Provider ranking contains heuristic quality and cost assumptions that will drift as model names, effort levels, quota pools, and billing rules change.
-6. Antigravity passive discovery and authorization are too tightly coupled. A model roster query should not imply permission to execute or open the desktop.
-7. The old bridge namespace `.antigravity-bridge` makes a multi-provider product look provider-specific and mixes current jobs with legacy manager state.
-8. The test suite proves many internal branches but does not yet prove that using AI Mobile beats direct Codex on representative end-to-end tasks.
+1. The 733 KB monolith was replaced by small routing, capacity, provider, job, verification, and MCP modules; the entrypoint is now a thin dispatcher.
+2. `run-project-manager`, `project-manager-status`, continuous cycles, manager-only behavior, heartbeats, and repeated status semantics were removed from the executable MCP surface.
+3. Codex model and capacity discovery now uses the native app-server probe when available; unknown evidence remains unknown.
+4. Provider ranking is runtime-scored from task fit, measured capacity, billing mode, recent reliability, model policy, and handoff economics instead of a fixed provider order.
+5. Antigravity roster discovery is passive and separate from explicit execution authorization. Desktop startup is not part of inventory.
+6. New jobs use `.ai-mobile/jobs`; `.antigravity-bridge/jobs` is read-only compatibility input.
+7. Semantic overlap, file overlap, duplicate active lanes, unsafe billing, and low-value delegation are rejected before a model starts.
+8. Deterministic economic simulations and portable MCP tests now cover the previous duplicate-work failure. Comparative real-project measurement remains an ongoing release criterion rather than a completion claim.
 
 ## Target Architecture
 

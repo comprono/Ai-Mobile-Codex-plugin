@@ -8,15 +8,16 @@ The goal is simple: **finish useful project work faster without spending more to
 
 ## Operating Model
 
-AI Mobile follows seven foundation rules:
+AI Mobile follows eight foundation rules:
 
 1. Current Codex owns the goal, critical path, integration, verification, and user communication.
 2. Capacity is inventoried once and refreshed only when evidence becomes stale or changes.
-3. Only genuinely independent bounded work is delegated, normally to no more than two workers.
-4. Codex continues its own work immediately after dispatch; there is no polling or heartbeat loop.
-5. Deterministic checks run before any model review, and premium work is not sent to another premium model merely for reassurance.
-6. The complete project outcome remains fixed; a passing milestone triggers the next dependency-ready milestone instead of ending the work.
-7. Reasoning stays deep while communication stays compact, answer-first, and easy to scan.
+3. Only genuinely independent bounded work is delegated, never to more than two external workers.
+4. Every lane has one owner: Codex cannot redo a worker question or touch its files before collecting that result.
+5. Codex continues a disjoint critical-path lane immediately after dispatch; there is no polling or heartbeat loop.
+6. Deterministic checks run before any model review, and premium work is not sent to another premium model merely for reassurance.
+7. The complete project outcome remains fixed; a passing milestone triggers the next dependency-ready milestone instead of ending the work.
+8. Reasoning stays deep while communication stays compact, answer-first, and easy to scan.
 
 Provider jobs are durable and write compact artifacts locally. A failed lane gets at most one justified failover; otherwise current Codex takes the bounded work back.
 
@@ -52,8 +53,8 @@ Only six tools are exposed to Codex by default:
 | Tool | Purpose |
 | --- | --- |
 | `resource-inventory` | Passive compact capacity and availability evidence. |
-| `run-efficient-task` | Dispatch one bounded lane and return immediately. |
-| `read-job` | Read one compact worker result at integration time. |
+| `run-efficient-task` | Prove independence/economic value, score providers, and dispatch one bounded lane. |
+| `read-job` | Collect one compact result, optionally waiting locally for up to 60 seconds without model-side polling. |
 | `verify-job` | Run bridge-owned deterministic checks without another model. |
 | `cancel-job` | Stop one recorded local worker process. |
 | `orchestrator-profile` | Read or update private local routing preferences. |
@@ -70,15 +71,18 @@ The default surface excludes project-manager cycles, status polling, setup tools
 - **Cursor:** only when a true headless `cursor-agent` is installed and suitable.
 - **Local bridge:** deterministic tests and artifact validation with no model tokens.
 
-Model catalogs, effort levels, quota windows, reset times, and provider health are discovered from current local evidence. Unknown or stale limits remain unknown.
+Model catalogs, effort levels, quota windows, reset times, recent workspace outcomes, and provider health are discovered from current local evidence. Automatic routing scores task fit and recent reliability; it does not choose Claude first by default. Unknown or stale limits remain unknown.
 
 ## Token-Efficiency Contract
 
 - No plugin call for trivial or tightly coupled work.
 - One compact inventory per task, reset, or material provider failure.
 - No parent transcript in worker prompts.
+- No dispatch without a distinct current-Codex lane, an independence reason, and non-overlapping ownership.
 - Zero to two external lanes normally.
 - No repeated status reads.
+- Worker outputs default to 1,200-2,000 tokens. Claude subscriptions use measured quota windows and finite leases; dollar caps appear only for explicitly authorized PAYG lanes.
+- A completed worker result is integrated before Codex does that lane itself.
 - Compact result readback, with full diagnostics only after a real blocker.
 - Deterministic verification before qualitative review.
 - No premium-on-premium review chain.
@@ -112,7 +116,7 @@ Worker jobs live under the project workspace:
   usage.json
 ```
 
-`read-job` returns a bounded summary by default. Raw status JSON, full diffs, and telemetry dumps require `detail=full` and should be used only for focused diagnosis.
+`read-job` returns a bounded summary, provider/model usage, ownership, and an explicit integration instruction. At an integration point, `waitSeconds=60` can absorb a short remaining worker delay inside the local bridge instead of creating repeated model turns. The first terminal read records `collectedAt`; a second read is visibly marked as already collected. Raw status JSON, full diffs, and telemetry dumps require `detail=full` and should be used only for focused diagnosis.
 
 Writers require explicit non-overlapping file boundaries. The bridge records attributable changes and executes allowlisted verification commands as argument arrays rather than trusting worker prose.
 
@@ -147,8 +151,8 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Refresh
 
 # Direct bounded worker and compact result
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<bounded lane>" -Workspace "<path>" -Provider claude -ReadOnly
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId "<job-id>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<bounded worker lane>" -CurrentCodexGoal "<different Codex lane>" -IndependenceReason "<why they do not overlap>" -Workspace "<path>" -Provider claude -ReadOnly
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId "<job-id>" -WaitSeconds 60
 ```
 
 Old `.antigravity-bridge/jobs` artifacts remain readable, but the legacy manager, heartbeat, polling, and continuous-cycle commands are removed from the executable surface.
@@ -159,7 +163,7 @@ This is a local bridge. Private routing preferences are stored under `%LOCALAPPD
 
 The plugin does not bypass model quotas, authentication, CAPTCHA, login, OAuth, external-action confirmation, or workspace boundaries. Browser profiles, cookies, credentials, email/SMS codes, real submissions, sends, deploys, purchases, and destructive actions remain protected current-Codex operations requiring applicable authorization.
 
-Antigravity permission auto-approval is never implicit. Opening Codex must not open, close, restart, or repair Antigravity.
+Antigravity permission auto-approval is never implicit. A private local opt-in is honored only for sandboxed read-only CLI lanes; it never grants writer, UI, authentication, or external-action authority. Opening Codex must not open, close, restart, or repair Antigravity.
 
 ## Development
 
@@ -167,6 +171,7 @@ Run the local gates before publishing:
 
 ```powershell
 node ".\scripts\ai-mobile-local-mcp.js" self-test
+node ".\scripts\economic-regression.js"
 node ".\scripts\reliability-e2e.js"
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy

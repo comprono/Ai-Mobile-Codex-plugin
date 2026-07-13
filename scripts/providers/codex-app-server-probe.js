@@ -2,6 +2,7 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const { pluginVersion } = require("../lib/version");
 
 const command = process.argv[2];
 if (!command) process.exit(2);
@@ -45,4 +46,4 @@ child.stdout.on("data", (chunk) => {
   }
 });
 child.on("error", (error) => { stderr += error.message; clearTimeout(timer); finish(); });
-send({ id: 1, method: "initialize", params: { clientInfo: { name: "ai-mobile", version: "0.4.0" }, capabilities: { experimentalApi: true } } });
+send({ id: 1, method: "initialize", params: { clientInfo: { name: "ai-mobile", version: pluginVersion() }, capabilities: { experimentalApi: true } } });

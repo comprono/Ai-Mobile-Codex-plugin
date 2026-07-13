@@ -1,9 +1,11 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { commandResult, resolveCommand, bounded } = require("../core/utils");
 const { codexCliCandidates, parseCodexLoginStatus, buildCodexExecArgs, parseCodexJsonl } = require("../lib/codex-cli");
+const { parseClaudeAuth, parseClaudeModels, parseClaudeUsage } = require("./claude-usage");
 
 function version(command) {
   if (!command) return "";
@@ -56,23 +58,65 @@ function discoverClaude() {
   ]);
   if (!cli.found) return provider("claude", false, { reason: "Claude Code CLI not found." });
   const authResult = commandResult(cli.command, ["auth", "status"], { timeout: 7000 });
-  const text = `${authResult.stdout}\n${authResult.stderr}`;
-  const authenticated = authResult.status === 0 && !/not logged in|login required/i.test(text);
+  const auth = parseClaudeAuth(authResult.stdout);
+  const help = commandResult(cli.command, ["--help"], { timeout: 7000 });
+  const usageProbe = auth.loggedIn ? commandResult(cli.command, ["-p", "--safe-mode", "--tools", "", "--no-session-persistence", "--output-format", "text", "/usage"], { timeout: 20000 }) : { status: 1, stdout: "" };
+  const windows = usageProbe.status === 0 ? parseClaudeUsage(usageProbe.stdout) : [];
+  const shared = windows.filter((window) => window.scope === "all");
+  const authenticated = authResult.status === 0 && auth.loggedIn;
   return provider("claude", authenticated, {
-    command: cli.command, version: cli.version, authMode: process.env.ANTHROPIC_API_KEY ? "api-key" : "subscription",
+    command: cli.command, version: cli.version, authMode: auth.authMode, subscriptionType: auth.subscriptionType,
     confidence: authenticated ? "high" : "medium",
-    capacity: { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: "Claude Code does not expose a stable machine-readable subscription quota endpoint." },
+    models: help.status === 0 ? parseClaudeModels(help.stdout) : [],
+    capacity: windows.length
+      ? { windows, remainingPercent: shared.length ? Math.min(...shared.map((window) => window.remainingPercent)) : null, resetAt: [...shared].sort((a, b) => a.remainingPercent - b.remainingPercent)[0]?.resetAt || null, source: "claude-slash-usage", confidence: "high", note: "Built-in subscription usage; model-specific windows apply only to matching model families." }
+      : { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: usageProbe.status === 0 ? "Claude usage output contained no parseable windows." : "Claude built-in usage is unavailable; quota remains unknown." },
   });
+}
+
+function modelId(displayName) {
+  return String(displayName || "").toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function antigravityHelperCandidates() {
+  const values = [process.env.AI_MOBILE_ANTIGRAVITY_HELPER, path.join(os.homedir(), "plugins", "antigravity-2", "scripts", "antigravity.ps1")];
+  const cacheRoot = path.join(os.homedir(), ".codex", "plugins", "cache", "personal", "antigravity-2");
+  try {
+    for (const versionName of fs.readdirSync(cacheRoot)) values.push(path.join(cacheRoot, versionName, "scripts", "antigravity.ps1"));
+  } catch { /* optional integration */ }
+  return [...new Set(values.filter(Boolean))].filter((candidate) => fs.existsSync(candidate));
+}
+
+function antigravityLimits() {
+  for (const helper of antigravityHelperCandidates()) {
+    const result = commandResult("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "limits-summary"], { timeout: 20000, maxBuffer: 2 * 1024 * 1024 });
+    if (result.status !== 0) continue;
+    let body = null;
+    try { body = JSON.parse(result.stdout); } catch { continue; }
+    const available = (body?.RecommendedAvailable || []).map((row) => ({ id: modelId(row.Id || row.DisplayName), displayName: row.DisplayName || row.Id || "", remainingPercent: Number.isFinite(Number(row.RemainingPercent)) ? Number(row.RemainingPercent) : null, resetAt: row.ResetTimeUtc || null, status: "available" }));
+    const blocked = (body?.BlockedOrResetting || []).map((row) => ({ id: modelId(row.Id || row.DisplayName), displayName: row.DisplayName || row.Id || "", remainingPercent: 0, resetAt: row.ResetTimeUtc || null, status: "exhausted" }));
+    return { checked: true, source: body?.Source || "antigravity-2-local-helper", generatedAt: body?.GeneratedAtUtc || null, models: [...available, ...blocked] };
+  }
+  return { checked: false, source: "agy-roster", generatedAt: null, models: [] };
 }
 
 function discoverAntigravity() {
   const cli = resolveCommand("agy", []);
   if (!cli.found) return provider("antigravity", false, { reason: "Antigravity CLI (agy) not found." });
   const roster = commandResult(cli.command, ["models"], { timeout: 15000 });
-  const models = roster.status === 0 ? roster.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 50).map((displayName) => ({ id: displayName, displayName })) : [];
+  const models = roster.status === 0 ? roster.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 50).map((displayName) => ({ id: modelId(displayName), displayName })) : [];
+  const limits = antigravityLimits();
+  const measured = limits.models;
+  const enriched = models.map((model) => ({ ...model, quota: measured.find((row) => row.id === model.id || modelId(row.displayName) === model.id) || null }));
+  const availableMeasured = measured.filter((row) => row.status === "available" && Number.isFinite(row.remainingPercent));
   return provider("antigravity", true, {
-    command: cli.command, version: cli.version, authMode: "cli-session", confidence: "medium", models,
-    capacity: { remainingPercent: null, resetAt: null, source: "native-cli", note: "Availability is verified; exact model quota is unknown unless the CLI exposes it." },
+    command: cli.command, version: cli.version, authMode: "cli-session", confidence: limits.checked ? "high" : "medium", models: enriched,
+    capacity: limits.checked
+      ? { models: measured, remainingPercent: availableMeasured.length ? Math.max(...availableMeasured.map((row) => row.remainingPercent)) : 0, resetAt: null, source: limits.source, generatedAt: limits.generatedAt, note: "Per-model quota from an already-installed local Antigravity helper; no desktop app was started." }
+      : { remainingPercent: null, resetAt: null, source: "native-cli", note: "Availability is verified; exact model quota is unknown unless an optional local helper exposes it." },
   });
 }
 
@@ -91,41 +135,117 @@ function provider(id, available, extra = {}) {
   return { id, available, authenticated: available, confidence: available ? "medium" : "high", models: [], ...extra };
 }
 
+function classifyFailure(value, exitCode) {
+  if (exitCode === 0) return "";
+  const text = String(value || "").toLowerCase();
+  if (/transport closed|econnreset|econnrefused|socket hang up|broken pipe|connection (?:closed|reset|refused)/.test(text)) return "transport-unavailable";
+  if (/etimedout|timedout|timed? out|timeout|deadline exceeded/.test(text)) return "provider-timeout";
+  if (/rate.?limit|quota|usage limit|capacity.*exhaust|model.*unavailable/.test(text)) return "capacity-unavailable";
+  if (/not logged in|login required|unauthorized|authentication|invalid.*token|oauth/.test(text)) return "authentication-required";
+  if (/permission|approval required|access denied/.test(text)) return "authorization-required";
+  return "provider-process-failed";
+}
+
 function runCodex(providerState, contract, prompt) {
   const model = contract.model;
   if (!model) return { ok: false, typedBlocker: "model-unavailable", text: "No allowed Codex model was selected from the native catalog." };
   const args = buildCodexExecArgs({ workspace: contract.workspace, model, effort: contract.effort || "medium", readOnly: contract.readOnly });
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, input: prompt, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
   const parsed = parseCodexJsonl(result.stdout);
-  return { ok: result.status === 0 && !parsed.turnFailed, text: parsed.resultText || result.stderr, usage: { inputTokens: parsed.inputTokens, cachedInputTokens: parsed.cachedInputTokens, outputTokens: parsed.outputTokens }, exitCode: result.status };
+  const text = parsed.resultText || result.stderr;
+  const ok = result.status === 0 && !parsed.turnFailed;
+  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, usage: { model, inputTokens: parsed.inputTokens, cachedInputTokens: parsed.cachedInputTokens, outputTokens: parsed.outputTokens }, exitCode: result.status };
+}
+
+const CLAUDE_SYSTEM_PROMPT = "You are a bounded project worker. Follow the supplied lane contract exactly. Never broaden scope, delegate, or repeat work owned by current Codex. Use only the enabled local file tools. For read-only lanes do not edit. Stop when the requested evidence is sufficient and return only the required JSON.";
+
+function claudeResultSchema(maxOutputTokens = 1200) {
+  const characterBudget = Math.max(1200, Math.min(12000, Math.floor(Number(maxOutputTokens || 1200) * 3)));
+  return JSON.stringify({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      outcome: { type: "string", maxLength: Math.floor(characterBudget * 0.4) },
+      evidence: { type: "array", maxItems: 5, items: { type: "string", maxLength: Math.floor(characterBudget * 0.07) } },
+      checks: { type: "array", maxItems: 4, items: { type: "string", maxLength: Math.floor(characterBudget * 0.0375) } },
+      blocker: { type: "string", maxLength: Math.floor(characterBudget * 0.1) },
+    },
+    required: ["outcome", "evidence", "checks", "blocker"],
+  });
+}
+
+function buildClaudeArgs(contract, prompt) {
+  const args = [
+    "-p", "--output-format", "json", "--no-session-persistence", "--safe-mode", "--no-chrome",
+    "--disable-slash-commands", "--prompt-suggestions", "false", "--exclude-dynamic-system-prompt-sections",
+    "--system-prompt", CLAUDE_SYSTEM_PROMPT,
+    "--permission-mode", contract.readOnly ? "plan" : "acceptEdits",
+    "--json-schema", claudeResultSchema(contract.maxWorkerOutputTokens),
+    "--tools", contract.readOnly ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write",
+  ];
+  if (contract.model) args.push("--model", contract.model);
+  if (contract.effort) args.push("--effort", contract.effort);
+  if (contract.providerAuthMode === "api-key" && contract.maxApiBudgetUsd) args.push("--max-budget-usd", Number(contract.maxApiBudgetUsd).toFixed(2));
+  args.push(prompt);
+  return args;
+}
+
+function structuredClaudeText(body) {
+  const value = body?.structured_output || body?.structuredOutput;
+  if (!value || typeof value !== "object") return body?.result || body?.message || "";
+  return [
+    value.outcome,
+    ...(Array.isArray(value.evidence) ? value.evidence.map((item) => `- ${item}`) : []),
+    ...(Array.isArray(value.checks) ? value.checks.map((item) => `- Check: ${item}`) : []),
+    value.blocker ? `- Blocker: ${value.blocker}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function normalizeClaudeUsage(body, model) {
+  const raw = body?.usage || {};
+  const rows = Object.entries(body?.modelUsage || body?.model_usage || {});
+  const sum = (keys) => rows.reduce((total, [, value]) => total + Number(keys.map((key) => value?.[key]).find((item) => Number.isFinite(Number(item))) || 0), 0);
+  return {
+    model: body?.model || rows[0]?.[0] || model || "unknown",
+    inputTokens: raw.input_tokens ?? raw.inputTokens ?? (rows.length ? sum(["inputTokens", "input_tokens"]) : null),
+    cachedInputTokens: raw.cache_read_input_tokens ?? raw.cacheReadInputTokens ?? (rows.length ? sum(["cacheReadInputTokens", "cache_read_input_tokens"]) : null),
+    outputTokens: raw.output_tokens ?? raw.outputTokens ?? (rows.length ? sum(["outputTokens", "output_tokens"]) : null),
+    equivalentUsd: body?.total_cost_usd ?? body?.totalCostUsd ?? (rows.length ? sum(["costUSD", "costUsd", "cost_usd"]) : null),
+    billingNote: "Equivalent usage telemetry is not a subscription balance or confirmed charge.",
+  };
 }
 
 function runClaude(providerState, contract, prompt) {
-  const args = ["-p", "--output-format", "json", "--no-session-persistence", "--permission-mode", contract.readOnly ? "plan" : "acceptEdits"];
-  if (contract.model) args.push("--model", contract.model);
-  if (contract.effort) args.push("--effort", contract.effort);
-  args.push(prompt);
+  const args = buildClaudeArgs(contract, prompt);
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
   let body = null;
   try { body = JSON.parse(result.stdout); } catch { /* retain plain output */ }
-  const text = body?.result || body?.message || result.stdout || result.stderr;
-  return { ok: result.status === 0 && !body?.is_error, text, usage: body?.usage || {}, exitCode: result.status };
+  const text = structuredClaudeText(body) || result.stdout || result.stderr;
+  const ok = result.status === 0 && !body?.is_error;
+  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, usage: normalizeClaudeUsage(body, contract.model), exitCode: result.status };
+}
+
+function buildAntigravityArgs(contract, prompt) {
+  const args = ["--print", prompt, "--project", contract.projectId || "default-cli-project", "--add-dir", contract.workspace, "--sandbox", "--mode", contract.readOnly ? "plan" : "accept-edits", "--print-timeout", `${contract.timeoutSeconds}s`];
+  if (contract.antigravityAutoApprovePermissions) args.push("--dangerously-skip-permissions");
+  if (contract.conversation) args.push("--conversation", contract.conversation);
+  if (contract.model) args.push("--model", contract.model);
+  return args;
 }
 
 function runAntigravity(providerState, contract, prompt) {
   if (contract.needsUi) return { ok: false, typedBlocker: "ui-required", text: "This lane requires visible Antigravity UI state; CLI execution was intentionally not attempted." };
-  const args = ["--print", prompt, "--project", contract.projectId || "default-cli-project", "--add-dir", contract.workspace, "--sandbox"];
-  if (contract.conversation) args.push("--conversation", contract.conversation);
-  if (contract.model) args.push("--model", contract.model);
-  if (contract.mode) args.push("--mode", contract.mode);
+  const args = buildAntigravityArgs(contract, prompt);
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
-  return { ok: result.status === 0, text: result.stdout || result.stderr, usage: {}, exitCode: result.status };
+  const text = result.stdout || result.stderr;
+  return { ok: result.status === 0, typedBlocker: result.status === 0 ? "" : classifyFailure(text, result.status), text, usage: { model: contract.model || "unknown" }, exitCode: result.status };
 }
 
 function runCursor(providerState, contract, prompt) {
   const args = ["-p", "--workspace", contract.workspace, prompt];
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
-  return { ok: result.status === 0, text: result.stdout || result.stderr, usage: {}, exitCode: result.status };
+  const text = result.stdout || result.stderr;
+  return { ok: result.status === 0, typedBlocker: result.status === 0 ? "" : classifyFailure(text, result.status), text, usage: {}, exitCode: result.status };
 }
 
 function runProvider(state, contract, prompt) {
@@ -142,4 +262,4 @@ function discoverAll() {
   return { codex: discoverCodex(), claude: discoverClaude(), antigravity: discoverAntigravity(), cursor: discoverCursor() };
 }
 
-module.exports = { discoverAll, runProvider };
+module.exports = { buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, normalizeClaudeUsage, runProvider };
