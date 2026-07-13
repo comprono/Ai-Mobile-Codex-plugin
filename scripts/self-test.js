@@ -13,6 +13,7 @@ const { orchestrateTask } = require("./core/task-orchestrator");
 const { runVerification } = require("./core/verification");
 const { communicationContract } = require("./core/worker");
 const { normalizeProfile } = require("./lib/orchestrator-profile");
+const { assertCurrentRuntime, comparePluginVersions, runtimeVersionInfo } = require("./lib/version");
 const { buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure } = require("./providers");
 const { parseClaudeAuth, parseClaudeModels, parseClaudeUsage } = require("./providers/claude-usage");
 
@@ -63,6 +64,23 @@ function run() {
     assert.equal(dispatchSchema.properties.candidateLanes.minItems, 1);
     assert.equal(dispatchSchema.properties.candidateLanes.maxItems, 2);
     assert.equal(TOOLS.find((tool) => tool.name === "read-job").inputSchema.properties.waitSeconds.maximum, 60);
+
+    assert.ok(comparePluginVersions("0.5.1+codex.20260713222133", "0.5.2+codex.20260714070000") < 0);
+    assert.ok(comparePluginVersions("0.5.2+codex.20260714070000", "0.5.2+codex.20260714080000") < 0);
+    const cacheRoot = path.join(temp, "cache", "personal", "ai-mobile");
+    const staleRoot = path.join(cacheRoot, "0.5.1+codex.20260713222133");
+    const currentRoot = path.join(cacheRoot, "0.5.2+codex.20260714080000");
+    for (const root of [staleRoot, currentRoot]) {
+      fs.mkdirSync(path.join(root, ".codex-plugin"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".codex-plugin", "plugin.json"), `${JSON.stringify({ version: path.basename(root) })}\n`);
+    }
+    assert.deepEqual(runtimeVersionInfo(staleRoot), {
+      stale: true,
+      currentVersion: "0.5.1+codex.20260713222133",
+      newestVersion: "0.5.2+codex.20260714080000",
+    });
+    assert.throws(() => assertCurrentRuntime(staleRoot), /STALE AI MOBILE TASK.*fresh Codex task/i);
+    assert.equal(runtimeVersionInfo(currentRoot).stale, false);
 
     const workerContracts = [];
     const finiteArgs = {
@@ -229,7 +247,7 @@ function run() {
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
-  return { ok: true, assertions: 77, durationMs: Date.now() - started, tools: TOOLS.length };
+  return { ok: true, assertions: 83, durationMs: Date.now() - started, tools: TOOLS.length };
 }
 
 module.exports = { run };

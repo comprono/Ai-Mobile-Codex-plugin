@@ -9,7 +9,7 @@ const { compactCapacity, orchestrateTask } = require("../core/task-orchestrator"
 const { runVerification } = require("../core/verification");
 const { readJson, safeWorkspace } = require("../core/utils");
 const { readProfile, writeProfile } = require("../lib/orchestrator-profile");
-const { pluginVersion } = require("../lib/version");
+const { assertCurrentRuntime, pluginVersion } = require("../lib/version");
 
 const TOOLS = [
   { name: "orchestrate-task", description: "MANDATORY FIRST tool after an explicit @ai-mobile project request. Before any project shell, file, browser, or runtime action, create one finite execution contract, inventory capacity, keep Codex on a concrete critical path, and route one or two independent candidate lanes. This is not a manager loop.", inputSchema: { type: "object", required: ["workspace", "rootOutcome", "completionEvidence", "currentCodexGoal", "candidateLanes"], properties: {
@@ -27,6 +27,7 @@ const TOOLS = [
 
 function content(value, isError = false) { return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError }; }
 function invoke(name, args = {}, entrypoint) {
+  assertCurrentRuntime();
   if (name === "orchestrator-profile") return args.action === "update" ? writeProfile(args.patch || {}) : readProfile();
   if (name === "orchestrate-task") {
     const workspace = safeWorkspace(args.workspace);

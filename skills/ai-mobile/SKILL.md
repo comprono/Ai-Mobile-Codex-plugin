@@ -107,6 +107,6 @@ Normal operation exposes six tools:
 - `resource-inventory`: explicit diagnostic refresh only, not project startup;
 - `orchestrator-profile`: private local routing and communication preferences.
 
-If `orchestrate-task` is missing after an update, the current Codex task has stale plugin tools. Tell the user one Codex restart is required. Do not reconstruct provider commands, search caches, or restore the legacy manager loop.
+If `orchestrate-task` is missing after an update, or a tool returns `STALE AI MOBILE TASK`, stop every AI Mobile call in that task. Tell the user to restart Codex if the update was installed while Codex was open, then start a fresh Codex task. Existing tasks cannot reload plugin skills or MCP schemas. Do not reconstruct provider commands, search caches, retry inventory, or restore the legacy manager loop.
 
 Load a reference only when its edge case is active: [capacity and routing](references/capacity-and-routing.md), [provider adapters](references/provider-adapters.md), or [context capsules](references/context-capsules.md).

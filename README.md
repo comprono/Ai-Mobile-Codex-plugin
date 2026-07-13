@@ -129,7 +129,7 @@ git clone https://github.com/comprono/Ai-Mobile-Codex-plugin.git "$env:USERPROFI
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
 ```
 
-Restart Codex after installation or update so the current task receives the new skill and tool schemas.
+Restart Codex after installation or update, then start a fresh Codex task. Existing tasks keep the plugin skill and MCP schemas they loaded when they started and cannot be upgraded in place. AI Mobile rejects stale-task calls before inventory or worker execution.
 
 Requirements:
 

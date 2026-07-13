@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 - 2026-07-14
+
+- Added a runtime-version guard that detects when an existing Codex task is bound to an older installed AI Mobile cache.
+- Stale tasks now reject every plugin operation before inventory, dispatch, or worker execution and explain that a fresh Codex task is required to load the new skill and MCP schema.
+- Added regression coverage for semantic versions, cachebuster ordering, and stale-versus-current installed cache detection.
+
 ## 0.5.1 - 2026-07-14
 
 - Replaced the advisory inventory-then-dispatch startup with one finite `orchestrate-task` entrypoint that must run first after an explicit AI Mobile project invocation.
