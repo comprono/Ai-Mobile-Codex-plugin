@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const pluginRoot = path.resolve(__dirname, "..");
+const expectedRuntimeVersion = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8")).version;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -88,7 +89,7 @@ async function smokePortableLocalMcp(fixture, config) {
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
     const responses = await pending;
     assert.equal(responses.get(1)?.result?.serverInfo?.name, "ai-mobile-local", "portable MCP initializes from copied path");
-    assert.equal(responses.get(1)?.result?.serverInfo?.version, "0.5.1", "runtime version comes from the copied plugin manifest");
+    assert.equal(responses.get(1)?.result?.serverInfo?.version, expectedRuntimeVersion, "runtime version comes from the copied plugin manifest, including any install cachebuster");
     const exposedTools = responses.get(2)?.result?.tools || [];
     const toolNames = new Set(exposedTools.map((tool) => tool.name));
     for (const required of ["orchestrate-task", "read-job", "verify-job", "cancel-job", "resource-inventory", "orchestrator-profile"]) {
