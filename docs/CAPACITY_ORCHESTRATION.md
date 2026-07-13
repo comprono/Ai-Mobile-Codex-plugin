@@ -2,6 +2,12 @@
 
 AI Mobile is a thin execution layer for the current Codex task. Codex keeps the project outcome, critical path, integration, verification, and user conversation. The plugin discovers usable local CLIs, delegates only independent bounded work with positive expected value, and returns compact evidence.
 
+## Mandatory First-Call Contract
+
+An explicit `@ai-mobile` project request begins with one `orchestrate-task` call before project inspection or execution. That finite call records the complete root outcome and completion evidence, passively inventories current capacity, assigns a concrete critical-path lane to current Codex, and routes at most two independent candidates. It replaces the former separate inventory and dispatch calls.
+
+The receipt is an execution contract, not a manager process. Codex starts its lane immediately, worker results are collected once at their integration points, and a task record is retained at `.ai-mobile/tasks/<taskId>.json`. Repeating the same candidate lane for the same root outcome is rejected before another worker can consume capacity.
+
 ## Evidence Contract
 
 Every provider record includes availability, authentication mode, source, freshness, and confidence. Exact quota or reset values are reported only when a supported local interface exposes them. Unknown remains unknown; the plugin never converts a subscription into an invented dollar balance.
@@ -38,7 +44,7 @@ Each job has a finite state machine:
 queued -> starting -> running -> completed | failed | cancelled
 ```
 
-Artifacts live at `.ai-mobile/jobs/<jobId>/`. They contain the bounded contract, append-only transitions, compact result, attributable changed files, bounded diff, deterministic verification, and available usage evidence. Existing `.antigravity-bridge/jobs` artifacts are read-only compatibility inputs.
+The root contract lives at `.ai-mobile/tasks/<taskId>.json`. Worker artifacts live at `.ai-mobile/jobs/<jobId>/` and contain the bounded contract, append-only transitions, compact result, attributable changed files, bounded diff, deterministic verification, and available usage evidence. Existing `.antigravity-bridge/jobs` artifacts are read-only compatibility inputs.
 
 There is no project manager, control room, heartbeat, schedule, repeated status poll, or continuous-cycle runtime. Long projects continue because the current Codex task advances verified dependency milestones, not because the plugin manufactures activity.
 
@@ -47,9 +53,10 @@ There is no project manager, control room, heartbeat, schedule, repeated status 
 The plugin is useful only when all of these remain true:
 
 - exactly six small MCP tools are exposed;
+- `orchestrate-task` is the first visible tool and combines startup inventory with bounded dispatch;
 - startup opens no desktop application;
 - trivial work starts no worker;
-- inventory is cached for up to one active hour and refreshed earlier after a known reset or material provider failure;
+- capacity evidence is cached for up to one active hour and refreshed earlier after a known reset or material provider failure;
 - a worker receives a bounded task capsule, never the parent transcript;
 - duplicate semantic lanes, overlapping paths, and duplicate active jobs are rejected before model use;
 - ordinary worker output is capped at 1,200-2,000 tokens and terminal usage is visible in compact readback;

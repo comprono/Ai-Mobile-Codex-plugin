@@ -122,6 +122,9 @@ function readJob(workspaceValue, id, detail = "compact", waitSeconds = 0) {
   const includeResult = terminal && (!alreadyCollected || detail === "full" || found.legacy);
   const result = {
     jobId: id, state: status.state || "unknown", provider,
+    taskId: contract.taskId || null,
+    rootOutcome: contract.projectGoal || "",
+    completionEvidence: contract.completionEvidence || [],
     blocker: status.blocker || "", startedAt: status.startedAt || null, finishedAt: status.finishedAt || null,
     waitedSeconds: Number(((Date.now() - waitStarted) / 1000).toFixed(1)),
     collectionReady: terminal,
@@ -141,7 +144,7 @@ function readJob(workspaceValue, id, detail = "compact", waitSeconds = 0) {
     },
     ownership: { currentCodex: contract.currentCodexGoal || "", worker: contract.goal || "", workerFiles: [...(contract.relevantFiles || []), ...(contract.expectedFiles || [])] },
     integration: terminal
-      ? { required: status.state === "completed", instruction: alreadyCollected && detail !== "full" && !found.legacy ? "This result was already collected, so compact mode did not repeat it. Use the prior result; request full detail only to recover from an interrupted integration." : (status.state === "completed" ? "Use this result now before doing or finalizing the worker lane. Do not independently redo the same analysis." : "Use this blocker once; either take the lane into current Codex or fail over once to a materially different provider.") }
+      ? { required: status.state === "completed", projectCompleteAllowed: false, instruction: alreadyCollected && detail !== "full" && !found.legacy ? "This result was already collected, so compact mode did not repeat it. Use the prior result; request full detail only to recover from an interrupted integration." : (status.state === "completed" ? "Integrate this result once, then continue the root outcome. Worker completion alone never completes the project." : "Use this blocker once; either take the lane into current Codex or fail over once to a materially different provider.") }
       : { required: false, instruction: "Continue the disjoint current-Codex lane. Do not poll this job; collect it once at the declared integration point or lease." },
   };
   if (detail === "full") {

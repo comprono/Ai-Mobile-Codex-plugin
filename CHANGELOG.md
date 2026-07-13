@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 - 2026-07-14
+
+- Replaced the advisory inventory-then-dispatch startup with one finite `orchestrate-task` entrypoint that must run first after an explicit AI Mobile project invocation.
+- Preserved the measurable root outcome and end-to-end completion evidence in a durable task contract while assigning current Codex concrete critical-path work immediately.
+- Added bounded one-call capacity inventory and routing for one or two independent candidates, compact receipts, duplicate root-lane rejection, and a hard worker-completion firewall.
+- Removed the legacy `run-efficient-task` CLI/helper surface so documentation, skills, MCP tools, and manual diagnostics expose one startup path.
+- Added a zero-model regression reproducing the prior inventory-only failure and proving that Codex remains active while useful Claude and Antigravity lanes start without a manager loop.
+
 ## 0.5.0 - 2026-07-14
 
 - Added a hard coordination contract: every dispatch declares the current-Codex lane, worker lane, independence reason, relevant files, and integration point; semantic overlap and path overlap stay in current Codex.

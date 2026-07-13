@@ -1,8 +1,8 @@
 # AI Mobile Implementation Report
 
-Status: lean runtime implemented in v0.5.0; comparative real-project measurement remains ongoing
+Status: lean runtime implemented in v0.5.0; finite first-call correction implemented in v0.5.1; comparative real-project measurement remains ongoing
 Research baseline: 2026-07-14
-Target: `0.5.0`
+Current target: `0.5.1`
 
 ## Executive Summary
 
@@ -10,7 +10,7 @@ AI Mobile should become a thin adaptive execution layer for one existing Codex p
 
 The implementation must optimize successful delivery, not worker activity. A resource is used only when its expected contribution is greater than its handoff, waiting, merge, review, failure, RAM, and billing costs. Small or tightly coupled work stays with current Codex. Independent bounded work can run in parallel. Deterministic tools handle deterministic checks. Premium reasoning is used only where the quality or risk justifies it.
 
-The `0.3.1` runtime carried the previous control-room, continuous-management, heartbeat, polling, and large project-manager implementation inside a 12,000-line monolith. Version `0.5.0` is the subtractive release described here: the six useful tools now run on a small native-first core, and the legacy manager machinery is absent from the executable surface.
+The `0.3.1` runtime carried the previous control-room, continuous-management, heartbeat, polling, and large project-manager implementation inside a 12,000-line monolith. Version `0.5.0` removed that machinery, but real-task testing exposed one remaining gap: inventory and dispatch were separate advisory steps, so Codex could inspect extensively, call only inventory, and never orchestrate. Version `0.5.1` closes that gap with one finite mandatory-first `orchestrate-task` contract while keeping the legacy manager machinery absent.
 
 This design does not claim that using more models always produces better work. It aims to be the strongest practical local orchestration system by combining four properties that are rarely present together:
 

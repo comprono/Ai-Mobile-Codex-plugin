@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
-  "version": "0.5.0",
-  "description": "Token-efficient Codex resource orchestration across bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
+  "version": "0.5.1",
+  "description": "Finite, token-efficient Codex orchestration across bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "license": "MIT",
@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Let Codex work with local AI workers without orchestration waste.",
-    "longDescription": "AI Mobile adds a compact capacity-aware worker layer to the current Codex task on Windows. Codex preserves the complete project outcome and owns a clearly separate critical path while economically positive lanes may run through authenticated Codex CLI, Claude Code, explicitly authorized Antigravity, or optional headless Cursor. Runtime gates reject duplicated goals, overlapping files, unsafe billing, exhausted capacity, provider cooldowns, and low-value handoffs before model use. Claude subscription routing reads real five-hour, shared-weekly, and model-specific usage windows without displaying a dollar balance. Normal operation uses one passive inventory, one bounded dispatch, one terminal result collection, deterministic verification, and no manager loop, Goal, heartbeat, schedule, or desktop popup.",
+    "longDescription": "AI Mobile adds a compact capacity-aware worker layer to the current Codex task on Windows. An explicit project invocation begins with one finite orchestration call that preserves the root outcome, inventories current capacity, assigns current Codex a concrete critical path, and routes at most two economically positive independent lanes through authenticated Codex CLI, Claude Code, explicitly authorized Antigravity, or optional headless Cursor. Runtime gates reject duplicated goals, repeated root lanes, overlapping files, unsafe billing, exhausted capacity, provider cooldowns, and low-value handoffs before model use. Claude subscription routing reads real five-hour, shared-weekly, and model-specific usage windows without displaying a dollar balance. There is no manager loop, Goal, heartbeat, schedule, repeated poll, or desktop popup.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -44,6 +44,7 @@
     "category": "Productivity",
     "capabilities": [
       "Token-efficient AI worker orchestration",
+      "Finite first-call execution contract",
       "Smart compact communication",
       "Root-outcome delivery batches",
       "Passive resource inventory",
@@ -58,6 +59,7 @@
       "Claude quota-window inspection",
       "Capability-aware model selection",
       "Semantic and file-overlap rejection",
+      "Duplicate root-lane rejection",
       "Economic dispatch gate",
       "Claude subscription quota windows",
       "Model-specific Fable capacity",
@@ -80,7 +82,7 @@
       "Public repo privacy scan"
     ],
     "defaultPrompt": [
-      "Use AI Mobile to drive this project to its complete verified outcome, advancing through dependency-ready milestones",
+      "Use AI Mobile to complete this project efficiently; preserve the root outcome, start the finite orchestration contract first, and keep Codex on the critical path",
       "Show the compact AI Mobile resource inventory",
       "Use available capacity for independent bounded work while Codex advances the critical path"
     ],

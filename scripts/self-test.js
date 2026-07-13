@@ -9,6 +9,7 @@ const { TOOLS, handle } = require("./mcp/server");
 const { conflictFor, readJob } = require("./core/job-store");
 const { providerHistory } = require("./core/provider-history");
 const { route } = require("./core/router");
+const { orchestrateTask } = require("./core/task-orchestrator");
 const { runVerification } = require("./core/verification");
 const { communicationContract } = require("./core/worker");
 const { normalizeProfile } = require("./lib/orchestrator-profile");
@@ -44,7 +45,7 @@ function inventory() {
 function writeFixtureJob(workspace, id, state = "completed") {
   const dir = path.join(workspace, ".ai-mobile", "jobs", id);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "contract.json"), `${JSON.stringify({ id, provider: "claude", model: "sonnet", goal: "Review dashboard accessibility.", currentCodexGoal: "Implement backend execution.", relevantFiles: ["src/dashboard"], expectedFiles: [] }, null, 2)}\n`);
+  fs.writeFileSync(path.join(dir, "contract.json"), `${JSON.stringify({ id, taskId: "task-fixture", provider: "claude", model: "sonnet", projectGoal: "Ship a verified project outcome.", completionEvidence: ["End-to-end acceptance passes."], goal: "Review dashboard accessibility.", currentCodexGoal: "Implement backend execution.", relevantFiles: ["src/dashboard"], expectedFiles: [] }, null, 2)}\n`);
   fs.writeFileSync(path.join(dir, "status.json"), `${JSON.stringify({ id, state, provider: "claude", pid: state === "running" ? process.pid : null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, null, 2)}\n`);
   fs.writeFileSync(path.join(dir, "result.md"), "Dashboard review completed.\n");
   fs.writeFileSync(path.join(dir, "changed-files.json"), "[]\n");
@@ -56,10 +57,47 @@ function run() {
   const started = Date.now();
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-test-"));
   try {
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["orchestrator-profile", "resource-inventory", "run-efficient-task", "read-job", "verify-job", "cancel-job"]);
-    const dispatchSchema = TOOLS.find((tool) => tool.name === "run-efficient-task").inputSchema;
-    assert.deepEqual(dispatchSchema.required, ["workspace", "goal", "currentCodexGoal", "independenceReason"]);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["orchestrate-task", "read-job", "verify-job", "cancel-job", "resource-inventory", "orchestrator-profile"]);
+    const dispatchSchema = TOOLS.find((tool) => tool.name === "orchestrate-task").inputSchema;
+    assert.deepEqual(dispatchSchema.required, ["workspace", "rootOutcome", "completionEvidence", "currentCodexGoal", "candidateLanes"]);
+    assert.equal(dispatchSchema.properties.candidateLanes.minItems, 1);
+    assert.equal(dispatchSchema.properties.candidateLanes.maxItems, 2);
     assert.equal(TOOLS.find((tool) => tool.name === "read-job").inputSchema.properties.waitSeconds.maximum, 60);
+
+    const workerContracts = [];
+    const finiteArgs = {
+      workspace: temp,
+      rootOutcome: "Achieve one verified safe transaction every seven minutes.",
+      completionEvidence: ["A transaction has an authoritative confirmation id.", "Cadence is sustained without duplicates."],
+      currentCodexGoal: "Repair and verify the live runtime path.",
+      currentCodexFiles: ["src/runtime"],
+      currentCodexAcceptanceCriteria: ["The runtime health check passes."],
+      candidateLanes: [{
+        goal: "Identify the eligibility-queue blocker and return exact evidence.",
+        independenceReason: "The worker owns eligibility analysis while current Codex owns runtime recovery.",
+        relevantFiles: ["src/eligibility"],
+        readOnly: true,
+        preferredProvider: "claude",
+        complexity: "large",
+        taskKind: "debug",
+        estimatedDirectTokens: 12000,
+      }],
+    };
+    const finite = orchestrateTask(finiteArgs, inventory(), {}, (contract) => {
+      workerContracts.push(contract);
+      return { jobId: "job-regression-001", state: "running", provider: contract.provider, artifactDirectory: path.join(temp, ".ai-mobile", "jobs", "job-regression-001") };
+    });
+    assert.equal(finite.workersStarted, 1);
+    assert.equal(workerContracts.length, 1);
+    assert.equal(finite.currentCodex.goal, finiteArgs.currentCodexGoal);
+    assert.equal(finite.completionFirewall.projectCompleteAllowed, false);
+    assert.equal(finite.workers[0].provider, "claude");
+    assert.equal(Object.hasOwn(finite.capacity.claude, "command"), false);
+    assert.ok(fs.existsSync(path.join(temp, ".ai-mobile", "tasks", `${finite.taskId}.json`)));
+    const duplicateDispatch = orchestrateTask(finiteArgs, inventory(), {}, () => { throw new Error("duplicate lane must not dispatch"); });
+    assert.equal(duplicateDispatch.workersStarted, 0);
+    assert.match(duplicateDispatch.rejectedLanes[0].reason, /already dispatched/i);
+    assert.equal(duplicateDispatch.rejectedLanes[0].existingJobId, "job-regression-001");
 
     assert.equal(route(base(temp, { complexity: "small" }), inventory()).action, "direct");
     const duplicate = route(base(temp, {
@@ -143,6 +181,9 @@ function run() {
     assert.equal(firstRead.collectionReady, true);
     assert.equal(firstRead.alreadyCollected, false);
     assert.equal(firstRead.integration.required, true);
+    assert.equal(firstRead.integration.projectCompleteAllowed, false);
+    assert.equal(firstRead.rootOutcome, "Ship a verified project outcome.");
+    assert.deepEqual(firstRead.completionEvidence, ["End-to-end acceptance passes."]);
     assert.equal(firstRead.usage.outputTokens, 700);
     const repeatedRead = readJob(temp, completedId, "compact");
     assert.equal(repeatedRead.alreadyCollected, true);
@@ -188,7 +229,7 @@ function run() {
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
-  return { ok: true, assertions: 60, durationMs: Date.now() - started, tools: TOOLS.length };
+  return { ok: true, assertions: 77, durationMs: Date.now() - started, tools: TOOLS.length };
 }
 
 module.exports = { run };

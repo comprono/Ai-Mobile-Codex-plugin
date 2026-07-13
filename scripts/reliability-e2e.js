@@ -88,14 +88,15 @@ async function smokePortableLocalMcp(fixture, config) {
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
     const responses = await pending;
     assert.equal(responses.get(1)?.result?.serverInfo?.name, "ai-mobile-local", "portable MCP initializes from copied path");
-    assert.equal(responses.get(1)?.result?.serverInfo?.version, "0.5.0", "runtime version comes from the copied plugin manifest");
+    assert.equal(responses.get(1)?.result?.serverInfo?.version, "0.5.1", "runtime version comes from the copied plugin manifest");
     const exposedTools = responses.get(2)?.result?.tools || [];
     const toolNames = new Set(exposedTools.map((tool) => tool.name));
-    for (const required of ["resource-inventory", "run-efficient-task", "read-job", "verify-job", "cancel-job", "orchestrator-profile"]) {
+    for (const required of ["orchestrate-task", "read-job", "verify-job", "cancel-job", "resource-inventory", "orchestrator-profile"]) {
       assert.ok(toolNames.has(required), `portable MCP exposes ${required}`);
     }
     assert.equal(exposedTools.length, 6, "portable MCP exposes only six normal delivery tools");
-    assert.deepEqual(exposedTools.find((tool) => tool.name === "run-efficient-task")?.inputSchema?.required, ["workspace", "goal", "currentCodexGoal", "independenceReason"], "dispatch requires a machine-checkable independence contract");
+    assert.deepEqual(exposedTools.find((tool) => tool.name === "orchestrate-task")?.inputSchema?.required, ["workspace", "rootOutcome", "completionEvidence", "currentCodexGoal", "candidateLanes"], "startup requires a complete finite execution contract");
+    assert.equal(exposedTools[0]?.name, "orchestrate-task", "the mandatory finite entrypoint is the first visible tool");
     assert.ok(!toolNames.has("run-project-manager") && !toolNames.has("project-manager-status"), "legacy manager-loop tools are not loaded by default");
     assert.ok(JSON.stringify({ tools: exposedTools }).length < 12000, "default tool-schema payload stays bounded");
   } finally {

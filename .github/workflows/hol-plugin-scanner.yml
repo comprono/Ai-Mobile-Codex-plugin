@@ -20,6 +20,12 @@ jobs:
       - name: Portable MCP smoke test
         run: node scripts/reliability-e2e.js
 
+      - name: Finite orchestration regression
+        run: node scripts/orchestration-regression.js
+
+      - name: Delegation economics regression
+        run: node scripts/economic-regression.js
+
       - name: AI Mobile lifecycle tests
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test

@@ -2,7 +2,8 @@
 
 Send a worker only the minimum immutable contract:
 
-- complete `projectGoal` in one concise statement;
+- complete `rootOutcome` / `projectGoal` in one concise statement;
+- end-to-end `completionEvidence` that worker completion cannot satisfy by itself;
 - the exact `currentCodexGoal` and `currentCodexFiles` that remain owned by Codex;
 - one bounded `goal` independent of current Codex work;
 - one concrete `independenceReason` plus `relevantFiles` for overlap detection;

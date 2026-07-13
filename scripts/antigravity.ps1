@@ -1,18 +1,10 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','run-efficient-task','read-job','verify-job','cancel-job','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','orchestrate-task','read-job','verify-job','cancel-job','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
   [string]$Workspace = (Get-Location).Path,
-  [string]$Goal = '',
-  [string]$ProjectGoal = '',
-  [string]$CurrentCodexGoal = '',
-  [string]$IndependenceReason = '',
-  [ValidateSet('auto','codex','claude','antigravity','cursor')][string]$Provider = 'auto',
-  [string[]]$ExpectedFiles = @(),
-  [switch]$ReadOnly,
-  [switch]$AllowAntigravity,
+  [string]$ContractFile = '',
   [string]$JobId = '',
   [ValidateSet('compact','full')][string]$Detail = 'compact',
   [ValidateRange(0,60)][int]$WaitSeconds = 0,
-  [int]$TimeoutSeconds = 900,
   [switch]$Refresh
 )
 
@@ -33,7 +25,7 @@ switch ($Command) {
       NodeReady = $null -ne $node
       PluginRoot = $Root
       StartupBehavior = 'passive; no desktop application is opened'
-      Tools = @('orchestrator-profile','resource-inventory','run-efficient-task','read-job','verify-job','cancel-job')
+      Tools = @('orchestrate-task','read-job','verify-job','cancel-job','resource-inventory','orchestrator-profile')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
@@ -41,29 +33,10 @@ switch ($Command) {
     if ($Refresh) { $args += '--refresh' }
     Invoke-Node $args
   }
-  'run-efficient-task' {
-    if (-not $Goal) { throw '-Goal is required.' }
-    if (-not $CurrentCodexGoal) { throw '-CurrentCodexGoal is required so the bridge can reject duplicate work.' }
-    if (-not $IndependenceReason) { throw '-IndependenceReason is required so the bridge can prove delegation value.' }
-    if (-not $ReadOnly -and $ExpectedFiles.Count -eq 0) { throw 'Writer lanes require -ExpectedFiles.' }
-    $payload = [ordered]@{
-      workspace = (Resolve-Path -LiteralPath $Workspace).Path
-      projectGoal = $ProjectGoal
-      goal = $Goal
-      currentCodexGoal = $CurrentCodexGoal
-      independenceReason = $IndependenceReason
-      preferredProvider = $Provider
-      expectedFiles = @($ExpectedFiles)
-      readOnly = [bool]$ReadOnly
-      allowAntigravity = [bool]$AllowAntigravity
-      timeoutSeconds = $TimeoutSeconds
-      complexity = 'medium'
-    }
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ("ai-mobile-{0}.json" -f [guid]::NewGuid().ToString('N'))
-    try {
-      $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temp -Encoding UTF8
-      Invoke-Node @('run-efficient-task-cli','--json-file',$temp)
-    } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+  'orchestrate-task' {
+    if (-not $ContractFile) { throw '-ContractFile is required and must contain the finite orchestration contract JSON.' }
+    $resolved = (Resolve-Path -LiteralPath $ContractFile).Path
+    Invoke-Node @('orchestrate-task-cli','--json-file',$resolved)
   }
   'read-job' {
     if (-not $JobId) { throw '-JobId is required.' }
@@ -82,7 +55,7 @@ switch ($Command) {
   'privacy' {
     [ordered]@{
       PublicRepoPolicy = 'No credentials, cookies, local transcripts, quota snapshots, or personal project data.'
-      LocalArtifacts = '<workspace>/.ai-mobile/jobs and %LOCALAPPDATA%/AI Mobile'
+      LocalArtifacts = '<workspace>/.ai-mobile/tasks, <workspace>/.ai-mobile/jobs, and %LOCALAPPDATA%/AI Mobile'
       LegacyArtifacts = '<workspace>/.antigravity-bridge/jobs are read-only compatibility inputs'
       DesktopStartup = 'never automatic'
     } | ConvertTo-Json -Depth 3

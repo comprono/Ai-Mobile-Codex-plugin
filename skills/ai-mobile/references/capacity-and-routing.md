@@ -4,7 +4,8 @@ Use this reference only when automatic selection is uncertain.
 
 ## Evidence
 
-- `resource-inventory` is passive and cached for up to one active hour. A known quota reset, provider failure, material model change, or explicit refresh invalidates it earlier. With a workspace, it also returns recent provider outcomes and cooldown evidence.
+- `orchestrate-task` performs the normal passive inventory and routing in one first call. `resource-inventory` is a diagnostic refresh, not the project-start path.
+- Capacity evidence is cached for up to one active hour. A known quota reset, provider failure, material model change, or explicit refresh invalidates it earlier. Workspace routing also uses recent provider outcomes and cooldown evidence.
 - Availability means a native CLI exists and its authentication check passed where supported.
 - Capacity facts retain source and confidence. `null` means unknown, not empty or unlimited.
 - Current Codex has the best knowledge of its own visible usage window. Protect the user's configured integration reserve before starting a separate Codex worker.

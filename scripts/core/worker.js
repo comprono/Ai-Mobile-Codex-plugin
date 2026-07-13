@@ -20,6 +20,7 @@ function promptFor(contract) {
   return [
     "You are one bounded worker inside a larger project. Complete only this lane.",
     `Project outcome: ${contract.projectGoal || "Not supplied"}`,
+    contract.completionEvidence?.length ? `Project completion evidence (not your lane completion):\n- ${contract.completionEvidence.join("\n- ")}` : "",
     `Your lane: ${contract.goal}`,
     `Current Codex owns this different lane: ${contract.currentCodexGoal}`,
     `Why the lanes are independent: ${contract.independenceReason}`,
@@ -30,6 +31,7 @@ function promptFor(contract) {
     contract.acceptanceCriteria.length ? `Acceptance criteria:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
     contract.nextStep ? `Useful next step after this lane: ${contract.nextStep}` : "",
     "Do not investigate, implement, or repeat the current-Codex lane. Do not run another agent, start a manager loop, create recurring work, or broaden scope.",
+    "Completing this lane is evidence for current Codex. It does not complete the project outcome.",
     communicationContract(contract.communicationMode),
     `Hard result budget: at most ${contract.maxWorkerOutputTokens || 1200} output tokens (about ${maxWords} words), five evidence bullets, and one blocker. Stop after sufficient evidence.`,
     "Finish with concise evidence: result, files changed, checks run, and one concrete blocker if any.",

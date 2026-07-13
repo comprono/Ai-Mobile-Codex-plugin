@@ -11,7 +11,7 @@ The goal is simple: **finish useful project work faster without spending more to
 AI Mobile follows eight foundation rules:
 
 1. Current Codex owns the goal, critical path, integration, verification, and user communication.
-2. Capacity is inventoried once and refreshed only when evidence becomes stale or changes.
+2. One finite first call fixes the root outcome, inventories capacity, keeps Codex working, and routes bounded lanes.
 3. Only genuinely independent bounded work is delegated, never to more than two external workers.
 4. Every lane has one owner: Codex cannot redo a worker question or touch its files before collecting that result.
 5. Codex continues a disjoint critical-path lane immediately after dispatch; there is no polling or heartbeat loop.
@@ -33,9 +33,9 @@ Constraints: <important boundaries>
 
 That is enough. The skill should:
 
+- call `orchestrate-task` first, before project commands or file reads;
 - preserve the complete outcome and its completion evidence;
-- inspect compact capacity once;
-- build a two-to-four item delivery batch from the current dependency frontier;
+- inventory compact capacity and build the first delivery batch in that same call;
 - keep the critical path in the current Codex task;
 - dispatch only useful independent lanes;
 - continue Codex work instead of waiting;
@@ -52,11 +52,11 @@ Only six tools are exposed to Codex by default:
 
 | Tool | Purpose |
 | --- | --- |
-| `resource-inventory` | Passive compact capacity and availability evidence. |
-| `run-efficient-task` | Prove independence/economic value, score providers, and dispatch one bounded lane. |
+| `orchestrate-task` | Mandatory finite first call: preserve the root outcome, inventory capacity, keep Codex on the critical path, and route up to two bounded lanes. |
 | `read-job` | Collect one compact result, optionally waiting locally for up to 60 seconds without model-side polling. |
 | `verify-job` | Run bridge-owned deterministic checks without another model. |
 | `cancel-job` | Stop one recorded local worker process. |
+| `resource-inventory` | Explicit diagnostic capacity refresh; normal project startup already inventories capacity. |
 | `orchestrator-profile` | Read or update private local routing preferences. |
 
 The default surface excludes project-manager cycles, status polling, setup tools, raw DevTools, and provider-specific internals. This materially reduces tool-schema context in every Codex turn.
@@ -76,7 +76,7 @@ Model catalogs, effort levels, quota windows, reset times, recent workspace outc
 ## Token-Efficiency Contract
 
 - No plugin call for trivial or tightly coupled work.
-- One compact inventory per task, reset, or material provider failure.
+- One compact orchestration call at project-task start; capacity refresh only after a reset, material provider change, or failure.
 - No parent transcript in worker prompts.
 - No dispatch without a distinct current-Codex lane, an independence reason, and non-overlapping ownership.
 - Zero to two external lanes normally.
@@ -103,6 +103,8 @@ For broad goals, the plugin keeps a compact `RootOutcome`, `CompletionEvidence`,
 Worker jobs live under the project workspace:
 
 ```text
+.ai-mobile/tasks/<taskId>.json
+
 .ai-mobile/jobs/<jobId>/
   contract.json
   request.md
@@ -150,8 +152,8 @@ The PowerShell helper remains available for setup and focused diagnostics:
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Refresh
 
-# Direct bounded worker and compact result
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-efficient-task -Goal "<bounded worker lane>" -CurrentCodexGoal "<different Codex lane>" -IndependenceReason "<why they do not overlap>" -Workspace "<path>" -Provider claude -ReadOnly
+# Finite orchestration contract and compact result
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-task -ContractFile ".\ai-mobile-contract.json"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId "<job-id>" -WaitSeconds 60
 ```
 
@@ -171,6 +173,7 @@ Run the local gates before publishing:
 
 ```powershell
 node ".\scripts\ai-mobile-local-mcp.js" self-test
+node ".\scripts\orchestration-regression.js"
 node ".\scripts\economic-regression.js"
 node ".\scripts\reliability-e2e.js"
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
@@ -179,6 +182,8 @@ git diff --check
 python -m pipx run plugin-scanner lint .
 python -m pipx run plugin-scanner verify .
 ```
+
+`plugin-scanner verify` may exit nonzero only because it intentionally refuses to execute a local stdio MCP server. `scripts/reliability-e2e.js` performs that missing execution check from a clean copied path; all other scanner checks must pass.
 
 See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the current evidence model and [AI Mobile Implementation Report](docs/IMPLEMENTATION_REPORT.md) for the researched target architecture, subtractive migration plan, and falsifiable release gates. The progressive-disclosure approach is informed by [Addy Osmani's agent-skills repository](https://github.com/addyosmani/agent-skills).
 

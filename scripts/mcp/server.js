@@ -4,52 +4,46 @@ const readline = require("node:readline");
 const path = require("node:path");
 const { inventory } = require("../core/capacity");
 const { cancelJob, createJob, jobDirectory, readJob } = require("../core/job-store");
-const { route } = require("../core/router");
 const { providerHistory } = require("../core/provider-history");
+const { compactCapacity, orchestrateTask } = require("../core/task-orchestrator");
 const { runVerification } = require("../core/verification");
 const { readJson, safeWorkspace } = require("../core/utils");
 const { readProfile, writeProfile } = require("../lib/orchestrator-profile");
 const { pluginVersion } = require("../lib/version");
 
 const TOOLS = [
-  { name: "orchestrator-profile", description: "Read or update private local routing preferences. Does not start workers or applications.", inputSchema: { type: "object", properties: { action: { enum: ["read", "update"] }, patch: { type: "object" } } } },
-  { name: "resource-inventory", description: "Passively inspect authenticated local AI CLIs, models, capacity evidence, and optional workspace reliability. Never opens desktop applications.", inputSchema: { type: "object", properties: { refresh: { type: "boolean" }, detail: { enum: ["compact", "full"] }, workspace: { type: "string" }, horizonHours: { type: "number" } } } },
-  { name: "run-efficient-task", description: "Dispatch one economically positive, demonstrably independent finite lane. Rejects overlap with current Codex, duplicate active lanes, unsafe billing, and low-value handoffs.", inputSchema: { type: "object", required: ["workspace", "goal", "currentCodexGoal", "independenceReason"], properties: {
-    workspace: { type: "string" }, projectGoal: { type: "string" }, goal: { type: "string" }, currentCodexGoal: { type: "string" }, independenceReason: { type: "string" }, acceptanceCriteria: { type: "array", items: { type: "string" } }, nextStep: { type: "string" },
-    preferredProvider: { enum: ["auto", "codex", "claude", "antigravity", "cursor"] }, readOnly: { type: "boolean" }, expectedFiles: { type: "array", items: { type: "string" } },
-    relevantFiles: { type: "array", items: { type: "string" } }, currentCodexFiles: { type: "array", items: { type: "string" } }, taskKind: { enum: ["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"] },
-    verificationCommands: { type: "array", items: { type: "object", required: ["command"], properties: { name: { type: "string" }, command: { type: "string" }, args: { type: "array", items: { type: "string" } }, timeoutSeconds: { type: "number" }, expectedExitCode: { type: "number" } } } },
-    timeoutSeconds: { type: "number" }, complexity: { enum: ["small", "medium", "large"] }, model: { type: "string" }, effort: { type: "string" }, allowAntigravity: { type: "boolean" }, allowPaidApi: { type: "boolean" }, allowPremiumModel: { type: "boolean" }, needsUi: { type: "boolean" }, projectId: { type: "string" }, conversation: { type: "string" }, mode: { type: "string" },
-    estimatedDirectTokens: { type: "number" }, maxWorkerOutputTokens: { type: "number" }, maxApiBudgetUsd: { type: "number", description: "PAYG-only cap. Ignored for Claude subscription auth." }, minimumSavingsPercent: { type: "number" }, horizonHours: { type: "number" }
+  { name: "orchestrate-task", description: "MANDATORY FIRST tool after an explicit @ai-mobile project request. Before any project shell, file, browser, or runtime action, create one finite execution contract, inventory capacity, keep Codex on a concrete critical path, and route one or two independent candidate lanes. This is not a manager loop.", inputSchema: { type: "object", required: ["workspace", "rootOutcome", "completionEvidence", "currentCodexGoal", "candidateLanes"], properties: {
+    workspace: { type: "string" }, rootOutcome: { type: "string" }, completionEvidence: { type: "array", minItems: 1, maxItems: 12, items: { type: "string" } }, currentCodexGoal: { type: "string" }, currentCodexFiles: { type: "array", items: { type: "string" } }, currentCodexAcceptanceCriteria: { type: "array", items: { type: "string" } }, allowAntigravity: { type: "boolean" }, horizonHours: { type: "number", minimum: 1, maximum: 24 },
+    candidateLanes: { type: "array", minItems: 1, maxItems: 2, items: { type: "object", required: ["goal", "independenceReason", "relevantFiles"], properties: {
+      goal: { type: "string" }, independenceReason: { type: "string" }, relevantFiles: { type: "array", minItems: 1, items: { type: "string" } }, acceptanceCriteria: { type: "array", items: { type: "string" } }, collectAt: { type: "string" }, preferredProvider: { enum: ["auto", "codex", "claude", "antigravity", "cursor"] }, readOnly: { type: "boolean" }, expectedFiles: { type: "array", items: { type: "string" } }, verificationCommands: { type: "array", items: { type: "object" } }, timeoutSeconds: { type: "number" }, complexity: { enum: ["small", "medium", "large"] }, taskKind: { enum: ["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"] }, model: { type: "string" }, effort: { type: "string" }, allowAntigravity: { type: "boolean" }, allowPaidApi: { type: "boolean" }, allowPremiumModel: { type: "boolean" }, needsUi: { type: "boolean" }, projectId: { type: "string" }, conversation: { type: "string" }, estimatedDirectTokens: { type: "number" }, maxWorkerOutputTokens: { type: "number" }, maxApiBudgetUsd: { type: "number" }, minimumSavingsPercent: { type: "number" }
+    } } }
   } } },
   { name: "read-job", description: "Collect one compact result at the natural integration point. Can wait internally for up to 60 seconds without repeated model-side polling. Legacy artifacts remain readable.", inputSchema: { type: "object", required: ["workspace", "jobId"], properties: { workspace: { type: "string" }, jobId: { type: "string" }, detail: { enum: ["compact", "full"] }, waitSeconds: { type: "number", minimum: 0, maximum: 60 } } } },
   { name: "verify-job", description: "Run deterministic no-model verification for one completed job using its declared command allowlist.", inputSchema: { type: "object", required: ["workspace", "jobId"], properties: { workspace: { type: "string" }, jobId: { type: "string" }, commands: { type: "array", items: { type: "object" } } } } },
   { name: "cancel-job", description: "Cancel one finite worker process tree. Does not affect other jobs or applications.", inputSchema: { type: "object", required: ["workspace", "jobId"], properties: { workspace: { type: "string" }, jobId: { type: "string" } } } },
+  { name: "resource-inventory", description: "Diagnostic-only passive capacity view. Do not use this to begin an @ai-mobile project; orchestrate-task already inventories capacity in its mandatory first call.", inputSchema: { type: "object", properties: { refresh: { type: "boolean" }, detail: { enum: ["compact", "full"] }, workspace: { type: "string" }, horizonHours: { type: "number" } } } },
+  { name: "orchestrator-profile", description: "Read or update private local routing preferences. Does not start workers or applications.", inputSchema: { type: "object", properties: { action: { enum: ["read", "update"] }, patch: { type: "object" } } } },
 ];
 
 function content(value, isError = false) { return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError }; }
 function invoke(name, args = {}, entrypoint) {
   if (name === "orchestrator-profile") return args.action === "update" ? writeProfile(args.patch || {}) : readProfile();
+  if (name === "orchestrate-task") {
+    const workspace = safeWorkspace(args.workspace);
+    const resources = inventory({ refresh: false });
+    return {
+      runtimeVersion: pluginVersion(),
+      ...orchestrateTask({ ...args, workspace }, resources, providerHistory(workspace), (contract) => createJob(contract, entrypoint)),
+    };
+  }
   if (name === "resource-inventory") {
     const value = inventory({ refresh: args.refresh === true });
     const workspace = args.workspace ? safeWorkspace(args.workspace) : null;
     const history = workspace ? providerHistory(workspace) : null;
-    const base = { runtimeVersion: pluginVersion(), generatedAt: value.generatedAt, cached: value.cached, passive: true, horizonHours: Math.max(1, Math.min(24, Number(args.horizonHours || 5))), providers: Object.fromEntries(Object.entries(value.providers).map(([id, item]) => [id, { available: item.available, authenticated: item.authenticated, version: item.version || "", authMode: item.authMode || "unknown", confidence: item.confidence, models: item.models || [], capacity: item.capacity, reason: item.reason || "", recentOutcome: history?.[id] || null }])) };
-    return args.detail === "full" ? { ...value, ...base } : base;
-  }
-  if (name === "run-efficient-task") {
-    const workspace = safeWorkspace(args.workspace);
-    const resources = inventory({ refresh: false });
-    const decision = route({ ...args, workspace }, resources, providerHistory(workspace));
-    if (decision.action === "direct") return { runtimeVersion: pluginVersion(), dispatched: false, action: "current-codex", reason: decision.reason, economics: decision.economics || decision.request?.economics || null, considered: decision.considered || [], instruction: "Continue this lane directly; no worker was started and no provider capacity was consumed." };
-    return {
-      runtimeVersion: pluginVersion(),
-      dispatched: true,
-      decision: { provider: decision.provider, model: decision.request.model || "", reason: decision.reason, considered: decision.considered, economics: decision.economics },
-      ...createJob({ ...decision.request, workspace, provider: decision.provider, providerCommand: resources.providers[decision.provider].command, providerAuthMode: resources.providers[decision.provider].authMode || "unknown" }, entrypoint),
-      coordination: { currentCodexOwns: decision.request.currentCodexGoal, workerOwns: decision.request.goal, doNotDuplicate: "Current Codex must not investigate or edit the worker lane before collecting its terminal result." },
-      collection: "Read exactly once at the integration point or after the declared lease. Integrate before redoing any worker-owned analysis.",
-    };
+    const compact = compactCapacity(value);
+    for (const [id, row] of Object.entries(compact)) row.recentOutcome = history?.[id] || null;
+    const base = { runtimeVersion: pluginVersion(), generatedAt: value.generatedAt, cached: value.cached, passive: true, horizonHours: Math.max(1, Math.min(24, Number(args.horizonHours || 5))), providers: compact };
+    return args.detail === "full" ? { ...value, ...base, providers: value.providers } : base;
   }
   if (name === "read-job") return readJob(args.workspace, args.jobId, args.detail || "compact", args.waitSeconds || 0);
   if (name === "verify-job") {
