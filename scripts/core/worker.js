@@ -8,6 +8,12 @@ const { runVerification } = require("./verification");
 const { bounded, readJson, redact, safeWorkspace, utcNow, writeJson } = require("./utils");
 const { runProvider } = require("../providers");
 
+function communicationContract(mode = "smart-compact") {
+  if (mode === "detailed") return "Explain the outcome and material reasoning clearly, but omit greetings, repeated task text, tool narration, waiting commentary, and offers for more work.";
+  if (mode === "standard") return "Use concise complete prose. Lead with the outcome and omit greetings, repeated task text, tool narration, waiting commentary, and postambles.";
+  return "Think deeply; communicate compactly. Lead with the outcome. Use short bullets where useful. Omit greetings, repeated task text, tool narration, waiting commentary, and postambles. Preserve exact facts, numbers, paths, commands, errors, caveats, and evidence. Expand when ambiguity, safety, irreversible action, or a decision requires explanation.";
+}
+
 function promptFor(contract) {
   return [
     "You are one bounded worker inside a larger project. Complete only this lane.",
@@ -19,6 +25,7 @@ function promptFor(contract) {
     contract.acceptanceCriteria.length ? `Acceptance criteria:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
     contract.nextStep ? `Useful next step after this lane: ${contract.nextStep}` : "",
     "Do not run another agent, start a manager loop, create recurring work, or broaden scope.",
+    communicationContract(contract.communicationMode),
     "Finish with concise evidence: result, files changed, checks run, and one concrete blocker if any.",
   ].filter(Boolean).join("\n\n");
 }
@@ -59,4 +66,4 @@ function executeWorker(payload) {
   return state === "completed" ? 0 : 1;
 }
 
-module.exports = { executeWorker, promptFor };
+module.exports = { communicationContract, executeWorker, promptFor };

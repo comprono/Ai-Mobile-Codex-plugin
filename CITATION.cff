@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this plugin, please cite it as below."
 title: "AI Mobile Codex Plugin"
-version: "0.4.0"
+version: "0.4.1"
 date-released: "2026-07-13"
 authors:
   - name: "comprono"

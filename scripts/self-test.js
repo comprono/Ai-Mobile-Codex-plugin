@@ -7,6 +7,8 @@ const path = require("node:path");
 const { TOOLS, handle } = require("./mcp/server");
 const { route } = require("./core/router");
 const { runVerification } = require("./core/verification");
+const { communicationContract } = require("./core/worker");
+const { normalizeProfile } = require("./lib/orchestrator-profile");
 
 function run() {
   const started = Date.now();
@@ -24,8 +26,13 @@ function run() {
   assert.equal(evidence.passed, true);
   const source = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
   for (const forbidden of ["run-project-manager", "project-manager-status", "heartbeat", "continuous-cycle"]) assert.equal(source.includes(forbidden), false);
+  assert.equal(normalizeProfile({}).communicationMode, "smart-compact");
+  assert.equal(normalizeProfile({ communicationMode: "detailed" }).communicationMode, "detailed");
+  assert.match(communicationContract("smart-compact"), /Think deeply; communicate compactly/);
+  assert.match(communicationContract("smart-compact"), /Preserve exact facts/);
+  assert.match(communicationContract("smart-compact"), /safety/);
   fs.rmSync(temp, { recursive: true, force: true });
-  const assertions = 10;
+  const assertions = 15;
   return { ok: true, assertions, durationMs: Date.now() - started, tools: TOOLS.length };
 }
 

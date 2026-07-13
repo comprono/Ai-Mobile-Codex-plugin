@@ -5,8 +5,9 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 3,
+  schemaVersion: 4,
   communicationStyle: "professional",
+  communicationMode: "smart-compact",
   address: "",
   updateStyle: "concise-executive",
   role: "technical project manager",
@@ -44,8 +45,11 @@ function normalizeProfile(value = {}) {
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     communicationStyle: style,
+    communicationMode: ["smart-compact", "standard", "detailed"].includes(String(value.communicationMode || "").toLowerCase())
+      ? String(value.communicationMode).toLowerCase()
+      : DEFAULT_PROFILE.communicationMode,
     address: cleanText(value.address, 80),
     updateStyle: ["concise-executive", "technical", "minimal"].includes(String(value.updateStyle || "").toLowerCase())
       ? String(value.updateStyle).toLowerCase()

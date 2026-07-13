@@ -27,6 +27,20 @@ When this skill is loaded, do not search the filesystem, plugin cache, or memory
 - **Verification costs less than production.** Prefer tests, validators, diffs, type checks, and policy gates. No premium-on-premium review chain; do not send successful premium-model work to another premium model for reassurance.
 - **UI is fallback.** Startup is passive. Do not open Antigravity, Claude, Cursor, Chrome, or another desktop app unless visible state, authentication, or a verified CLI gap requires it.
 - **Unknown stays unknown.** Never invent model limits, reset times, authentication, completion, or savings.
+- **Think deeply; communicate compactly.** Compression applies to wording, never to reasoning, verification, evidence, code, or safety.
+
+## Smart Compact Communication
+
+Default to scan-friendly, answer-first communication:
+
+- lead with the outcome, decision, or blocker;
+- use short headings and bullets only when they improve scanning;
+- omit greetings, repeated task text, tool-by-tool narration, waiting commentary, and routine postambles;
+- preserve exact facts, numbers, paths, commands, errors, caveats, and evidence;
+- report only material transitions, not orchestration activity;
+- expand automatically for ambiguity, user confusion, safety warnings, irreversible actions, tradeoffs, or requested explanation.
+
+Never use deliberately broken or cryptic grammar. Fewer words must not make the answer harder to understand. The private profile may set `communicationMode` to `smart-compact` (default), `standard`, or `detailed`.
 
 ## Root Outcome And Delivery Batches
 
@@ -101,7 +115,7 @@ Models and limits change. Discover current catalogs and quota windows; do not en
 
 ## Reporting
 
-Give the user short evidence-backed updates at meaningful transitions:
+Give the user short, scan-friendly, evidence-backed updates at meaningful transitions:
 
 - `Done`: accepted changes or verified outcomes.
 - `Active`: current Codex work and genuinely running worker lanes.

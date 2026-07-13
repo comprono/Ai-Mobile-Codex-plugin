@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - 2026-07-14
+
+- Added Smart Compact Communication: deep reasoning with answer-first, scan-friendly output and no filler, repeated prompts, tool narration, waiting commentary, or routine postambles.
+- Preserved exact evidence, warnings, caveats, code, commands, paths, errors, and necessary reasoning; clarity automatically overrides brevity for risk, ambiguity, confusion, and decisions.
+- Added private `communicationMode` preferences: `smart-compact` (default), `standard`, and `detailed`.
+- Applied the same compact evidence contract to every bounded worker without adding an MCP tool, hook, background process, or reasoning reviewer.
+
 ## 0.4.0 - 2026-07-14
 
 - Replaced the 733 KB orchestration monolith with a small modular MCP runtime and six public tools.

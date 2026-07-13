@@ -8,7 +8,7 @@ The goal is simple: **finish useful project work faster without spending more to
 
 ## Operating Model
 
-AI Mobile follows six foundation rules:
+AI Mobile follows seven foundation rules:
 
 1. Current Codex owns the goal, critical path, integration, verification, and user communication.
 2. Capacity is inventoried once and refreshed only when evidence becomes stale or changes.
@@ -16,6 +16,7 @@ AI Mobile follows six foundation rules:
 4. Codex continues its own work immediately after dispatch; there is no polling or heartbeat loop.
 5. Deterministic checks run before any model review, and premium work is not sent to another premium model merely for reassurance.
 6. The complete project outcome remains fixed; a passing milestone triggers the next dependency-ready milestone instead of ending the work.
+7. Reasoning stays deep while communication stays compact, answer-first, and easy to scan.
 
 Provider jobs are durable and write compact artifacts locally. A failed lane gets at most one justified failover; otherwise current Codex takes the bounded work back.
 
@@ -82,6 +83,12 @@ Model catalogs, effort levels, quota windows, reset times, and provider health a
 - Deterministic verification before qualitative review.
 - No premium-on-premium review chain.
 - Worker dispatch, waiting, retries, and unchanged reviews do not count as progress.
+- No greetings, repeated prompts, tool-by-tool narration, waiting commentary, or routine postambles.
+- Brevity never removes exact evidence, warnings, caveats, code, commands, paths, errors, or necessary reasoning.
+
+### Smart Compact Communication
+
+AI Mobile includes a communication mode inspired by [Caveman's](https://github.com/Shawnchee/caveman-skill) filler-removal principle, without caveman grammar. It keeps intelligence and verification unchanged, leads with the answer, removes low-value narration, and automatically expands when confusion, risk, ambiguity, or an important decision requires more explanation. The private profile supports `smart-compact` (default), `standard`, and `detailed` modes.
 
 The current Codex task protects a configurable 15% shared-capacity reserve, but capacity above that floor remains available for useful Codex work. A five-hour horizon influences routing; it is not a project deadline.
 

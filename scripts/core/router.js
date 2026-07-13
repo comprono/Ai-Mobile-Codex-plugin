@@ -47,6 +47,7 @@ function selectCodexModel(request, inventory, profile) {
 function route(input, inventory) {
   const request = normalizeRequest(input);
   const profile = readProfile();
+  request.communicationMode = profile.communicationMode || "smart-compact";
   if (!request.goal) throw new Error("A bounded worker goal is required.");
   if (request.preferredProvider !== "auto") {
     if (!eligible(request.preferredProvider, request, inventory)) return { action: "direct", reason: `${request.preferredProvider} is unavailable or not authorized.`, request };
