@@ -56,7 +56,7 @@ function normalizeRequest(input = {}) {
     taskKind,
     model: String(input.model || "").trim(),
     effort: String(input.effort || (readOnly ? "low" : "medium")).trim(),
-    allowAntigravity: input.allowAntigravity === true,
+    allowAntigravity: input.allowAntigravity === undefined ? null : input.allowAntigravity === true,
     allowPaidApi: input.allowPaidApi === true,
     allowPremiumModel: input.allowPremiumModel === true,
     needsUi: input.needsUi === true,
@@ -189,6 +189,17 @@ function providerScore(id, request, profile, history, gate) {
   return { score: Object.values(factors).reduce((sum, value) => sum + value, 0), factors };
 }
 
+function applyProfileAuthorization(request, profile) {
+  const savedReadOnlyAuthorization = request.allowAntigravity === null
+    && request.readOnly
+    && profile.antigravityAutoApprovePermissions === true;
+  request.allowAntigravity = request.allowAntigravity === true || savedReadOnlyAuthorization;
+  request.antigravityAutoApprovePermissions = request.allowAntigravity
+    && request.readOnly
+    && profile.antigravityAutoApprovePermissions === true;
+  return request;
+}
+
 function coordinationGate(request) {
   if (!request.currentCodexGoal) return "Delegation requires the concrete current-Codex lane; otherwise independence cannot be proven.";
   if (!request.independenceReason) return "Delegation requires a concise independence reason.";
@@ -206,7 +217,7 @@ function route(input, inventory, histories = {}) {
   request.communicationMode = profile.communicationMode || "smart-compact";
   request.maxExternalWorkers = profile.maxExternalWorkers || 2;
   if (input.minimumSavingsPercent === undefined) request.minimumSavingsPercent = profile.minimumDelegationSavingsPercent || 20;
-  request.antigravityAutoApprovePermissions = request.allowAntigravity && request.readOnly && profile.antigravityAutoApprovePermissions === true;
+  applyProfileAuthorization(request, profile);
   if (!request.goal) throw new Error("A bounded worker goal is required.");
   if (request.complexity === "small") return { action: "direct", reason: "Dispatch overhead exceeds the likely savings for this small task.", request, considered: [] };
   const coordinationBlocker = coordinationGate(request);
@@ -240,4 +251,4 @@ function route(input, inventory, histories = {}) {
   };
 }
 
-module.exports = { coordinationGate, normalizeRequest, providerEligibility, route };
+module.exports = { applyProfileAuthorization, coordinationGate, normalizeRequest, providerEligibility, route };

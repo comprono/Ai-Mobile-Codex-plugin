@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3 - 2026-07-14
+
+- Reproduced a real `0.5.2` run that correctly started orchestration but then stopped after a runner check and an empty eligible queue.
+- Separated positive completion evidence from external blocking conditions and reject conditional evidence such as "or one external gate" and "when eligible".
+- Added a turn-exit firewall requiring material current-Codex progress or proof that a genuine external/user-only blocker has no dependency-ready local remedy.
+- Fixed unknown Antigravity percentages being converted to `0%`, and made the saved private read-only Antigravity authorization apply without repeated prompts while preserving explicit per-call denial.
+- Added regressions for the failed contract, null capacity, all-exhausted capacity, saved authorization, explicit denial, and status-only stopping.
+
 ## 0.5.2 - 2026-07-14
 
 - Added a runtime-version guard that detects when an existing Codex task is bound to an older installed AI Mobile cache.

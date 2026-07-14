@@ -81,6 +81,19 @@ function modelId(displayName) {
     .replace(/^-|-$/g, "");
 }
 
+function numericOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function antigravityRemaining(models = []) {
+  const available = models.filter((row) => row.status === "available" && numericOrNull(row.remainingPercent) !== null);
+  if (available.length) return Math.max(...available.map((row) => numericOrNull(row.remainingPercent)));
+  if (models.length && models.every((row) => row.status === "exhausted")) return 0;
+  return null;
+}
+
 function antigravityHelperCandidates() {
   const values = [process.env.AI_MOBILE_ANTIGRAVITY_HELPER, path.join(os.homedir(), "plugins", "antigravity-2", "scripts", "antigravity.ps1")];
   const cacheRoot = path.join(os.homedir(), ".codex", "plugins", "cache", "personal", "antigravity-2");
@@ -96,7 +109,7 @@ function antigravityLimits() {
     if (result.status !== 0) continue;
     let body = null;
     try { body = JSON.parse(result.stdout); } catch { continue; }
-    const available = (body?.RecommendedAvailable || []).map((row) => ({ id: modelId(row.Id || row.DisplayName), displayName: row.DisplayName || row.Id || "", remainingPercent: Number.isFinite(Number(row.RemainingPercent)) ? Number(row.RemainingPercent) : null, resetAt: row.ResetTimeUtc || null, status: "available" }));
+    const available = (body?.RecommendedAvailable || []).map((row) => ({ id: modelId(row.Id || row.DisplayName), displayName: row.DisplayName || row.Id || "", remainingPercent: numericOrNull(row.RemainingPercent), resetAt: row.ResetTimeUtc || null, status: "available" }));
     const blocked = (body?.BlockedOrResetting || []).map((row) => ({ id: modelId(row.Id || row.DisplayName), displayName: row.DisplayName || row.Id || "", remainingPercent: 0, resetAt: row.ResetTimeUtc || null, status: "exhausted" }));
     return { checked: true, source: body?.Source || "antigravity-2-local-helper", generatedAt: body?.GeneratedAtUtc || null, models: [...available, ...blocked] };
   }
@@ -111,11 +124,10 @@ function discoverAntigravity() {
   const limits = antigravityLimits();
   const measured = limits.models;
   const enriched = models.map((model) => ({ ...model, quota: measured.find((row) => row.id === model.id || modelId(row.displayName) === model.id) || null }));
-  const availableMeasured = measured.filter((row) => row.status === "available" && Number.isFinite(row.remainingPercent));
   return provider("antigravity", true, {
     command: cli.command, version: cli.version, authMode: "cli-session", confidence: limits.checked ? "high" : "medium", models: enriched,
     capacity: limits.checked
-      ? { models: measured, remainingPercent: availableMeasured.length ? Math.max(...availableMeasured.map((row) => row.remainingPercent)) : 0, resetAt: null, source: limits.source, generatedAt: limits.generatedAt, note: "Per-model quota from an already-installed local Antigravity helper; no desktop app was started." }
+      ? { models: measured, remainingPercent: antigravityRemaining(measured), resetAt: null, source: limits.source, generatedAt: limits.generatedAt, note: "Per-model quota from an already-installed local Antigravity helper; unknown percentages remain unknown; no desktop app was started." }
       : { remainingPercent: null, resetAt: null, source: "native-cli", note: "Availability is verified; exact model quota is unknown unless an optional local helper exposes it." },
   });
 }
@@ -262,4 +274,4 @@ function discoverAll() {
   return { codex: discoverCodex(), claude: discoverClaude(), antigravity: discoverAntigravity(), cursor: discoverCursor() };
 }
 
-module.exports = { buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, normalizeClaudeUsage, runProvider };
+module.exports = { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, normalizeClaudeUsage, numericOrNull, runProvider };

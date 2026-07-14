@@ -25,7 +25,8 @@ Before that call, do not:
 Build the call from the user request, current workspace, and already available context:
 
 - `rootOutcome`: the complete measurable result the user actually wants;
-- `completionEvidence`: end-to-end evidence required before claiming completion;
+- `completionEvidence`: positive, observable end-to-end proof required before claiming completion; never put "or blocked", "when eligible", "if available", or another escape condition here;
+- `blockingConditions`: genuine external or user-only stop conditions, kept separate from completion proof;
 - `currentCodexGoal`: concrete critical-path work Codex starts immediately;
 - `currentCodexFiles`: only the files Codex currently owns, when known;
 - `candidateLanes`: one or two genuinely independent bounded worker options;
@@ -41,14 +42,20 @@ The runtime inventories capacity, applies billing, reserve, model, reliability, 
 After `orchestrate-task` returns:
 
 1. Keep its `taskId`, job ids, root outcome, and completion evidence in working context.
-2. Start the returned current-Codex lane immediately. Do not wait for workers and do not narrate orchestration.
+2. Start the returned current-Codex lane immediately. Do not wait for workers and do not narrate orchestration. A baseline check, restart, queue count, or status report does not satisfy this step.
 3. Do not investigate a worker-owned question or touch its file boundary while that worker is active.
 4. Collect each worker once with `read-job` at its natural integration point. Use `waitSeconds` up to 60 only when Codex has reached that point; the bridge waits locally without extra model turns.
 5. Integrate useful evidence once. Run `verify-job` or direct deterministic checks before any reasoning review.
 6. Reject, narrowly repair, or fail over one time when evidence is unusable. Never create a premium-model review chain.
 7. Continue the next dependency-ready project work in the same task until all completion evidence is verified or a genuine blocker requires the user.
 
+If every candidate lane is rejected, Codex must still execute the current-Codex lane. Take over useful rejected work only when it belongs on that lane; otherwise choose the next dependency-ready local correction. Do not end after explaining why no worker started.
+
+A named gate is not automatically a genuine blocker. Before ending on one, prove that it is external or user-only, identify its owner and required action, and prove that no dependency-ready local implementation, test, queue remediation, UX improvement, or evidence-gathering work remains. An empty eligible queue is a work signal, not completion proof.
+
 A worker completion, passing unit test, service restart, healthy process, milestone, plan, or running supervisor is not the root outcome. It cannot end the task unless it verifies every required completion-evidence item.
+
+The initial `turnExitFirewall.finalAnswerAllowedNow` is always false. Do not send a final answer immediately after orchestration or diagnosis. First produce a verified material change, satisfy completion evidence, or establish a fully evidenced genuine blocker under the rule above.
 
 ## Resource Judgment
 

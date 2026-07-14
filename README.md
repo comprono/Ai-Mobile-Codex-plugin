@@ -34,7 +34,8 @@ Constraints: <important boundaries>
 That is enough. The skill should:
 
 - call `orchestrate-task` first, before project commands or file reads;
-- preserve the complete outcome and its completion evidence;
+- preserve the complete outcome and positive completion evidence;
+- keep genuine external stop conditions separate so an empty queue or named gate cannot become a false success path;
 - inventory compact capacity and build the first delivery batch in that same call;
 - keep the critical path in the current Codex task;
 - dispatch only useful independent lanes;
@@ -43,6 +44,8 @@ That is enough. The skill should:
 - verify with tests, diffs, and policy gates;
 - advance to the next ready milestone in the same turn instead of stopping after the first passing slice;
 - report `Done / Active / Blocked / Capacity / Next` using evidence.
+
+The orchestration receipt initially forbids a final answer after setup, status, restart, or an empty eligible queue. Codex must first produce verified material progress, satisfy the completion evidence, or prove a genuine external/user-only blocker and that no dependency-ready local work remains.
 
 Do not ask AI Mobile to create a control room, Goal, automation, schedule, or heartbeat unless that behavior is independently required. Continuous project work does not require recurring chat turns.
 

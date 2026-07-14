@@ -6,6 +6,7 @@ const { route } = require("./router");
 const { readJson, safeWorkspace, utcNow, writeJson } = require("./utils");
 
 function finite(value) {
+  if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -54,9 +55,20 @@ function normalizedLaneGoal(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+function isConditionalCompletionEvidence(value) {
+  const text = String(value || "").trim();
+  return /\bor\s+(?:(?:a|an|one)\s+)?(?:(?:documented|genuine|external|user-only)\s+)*(?:blocker|blocked|gate|unavailable)\b/i.test(text)
+    || /\bwhen\b.{0,100}\beligible\b/i.test(text)
+    || /\bif\b.{0,100}\b(?:available|eligible|possible)\b/i.test(text)
+    || /\bunless\b/i.test(text);
+}
+
 function validate(args) {
   if (!String(args.rootOutcome || "").trim()) throw new Error("rootOutcome is required.");
   if (!Array.isArray(args.completionEvidence) || !args.completionEvidence.filter(Boolean).length) throw new Error("At least one completionEvidence item is required.");
+  if (args.completionEvidence.some(isConditionalCompletionEvidence)) {
+    throw new Error("completionEvidence must contain positive observable proof, not blocker, availability, or eligibility alternatives. Put genuine external stop conditions in blockingConditions.");
+  }
   if (!String(args.currentCodexGoal || "").trim()) throw new Error("currentCodexGoal is required.");
   if (!Array.isArray(args.candidateLanes) || args.candidateLanes.length < 1 || args.candidateLanes.length > 2) throw new Error("Provide one or two bounded candidateLanes.");
   for (const lane of args.candidateLanes) {
@@ -72,6 +84,7 @@ function orchestrateTask(args, resources, histories, createJob) {
   const workspace = safeWorkspace(args.workspace);
   const rootOutcome = String(args.rootOutcome).trim().slice(0, 6000);
   const completionEvidence = args.completionEvidence.map((item) => String(item).trim().slice(0, 1200)).filter(Boolean).slice(0, 12);
+  const blockingConditions = (args.blockingConditions || []).map((item) => String(item).trim().slice(0, 1200)).filter(Boolean).slice(0, 8);
   const currentCodexGoal = String(args.currentCodexGoal).trim().slice(0, 5000);
   const id = taskId(workspace, rootOutcome);
   const recordPath = path.join(workspace, ".ai-mobile", "tasks", `${id}.json`);
@@ -107,7 +120,7 @@ function orchestrateTask(args, resources, histories, createJob) {
         taskKind: lane.taskKind || "generic",
         model: lane.model || "",
         effort: lane.effort || "",
-        allowAntigravity: lane.allowAntigravity === true || args.allowAntigravity === true,
+        allowAntigravity: lane.allowAntigravity === undefined ? args.allowAntigravity : lane.allowAntigravity,
         allowPaidApi: lane.allowPaidApi === true,
         allowPremiumModel: lane.allowPremiumModel === true,
         needsUi: lane.needsUi === true,
@@ -160,6 +173,7 @@ function orchestrateTask(args, resources, histories, createJob) {
     taskId: id,
     rootOutcome,
     completionEvidence,
+    blockingConditions,
     currentCodex: {
       goal: currentCodexGoal,
       files: args.currentCodexFiles || [],
@@ -182,6 +196,7 @@ function orchestrateTask(args, resources, histories, createJob) {
     reusedContract: Boolean(previous),
     rootOutcome,
     completionEvidence: record.completionEvidence,
+    blockingConditions: record.blockingConditions,
     capacityEvidence: { generatedAt: resources.generatedAt || null, cached: resources.cached === true, horizonHours: Math.max(1, Math.min(24, Number(args.horizonHours || 5))) },
     capacity: compactCapacity(resources),
     currentCodex: record.currentCodex,
@@ -192,6 +207,14 @@ function orchestrateTask(args, resources, histories, createJob) {
       projectCompleteAllowed: false,
       rule: "A milestone, runner restart, passing unit test, or worker completion is not the project outcome. Claim completion only after every completionEvidence item is verified end to end.",
     },
+    turnExitFirewall: {
+      finalAnswerAllowedNow: false,
+      rule: "Do not end this turn with setup, status, a running service, an empty eligible queue, or a named gate. First advance the current-Codex lane. A blocker may end the turn only with evidence that it is external or user-only and that no dependency-ready local improvement remains.",
+      requiredBeforeFinal: [
+        "Produce and verify a material current-Codex change or satisfy a completionEvidence item.",
+        "Otherwise prove one blockingCondition, identify its owner, and prove no dependency-ready local work remains.",
+      ],
+    },
     nextAction: dispatches.length
       ? "Start the current-Codex lane now while workers run. Do not wait or duplicate their files/questions. Collect each result once at its integration point."
       : "Start the current-Codex lane now. No candidate worker passed the gates; preserve the rejection reasons and do not pretend external capacity was used.",
@@ -200,4 +223,4 @@ function orchestrateTask(args, resources, histories, createJob) {
   };
 }
 
-module.exports = { compactCapacity, orchestrateTask, taskId, validate };
+module.exports = { compactCapacity, isConditionalCompletionEvidence, orchestrateTask, taskId, validate };

@@ -8,13 +8,13 @@ const path = require("node:path");
 const { TOOLS, handle } = require("./mcp/server");
 const { conflictFor, readJob } = require("./core/job-store");
 const { providerHistory } = require("./core/provider-history");
-const { route } = require("./core/router");
-const { orchestrateTask } = require("./core/task-orchestrator");
+const { applyProfileAuthorization, normalizeRequest, route } = require("./core/router");
+const { compactCapacity, orchestrateTask } = require("./core/task-orchestrator");
 const { runVerification } = require("./core/verification");
 const { communicationContract } = require("./core/worker");
 const { normalizeProfile } = require("./lib/orchestrator-profile");
 const { assertCurrentRuntime, comparePluginVersions, runtimeVersionInfo } = require("./lib/version");
-const { buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure } = require("./providers");
+const { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, numericOrNull } = require("./providers");
 const { parseClaudeAuth, parseClaudeModels, parseClaudeUsage } = require("./providers/claude-usage");
 
 function base(workspace, patch = {}) {
@@ -63,7 +63,19 @@ function run() {
     assert.deepEqual(dispatchSchema.required, ["workspace", "rootOutcome", "completionEvidence", "currentCodexGoal", "candidateLanes"]);
     assert.equal(dispatchSchema.properties.candidateLanes.minItems, 1);
     assert.equal(dispatchSchema.properties.candidateLanes.maxItems, 2);
+    assert.equal(dispatchSchema.properties.blockingConditions.maxItems, 8);
     assert.equal(TOOLS.find((tool) => tool.name === "read-job").inputSchema.properties.waitSeconds.maximum, 60);
+
+    assert.equal(compactCapacity({ providers: { antigravity: { available: true, capacity: { remainingPercent: null } } } }).antigravity.remainingPercent, null);
+    assert.equal(numericOrNull(null), null);
+    assert.equal(numericOrNull(""), null);
+    assert.equal(antigravityRemaining([{ status: "available", remainingPercent: null }]), null);
+    assert.equal(antigravityRemaining([{ status: "exhausted", remainingPercent: 0 }]), 0);
+    const savedAuthorization = applyProfileAuthorization(normalizeRequest(base(temp)), { antigravityAutoApprovePermissions: true });
+    assert.equal(savedAuthorization.allowAntigravity, true);
+    assert.equal(savedAuthorization.antigravityAutoApprovePermissions, true);
+    const explicitDenial = applyProfileAuthorization(normalizeRequest(base(temp, { allowAntigravity: false })), { antigravityAutoApprovePermissions: true });
+    assert.equal(explicitDenial.allowAntigravity, false);
 
     assert.ok(comparePluginVersions("0.5.1+codex.20260713222133", "0.5.2+codex.20260714070000") < 0);
     assert.ok(comparePluginVersions("0.5.2+codex.20260714070000", "0.5.2+codex.20260714080000") < 0);
@@ -87,6 +99,7 @@ function run() {
       workspace: temp,
       rootOutcome: "Achieve one verified safe transaction every seven minutes.",
       completionEvidence: ["A transaction has an authoritative confirmation id.", "Cadence is sustained without duplicates."],
+      blockingConditions: ["A required user-only truth answer has no verified local source and no dependency-ready local repair remains."],
       currentCodexGoal: "Repair and verify the live runtime path.",
       currentCodexFiles: ["src/runtime"],
       currentCodexAcceptanceCriteria: ["The runtime health check passes."],
@@ -109,6 +122,8 @@ function run() {
     assert.equal(workerContracts.length, 1);
     assert.equal(finite.currentCodex.goal, finiteArgs.currentCodexGoal);
     assert.equal(finite.completionFirewall.projectCompleteAllowed, false);
+    assert.equal(finite.turnExitFirewall.finalAnswerAllowedNow, false);
+    assert.deepEqual(finite.blockingConditions, finiteArgs.blockingConditions);
     assert.equal(finite.workers[0].provider, "claude");
     assert.equal(Object.hasOwn(finite.capacity.claude, "command"), false);
     assert.ok(fs.existsSync(path.join(temp, ".ai-mobile", "tasks", `${finite.taskId}.json`)));
@@ -116,6 +131,16 @@ function run() {
     assert.equal(duplicateDispatch.workersStarted, 0);
     assert.match(duplicateDispatch.rejectedLanes[0].reason, /already dispatched/i);
     assert.equal(duplicateDispatch.rejectedLanes[0].existingJobId, "job-regression-001");
+    assert.throws(() => orchestrateTask({
+      ...finiteArgs,
+      rootOutcome: "Conditional evidence must fail.",
+      completionEvidence: ["Live preflight shows eligible work or one documented genuine external gate."],
+    }, inventory(), {}, () => null), /positive observable proof/i);
+    assert.throws(() => orchestrateTask({
+      ...finiteArgs,
+      rootOutcome: "Eligibility escape must fail.",
+      completionEvidence: ["A verified submission is recorded when an eligible canary exists."],
+    }, inventory(), {}, () => null), /positive observable proof/i);
 
     assert.equal(route(base(temp, { complexity: "small" }), inventory()).action, "direct");
     const duplicate = route(base(temp, {
@@ -247,7 +272,7 @@ function run() {
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
-  return { ok: true, assertions: 83, durationMs: Date.now() - started, tools: TOOLS.length };
+  return { ok: true, assertions: 97, durationMs: Date.now() - started, tools: TOOLS.length };
 }
 
 module.exports = { run };
