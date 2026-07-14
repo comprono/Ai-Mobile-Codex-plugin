@@ -57,6 +57,9 @@ function writeFixtureJob(workspace, id, state = "completed") {
 function run() {
   const started = Date.now();
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-test-"));
+  // Route decisions read the private local profile; pin LOCALAPPDATA so assertions run against documented defaults.
+  const savedLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = path.join(temp, "localappdata");
   try {
     assert.deepEqual(TOOLS.map((tool) => tool.name), ["orchestrate-task", "read-job", "verify-job", "cancel-job", "resource-inventory", "orchestrator-profile"]);
     const dispatchSchema = TOOLS.find((tool) => tool.name === "orchestrate-task").inputSchema;
@@ -64,6 +67,7 @@ function run() {
     assert.equal(dispatchSchema.properties.candidateLanes.minItems, 1);
     assert.equal(dispatchSchema.properties.candidateLanes.maxItems, 2);
     assert.equal(dispatchSchema.properties.blockingConditions.maxItems, 8);
+    assert.deepEqual(dispatchSchema.properties.candidateLanes.items.properties.selectionAuthority.enum, ["router", "user"]);
     assert.equal(TOOLS.find((tool) => tool.name === "read-job").inputSchema.properties.waitSeconds.maximum, 60);
 
     assert.equal(compactCapacity({ providers: { antigravity: { available: true, capacity: { remainingPercent: null } } } }).antigravity.remainingPercent, null);
@@ -189,6 +193,106 @@ function run() {
     assert.equal(route(base(temp, { currentCodexGoal: "" }), inventory()).action, "direct");
     assert.equal(route(base(temp, { independenceReason: "" }), inventory()).action, "direct");
 
+    // dev (2) regression: an explicit user Fable mandate must never target the wrong provider.
+    const fableInventory = () => {
+      const value = inventory();
+      value.providers.claude.models = [{ id: "fable" }, { id: "sonnet" }];
+      return value;
+    };
+    const wrongProvider = route(base(temp, { preferredProvider: "antigravity", model: "fable", selectionAuthority: "user", allowAntigravity: true }), fableInventory());
+    assert.equal(wrongProvider.action, "delegate");
+    assert.equal(wrongProvider.provider, "claude");
+    assert.equal(wrongProvider.request.model, "fable");
+    assert.match(wrongProvider.warnings.join(" "), /claude model/i);
+
+    // dev (2) regression: economics may warn but cannot reject a user-mandated lane.
+    const mandatedUneconomic = route(base(temp, { preferredProvider: "claude", model: "fable", selectionAuthority: "user", complexity: "small", estimatedDirectTokens: 900 }), fableInventory());
+    assert.equal(mandatedUneconomic.action, "delegate");
+    assert.equal(mandatedUneconomic.provider, "claude");
+    assert.equal(mandatedUneconomic.economics.positive, false);
+    assert.ok(mandatedUneconomic.warnings.some((item) => /Economic warning/i.test(item)));
+
+    // Router-preference premium selection keeps the token-saving default gate.
+    const premiumPreference = route(base(temp, { preferredProvider: "claude", model: "fable" }), fableInventory());
+    assert.equal(premiumPreference.action, "direct");
+    assert.match(premiumPreference.reason, /not policy-enabled/i);
+
+    // Hard gates still beat a user mandate: authentication, quota, billing, ownership overlap.
+    const mandateNoAuth = fableInventory();
+    mandateNoAuth.providers.claude.authenticated = false;
+    const mandatedNoAuth = route(base(temp, { preferredProvider: "claude", model: "fable", selectionAuthority: "user" }), mandateNoAuth);
+    assert.equal(mandatedNoAuth.action, "direct");
+    assert.equal(mandatedNoAuth.hardBlocker, true);
+    assert.match(mandatedNoAuth.reason, /not authenticated/i);
+    const mandateExhausted = fableInventory();
+    mandateExhausted.providers.claude.capacity = { remainingPercent: 1, source: "test" };
+    const mandatedExhausted = route(base(temp, { preferredProvider: "claude", model: "fable", selectionAuthority: "user" }), mandateExhausted);
+    assert.equal(mandatedExhausted.action, "direct");
+    assert.match(mandatedExhausted.reason, /exhausted/i);
+    const mandatePayg = fableInventory();
+    mandatePayg.providers.claude.authMode = "api-key";
+    const mandatedPayg = route(base(temp, { preferredProvider: "claude", model: "fable", selectionAuthority: "user" }), mandatePayg);
+    assert.equal(mandatedPayg.action, "direct");
+    assert.match(mandatedPayg.reason, /PAYG/i);
+    const mandatedOverlap = route(base(temp, { preferredProvider: "claude", model: "fable", selectionAuthority: "user", currentCodexFiles: ["src"], relevantFiles: ["src/dashboard"] }), fableInventory());
+    assert.equal(mandatedOverlap.action, "direct");
+    assert.equal(mandatedOverlap.hardBlocker, true);
+    assert.match(mandatedOverlap.reason, /file ownership overlaps/i);
+
+    // Canonical binding: Fable never dispatches through Antigravity, even in auto mode.
+    const fableNoClaude = fableInventory();
+    fableNoClaude.providers.claude.available = false;
+    fableNoClaude.providers.claude.reason = "Claude Code CLI not found.";
+    const fableAuto = route(base(temp, { preferredProvider: "auto", model: "fable", allowAntigravity: true }), fableNoClaude);
+    assert.equal(fableAuto.action, "direct");
+    assert.match(fableAuto.reason, /never dispatches through antigravity/i);
+
+    // A mandate without a bindable provider/model returns one exact actionable error.
+    const boundByModel = route(base(temp, { selectionAuthority: "user", model: "fable" }), fableInventory());
+    assert.equal(boundByModel.provider, "claude");
+    assert.throws(() => route(base(temp, { selectionAuthority: "user" }), inventory()), /requires the explicit preferredProvider/i);
+    assert.throws(() => route(base(temp, { selectionAuthority: "user", model: "mystery-agent-7" }), inventory()), /cannot bind model/i);
+    assert.throws(() => route(base(temp, { selectionAuthority: "manager" }), inventory()), /Unsupported selectionAuthority/i);
+
+    // dev (2) regression: one corrected routing attempt either dispatches or returns one hard blocker; identical retries become final.
+    const mandateArgs = {
+      workspace: temp,
+      rootOutcome: "Ship the user-mandated Fable dashboard improvement end to end.",
+      completionEvidence: ["The mandated Fable review is integrated and verified."],
+      currentCodexGoal: "Repair and verify the runtime execution path.",
+      currentCodexFiles: ["src/runtime"],
+      candidateLanes: [{
+        goal: "Deliver the user-requested Fable dashboard accessibility review with exact findings.",
+        independenceReason: "The worker owns dashboard analysis while current Codex owns runtime repair.",
+        relevantFiles: ["src/dashboard"],
+        readOnly: true,
+        preferredProvider: "antigravity",
+        model: "fable",
+        selectionAuthority: "user",
+        complexity: "small",
+        taskKind: "review",
+      }],
+    };
+    const mandateNoAuthResources = fableInventory();
+    mandateNoAuthResources.providers.claude.authenticated = false;
+    const firstMandate = orchestrateTask(mandateArgs, mandateNoAuthResources, {}, () => { throw new Error("a blocked mandate must not dispatch"); });
+    assert.equal(firstMandate.workersStarted, 0);
+    assert.equal(firstMandate.rejectedLanes[0].hardBlocker, true);
+    assert.match(firstMandate.rejectedLanes[0].reason, /not authenticated/i);
+    assert.notEqual(firstMandate.rejectedLanes[0].finalForThisLane, true);
+    assert.match(firstMandate.userMandateRule, /Do not call orchestrate-task again/i);
+    const secondMandate = orchestrateTask(mandateArgs, mandateNoAuthResources, {}, () => { throw new Error("a repeated mandate must not dispatch"); });
+    assert.equal(secondMandate.rejectedLanes[0].finalForThisLane, true);
+    assert.match(secondMandate.rejectedLanes[0].reason, /Do not call orchestrate-task again/i);
+    const healedMandate = orchestrateTask(mandateArgs, fableInventory(), {}, (contract) => ({ jobId: "job-mandate-001", state: "running", provider: contract.provider, artifactDirectory: path.join(temp, ".ai-mobile", "jobs", "job-mandate-001") }));
+    assert.equal(healedMandate.workersStarted, 1);
+    assert.equal(healedMandate.workers[0].provider, "claude");
+    assert.equal(healedMandate.workers[0].model, "fable");
+    assert.ok(healedMandate.workers[0].warnings.some((item) => /Economic warning/i.test(item)));
+    const mandateRecord = JSON.parse(fs.readFileSync(path.join(temp, ".ai-mobile", "tasks", `${healedMandate.taskId}.json`), "utf8"));
+    assert.equal(mandateRecord.rejectionHistory.length, 0);
+    assert.equal(mandateRecord.schemaVersion, 2);
+
     const claudeArgs = buildClaudeArgs({ readOnly: true, model: "sonnet", effort: "low", providerAuthMode: "subscription", maxApiBudgetUsd: 0.35, maxWorkerOutputTokens: 1200 }, "prompt");
     assert.ok(claudeArgs.includes("--safe-mode"));
     assert.ok(claudeArgs.includes("Read,Glob,Grep"));
@@ -270,9 +374,11 @@ function run() {
     const response = handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename);
     assert.equal(response.result.tools.length, 6);
   } finally {
+    if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = savedLocalAppData;
     fs.rmSync(temp, { recursive: true, force: true });
   }
-  return { ok: true, assertions: 97, durationMs: Date.now() - started, tools: TOOLS.length };
+  return { ok: true, assertions: 139, durationMs: Date.now() - started, tools: TOOLS.length };
 }
 
 module.exports = { run };

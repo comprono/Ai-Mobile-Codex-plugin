@@ -76,6 +76,10 @@ The default surface excludes project-manager cycles, status polling, setup tools
 
 Model catalogs, effort levels, quota windows, reset times, recent workspace outcomes, and provider health are discovered from current local evidence. Automatic routing scores task fit and recent reliability; it does not choose Claude first by default. Unknown or stale limits remain unknown.
 
+### Explicit User Model Selection
+
+When the user explicitly names a provider or model ("use Fable 5"), the lane carries `selectionAuthority: "user"`. Model-to-provider binding is canonical — Fable/Opus/Sonnet/Haiku are Claude, GPT is Codex, Gemini is Antigravity — and a mismatched explicit pair is corrected deterministically in the same call, so Fable can never dispatch through Antigravity. For a user mandate the economic gate and small-task overhead warn instead of reject, and the mandate covers the premium-model opt-in; hard authentication, quota, billing, ownership-overlap, file-boundary, and safety gates still win. A repeated identical failed mandate returns one final do-not-retry blocker instead of another orchestration round. Automatic routing without a mandate keeps every token-saving default.
+
 ## Token-Efficiency Contract
 
 - No plugin call for trivial or tightly coupled work.

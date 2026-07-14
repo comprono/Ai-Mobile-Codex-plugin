@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 const path = require("node:path");
-const { route } = require("./router");
+const { canonicalModelProvider, route } = require("./router");
 const { readJson, safeWorkspace, utcNow, writeJson } = require("./utils");
 
 function finite(value) {
@@ -55,6 +55,14 @@ function normalizedLaneGoal(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+function laneAttemptFingerprint(lane) {
+  const model = String(lane.model || "").trim().toLowerCase();
+  const provider = String(lane.preferredProvider || "auto").trim().toLowerCase();
+  // Canonical binding makes the pre-correction and corrected forms of the same mandate hash identically.
+  const effectiveProvider = canonicalModelProvider(model) || provider;
+  return `${normalizedLaneGoal(lane.goal)}|${effectiveProvider}|${model}`;
+}
+
 function isConditionalCompletionEvidence(value) {
   const text = String(value || "").trim();
   return /\bor\s+(?:(?:a|an|one)\s+)?(?:(?:documented|genuine|external|user-only)\s+)*(?:blocker|blocked|gate|unavailable)\b/i.test(text)
@@ -90,10 +98,28 @@ function orchestrateTask(args, resources, histories, createJob) {
   const recordPath = path.join(workspace, ".ai-mobile", "tasks", `${id}.json`);
   const previous = readJson(recordPath, null);
   const priorLanes = new Map((previous?.dispatches || []).map((item) => [normalizedLaneGoal(item.lane), item]));
+  const rejectionHistory = new Map((previous?.rejectionHistory || []).map((item) => [item.fingerprint, item]));
   const dispatches = [];
   const rejected = [];
 
   for (const lane of args.candidateLanes) {
+    const userMandatedLane = String(lane.selectionAuthority || "").trim().toLowerCase() === "user";
+    const fingerprint = laneAttemptFingerprint(lane);
+    const priorRejection = userMandatedLane ? rejectionHistory.get(fingerprint) : null;
+    const rejectLane = (reason, considered, hardBlocker) => {
+      const entry = { goal: lane.goal, reason, considered };
+      if (userMandatedLane) {
+        entry.selectionAuthority = "user";
+        if (hardBlocker) entry.hardBlocker = true;
+        if (priorRejection) {
+          entry.repeatedRejection = true;
+          entry.finalForThisLane = true;
+          entry.reason = `Repeated user-mandated lane (attempt ${Number(priorRejection.attempts || 1) + 1}) rejected again: ${reason} Do not call orchestrate-task again for this lane; resolve this exact blocker or run the lane in current Codex.`;
+        }
+        rejectionHistory.set(fingerprint, { fingerprint, lane: String(lane.goal || "").slice(0, 300), provider: String(lane.preferredProvider || "auto"), model: String(lane.model || ""), reason: String(reason).slice(0, 500), attempts: Number(priorRejection?.attempts || 0) + 1, lastAt: utcNow() });
+      }
+      rejected.push(entry);
+    };
     const priorLane = priorLanes.get(normalizedLaneGoal(lane.goal));
     if (priorLane) {
       rejected.push({ goal: lane.goal, existingJobId: priorLane.jobId, provider: priorLane.provider, reason: "This exact lane was already dispatched for the same root outcome; collect or integrate its existing job instead of spending capacity twice.", considered: [] });
@@ -110,6 +136,7 @@ function orchestrateTask(args, resources, histories, createJob) {
         acceptanceCriteria: lane.acceptanceCriteria || [],
         nextStep: lane.collectAt || lane.nextStep || "Integrate this result before taking over the lane.",
         preferredProvider: lane.preferredProvider || "auto",
+        selectionAuthority: lane.selectionAuthority || "router",
         readOnly: lane.readOnly !== false,
         relevantFiles: lane.relevantFiles,
         currentCodexFiles: args.currentCodexFiles || [],
@@ -133,12 +160,12 @@ function orchestrateTask(args, resources, histories, createJob) {
         horizonHours: args.horizonHours,
       }, resources, histories);
     } catch (error) {
-      rejected.push({ goal: lane.goal, reason: error.message, considered: [] });
+      rejectLane(error.message, [], true);
       continue;
     }
 
     if (decision.action !== "delegate") {
-      rejected.push({ goal: lane.goal, reason: decision.reason, considered: compactConsidered(decision.considered) });
+      rejectLane(decision.reason, compactConsidered(decision.considered), decision.hardBlocker === true);
       continue;
     }
 
@@ -153,23 +180,26 @@ function orchestrateTask(args, resources, histories, createJob) {
         providerCommand: provider.command,
         providerAuthMode: provider.authMode || "unknown",
       });
+      if (userMandatedLane) rejectionHistory.delete(fingerprint);
       dispatches.push({
         lane: lane.goal,
         provider: decision.provider,
         model: decision.request.model || "",
+        ...(userMandatedLane ? { selectionAuthority: "user" } : {}),
+        ...(decision.warnings?.length ? { warnings: decision.warnings } : {}),
         reason: decision.reason,
         economics: decision.economics,
         considered: compactConsidered(decision.considered),
         ...receipt,
       });
     } catch (error) {
-      rejected.push({ goal: lane.goal, reason: error.message, considered: compactConsidered(decision.considered) });
+      rejectLane(error.message, compactConsidered(decision.considered), true);
     }
   }
 
   const createdAt = previous?.createdAt || utcNow();
   const record = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     taskId: id,
     rootOutcome,
     completionEvidence,
@@ -185,11 +215,13 @@ function orchestrateTask(args, resources, histories, createJob) {
       ...dispatches.map((item) => ({ jobId: item.jobId, lane: item.lane, provider: item.provider, model: item.model })),
     ].slice(-20),
     rejected,
+    rejectionHistory: [...rejectionHistory.values()].slice(-10),
     createdAt,
     updatedAt: utcNow(),
     invocationCount: Number(previous?.invocationCount || 0) + 1,
   };
   writeJson(recordPath, record);
+  const blockedMandate = rejected.find((item) => item.selectionAuthority === "user");
 
   return {
     taskId: id,
@@ -218,6 +250,9 @@ function orchestrateTask(args, resources, histories, createJob) {
     nextAction: dispatches.length
       ? "Start the current-Codex lane now while workers run. Do not wait or duplicate their files/questions. Collect each result once at its integration point."
       : "Start the current-Codex lane now. No candidate worker passed the gates; preserve the rejection reasons and do not pretend external capacity was used.",
+    ...(blockedMandate ? {
+      userMandateRule: "A user-mandated lane hit a hard gate. Report that exact blocker to the user once. Do not call orchestrate-task again for the same lane, and do not silently substitute a different provider or model for the user's explicit choice.",
+    } : {}),
     contractRule: "This one finite call replaces separate inventory and dispatch setup. Do not create a manager loop, Goal, automation, heartbeat, or repeated status poll.",
     reportingRule: "Report verified artifacts, accepted changes, concrete blockers, and the next dependency-ready action. Activity alone is not progress.",
   };

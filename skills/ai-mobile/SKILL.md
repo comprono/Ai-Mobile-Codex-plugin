@@ -31,11 +31,22 @@ Build the call from the user request, current workspace, and already available c
 - `currentCodexFiles`: only the files Codex currently owns, when known;
 - `candidateLanes`: one or two genuinely independent bounded worker options;
 - each candidate includes a clear goal, independence reason, read boundary, task kind, complexity, and realistic direct-token estimate;
-- writers also require exact `expectedFiles`; unknown write boundaries stay read-only.
+- writers also require exact `expectedFiles`; unknown write boundaries stay read-only;
+- when the user explicitly names a provider or model (for example "use Fable 5" or "have Claude do it"), set `selectionAuthority: "user"` with that exact `preferredProvider`/`model` on the lane. Never use `"user"` for your own routing preference.
 
 If the file map is unknown, use a bounded read-only discovery candidate. `relevantFiles: ["."]` is allowed only for that discovery lane; keep current Codex on a distinct live-state, acceptance, or user-decision path until the result is collected. Never invent narrow paths merely to pass the schema.
 
 The runtime inventories capacity, applies billing, reserve, model, reliability, overlap, and economic gates, and either starts useful workers or returns precise rejection reasons. One call replaces the former inventory-then-dispatch ritual.
+
+## Explicit User Selection
+
+`selectionAuthority: "user"` changes only the economic layer, never the hard gates:
+
+- model-to-provider binding is canonical: Fable/Opus/Sonnet/Haiku are Claude, GPT is Codex, Gemini is Antigravity. A mismatched explicit pair is corrected deterministically inside the same call, so do not spend a second call fixing the provider yourself;
+- the economic gate and small-task overhead warn instead of reject, and the mandate itself covers the premium-model opt-in;
+- authentication, quota, billing, ownership-overlap, file-boundary, and safety gates still reject with one exact blocker.
+
+If a user-mandated lane is rejected, report that exact blocker to the user once. Do not call `orchestrate-task` again for the same lane (a repeat returns a final do-not-retry blocker), and do not silently substitute a different provider or model for the user's explicit choice.
 
 ## Execution Contract
 

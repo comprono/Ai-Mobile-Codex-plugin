@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 - 2026-07-15
+
+- Reproduced a real run where the user explicitly requested Fable 5: the lane first targeted Fable through the wrong provider, was then corrected to Claude/Fable, and was still rejected twice by the economic gate, so no Fable worker ever started.
+- Added a lane `selectionAuthority` contract field (`router` default, `user` for an explicit user provider/model mandate) across the MCP schema, router, task record, skill, and docs.
+- User-mandated lanes now pass the economic gate with a recorded warning instead of a rejection; small-task overhead also warns instead of rejecting. Hard authentication, quota, billing, ownership-overlap, file-boundary, and safety gates still reject, and the user mandate itself satisfies the premium-model opt-in.
+- Added canonical model-to-provider binding: Fable/Opus/Sonnet/Haiku are Claude models, GPT models are Codex, Gemini models are Antigravity. A mismatched explicit provider/model pair is corrected deterministically inside the same call when unambiguous, or rejected with one exact actionable error; a Claude-family model can never dispatch through Antigravity, even in automatic mode.
+- Persisted per-lane rejection history in the durable task record. A repeat of the same failed user-mandated lane returns one final hard blocker with an explicit do-not-retry instruction instead of consuming more orchestrate-task calls; a genuinely resolved blocker (for example restored authentication) still dispatches normally.
+- Automatic (router-authority) routing economics are unchanged. Regression coverage proves small and uneconomic automatic lanes still stay in current Codex, premium models still require opt-in without a user mandate, and hard capacity/auth/billing/overlap gates still reject mandated lanes.
+
 ## 0.5.3 - 2026-07-14
 
 - Reproduced a real `0.5.2` run that correctly started orchestration but then stopped after a runner check and an empty eligible queue.

@@ -6,6 +6,20 @@ const { readProfile } = require("../lib/orchestrator-profile");
 
 const PROVIDERS = new Set(["auto", "codex", "claude", "antigravity", "cursor"]);
 const TASK_KINDS = new Set(["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"]);
+const SELECTION_AUTHORITIES = new Set(["router", "user"]);
+const CANONICAL_MODEL_FAMILIES = [
+  ["claude", /(^|[^a-z])(claude|fable|mythos|opus|sonnet|haiku)([^a-z]|$)/i],
+  ["codex", /(^|[^a-z])(gpt|codex)([^a-z]|$)/i],
+  ["antigravity", /(^|[^a-z])gemini([^a-z]|$)/i],
+];
+const CANONICAL_BINDING_HINT = "Fable/Opus/Sonnet/Haiku are Claude models, GPT models are Codex, Gemini models are Antigravity";
+
+function canonicalModelProvider(model) {
+  const value = String(model || "").trim();
+  if (!value) return "";
+  const matches = CANONICAL_MODEL_FAMILIES.filter(([, pattern]) => pattern.test(value)).map(([provider]) => provider);
+  return matches.length === 1 ? matches[0] : "";
+}
 const FIT = {
   codex: { architecture: 88, browser: 45, code: 88, debug: 90, docs: 70, generic: 78, "live-state": 92, "repository-scan": 68, research: 65, review: 82, tests: 78 },
   claude: { architecture: 94, browser: 45, code: 90, debug: 88, docs: 76, generic: 78, "live-state": 55, "repository-scan": 78, research: 72, review: 90, tests: 76 },
@@ -29,8 +43,28 @@ function paths(workspace, values) {
 }
 
 function normalizeRequest(input = {}) {
-  const preferredProvider = String(input.preferredProvider || "auto").toLowerCase();
+  let preferredProvider = String(input.preferredProvider || "auto").toLowerCase();
   if (!PROVIDERS.has(preferredProvider)) throw new Error(`Unsupported provider: ${preferredProvider}`);
+  const selectionAuthority = String(input.selectionAuthority || "router").trim().toLowerCase();
+  if (!SELECTION_AUTHORITIES.has(selectionAuthority)) {
+    throw new Error(`Unsupported selectionAuthority: ${selectionAuthority}. Use "user" only for a provider/model the user explicitly mandated; omit it for automatic routing.`);
+  }
+  const model = String(input.model || "").trim();
+  const canonicalProvider = canonicalModelProvider(model);
+  let selectionCorrection = "";
+  if (model && canonicalProvider && preferredProvider !== "auto" && preferredProvider !== canonicalProvider) {
+    selectionCorrection = `Corrected provider "${preferredProvider}" to "${canonicalProvider}": "${model}" is a ${canonicalProvider} model (${CANONICAL_BINDING_HINT}).`;
+    preferredProvider = canonicalProvider;
+  }
+  if (selectionAuthority === "user" && preferredProvider === "auto") {
+    if (model && canonicalProvider) {
+      preferredProvider = canonicalProvider;
+    } else if (model) {
+      throw new Error(`selectionAuthority "user" cannot bind model "${model}" to one provider (${CANONICAL_BINDING_HINT}). Set the exact preferredProvider the user mandated.`);
+    } else {
+      throw new Error('selectionAuthority "user" requires the explicit preferredProvider and/or model the user mandated. Omit selectionAuthority for automatic routing.');
+    }
+  }
   const readOnly = input.readOnly === true;
   const expectedFiles = paths(input.workspace, input.expectedFiles);
   if (!readOnly && !expectedFiles.length) throw new Error("Writer lanes require explicit expectedFiles boundaries.");
@@ -54,7 +88,9 @@ function normalizeRequest(input = {}) {
     timeoutSeconds: clamp(input.timeoutSeconds, 30, 3600, 900),
     complexity,
     taskKind,
-    model: String(input.model || "").trim(),
+    model,
+    selectionAuthority,
+    selectionCorrection,
     effort: String(input.effort || (readOnly ? "low" : "medium")).trim(),
     allowAntigravity: input.allowAntigravity === undefined ? null : input.allowAntigravity === true,
     allowPaidApi: input.allowPaidApi === true,
@@ -107,6 +143,8 @@ function antigravityModel(request, state) {
 }
 
 function providerModel(id, request, state, profile) {
+  const requestedFamily = canonicalModelProvider(request.model);
+  if (request.model && requestedFamily && requestedFamily !== id && ["codex", "claude", "antigravity"].includes(id)) return "";
   if (id === "codex") {
     if (request.model) return modelAllowed(profile.codexModelAllowPattern, request.model) ? request.model : "";
     return state.models?.find((item) => modelAllowed(profile.codexModelAllowPattern, item.id))?.id || "";
@@ -122,7 +160,8 @@ function providerModel(id, request, state, profile) {
       if (withinHorizon && Number(dedicated.remainingPercent) >= 10 && state.models?.some((item) => /fable/i.test(item.id))) model = "fable";
     }
     if (!modelAllowed(profile.claudeModelAllowPattern, model)) return "";
-    if (!request.allowPremiumModel && !profile.useExpiringPremiumCapacity && /fable|opus/i.test(model)) return "";
+    const userMandatedModel = request.selectionAuthority === "user" && Boolean(request.model);
+    if (!request.allowPremiumModel && !profile.useExpiringPremiumCapacity && !userMandatedModel && /fable|opus/i.test(model)) return "";
     return model;
   }
   if (id === "antigravity") return antigravityModel(request, state);
@@ -166,7 +205,15 @@ function providerEligibility(id, request, inventory, profile, history) {
     return { eligible: false, reason: "Claude would use API/PAYG billing; explicit allowPaidApi is required" };
   }
   const model = providerModel(id, request, state, profile);
-  if (["codex", "claude", "antigravity"].includes(id) && !model) return { eligible: false, reason: "no policy-allowed model is available" };
+  if (["codex", "claude", "antigravity"].includes(id) && !model) {
+    const requestedFamily = canonicalModelProvider(request.model);
+    const reason = !request.model
+      ? "no policy-allowed model is available"
+      : requestedFamily && requestedFamily !== id
+        ? `model "${request.model}" is a ${requestedFamily} model and never dispatches through ${id} (${CANONICAL_BINDING_HINT})`
+        : `requested model "${request.model}" is not policy-enabled for ${id} (model allow pattern, or premium gate without allowPremiumModel or an explicit user mandate)`;
+    return { eligible: false, reason };
+  }
   const capacity = capacityFor(id, state, model);
   const remaining = capacity.remainingPercent;
   if (remaining !== null && remaining <= (id === "codex" ? profile.codexReservePercent : 2)) {
@@ -219,13 +266,20 @@ function route(input, inventory, histories = {}) {
   if (input.minimumSavingsPercent === undefined) request.minimumSavingsPercent = profile.minimumDelegationSavingsPercent || 20;
   applyProfileAuthorization(request, profile);
   if (!request.goal) throw new Error("A bounded worker goal is required.");
-  if (request.complexity === "small") return { action: "direct", reason: "Dispatch overhead exceeds the likely savings for this small task.", request, considered: [] };
+  const userMandated = request.selectionAuthority === "user";
+  const warnings = request.selectionCorrection ? [request.selectionCorrection] : [];
+  if (request.complexity === "small" && !userMandated) return { action: "direct", reason: "Dispatch overhead exceeds the likely savings for this small task.", request, considered: [] };
   const coordinationBlocker = coordinationGate(request);
-  if (coordinationBlocker) return { action: "direct", reason: coordinationBlocker, request, considered: [] };
+  if (coordinationBlocker) return { action: "direct", reason: coordinationBlocker, hardBlocker: userMandated || undefined, request, considered: [] };
   const economics = economicEstimate(request);
   request.economics = economics;
-  if (!economics.positive) {
-    return { action: "direct", reason: `Delegation is not economically positive (${economics.savingsPercent}% estimated token-equivalent saving).`, request, considered: [] };
+  if (!economics.positive || request.complexity === "small") {
+    if (!userMandated) {
+      return { action: "direct", reason: `Delegation is not economically positive (${economics.savingsPercent}% estimated token-equivalent saving).`, request, considered: [] };
+    }
+    warnings.push(`Economic warning: ${request.complexity === "small"
+      ? "small-task dispatch overhead normally keeps this lane in current Codex"
+      : `the estimated token-equivalent saving is ${economics.savingsPercent}%, below the ${request.minimumSavingsPercent}% threshold`}; dispatching anyway because the user explicitly mandated ${request.preferredProvider}${request.model ? `/${request.model}` : ""}.`);
   }
 
   const ids = request.preferredProvider === "auto" ? ["codex", "claude", "antigravity", "cursor"] : [request.preferredProvider];
@@ -236,19 +290,30 @@ function route(input, inventory, histories = {}) {
   });
   const selected = considered.filter((item) => item.eligible).sort((a, b) => b.score - a.score)[0];
   if (!selected) {
-    return { action: "direct", reason: `No eligible provider: ${considered.map((item) => `${item.provider}: ${item.reason}`).join("; ")}.`, request, considered, economics };
+    return {
+      action: "direct",
+      reason: `No eligible provider: ${considered.map((item) => `${item.provider}: ${item.reason}`).join("; ")}.`,
+      hardBlocker: userMandated || undefined,
+      request,
+      considered,
+      economics,
+      warnings: warnings.length ? warnings : undefined,
+    };
   }
   request.model = selected.model || request.model;
   return {
     action: "delegate",
     provider: selected.provider,
-    reason: request.preferredProvider === "auto"
-      ? `${selected.provider} has the best fit-adjusted score (${selected.score}) for this independent ${request.taskKind} lane.`
-      : `Explicit ${selected.provider} selection passed independence, capacity, billing, and economic gates.`,
+    reason: userMandated
+      ? `User-mandated ${selected.provider}${selected.model ? `/${selected.model}` : ""} passed the hard authentication, capacity, billing, ownership, and safety gates${warnings.length ? "; economic and correction warnings were recorded without blocking" : ""}.`
+      : request.preferredProvider === "auto"
+        ? `${selected.provider} has the best fit-adjusted score (${selected.score}) for this independent ${request.taskKind} lane.`
+        : `Explicit ${selected.provider} selection passed independence, capacity, billing, and economic gates.`,
     request,
     considered,
     economics,
+    warnings: warnings.length ? warnings : undefined,
   };
 }
 
-module.exports = { applyProfileAuthorization, coordinationGate, normalizeRequest, providerEligibility, route };
+module.exports = { applyProfileAuthorization, canonicalModelProvider, coordinationGate, normalizeRequest, providerEligibility, route };

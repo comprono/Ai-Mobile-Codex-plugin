@@ -22,6 +22,10 @@ expected execution/context saving
 
 Small, tightly coupled, semantically overlapping, or path-overlapping work stays with current Codex. For substantial independent work, the runtime scores task fit, capacity, billing mode, recent reliability, model policy, handoff size, bounded output, and integration cost. It does not use a permanent Claude-first or model-leaderboard order.
 
+## Explicit User Selection
+
+A lane with `selectionAuthority: "user"` carries a provider/model the user explicitly mandated. The runtime binds models to providers canonically (Fable/Opus/Sonnet/Haiku are Claude, GPT is Codex, Gemini is Antigravity), corrects an unambiguous mismatch in the same call, and rejects an unbindable mandate with one exact actionable error. Economics and small-task overhead warn without rejecting, and the mandate satisfies the premium-model opt-in. Hard authentication, quota, billing, ownership, file-boundary, and safety gates still reject. A repeat of the same failed mandated lane returns one final do-not-retry blocker from the durable task record.
+
 Writers require explicit workspace-relative `expectedFiles`. Keep parallel writer boundaries disjoint. When evidence is unknown or stale, reduce concurrency instead of guessing.
 
 After a concrete terminal failure, either take the lane back into current Codex or fail over once to a provider with a materially different failure surface. Do not retry authorization prompts, stale transports, or the same provider repeatedly.
