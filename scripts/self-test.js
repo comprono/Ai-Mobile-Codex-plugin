@@ -11,7 +11,7 @@ const { providerHistory } = require("./core/provider-history");
 const { applyProfileAuthorization, normalizeRequest, route } = require("./core/router");
 const { compactCapacity, orchestrateTask } = require("./core/task-orchestrator");
 const { runVerification } = require("./core/verification");
-const { communicationContract } = require("./core/worker");
+const { communicationContract, promptFor } = require("./core/worker");
 const { normalizeProfile } = require("./lib/orchestrator-profile");
 const { assertCurrentRuntime, comparePluginVersions, runtimeVersionInfo } = require("./lib/version");
 const { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, numericOrNull } = require("./providers");
@@ -69,6 +69,7 @@ function run() {
     assert.equal(dispatchSchema.properties.blockingConditions.maxItems, 8);
     assert.deepEqual(dispatchSchema.properties.candidateLanes.items.properties.selectionAuthority.enum, ["router", "user"]);
     assert.equal(TOOLS.find((tool) => tool.name === "read-job").inputSchema.properties.waitSeconds.maximum, 60);
+    assert.match(promptFor({ ...base(temp, { complexity: "small" }), maxWorkerOutputTokens: 300, expectedFiles: [], acceptanceCriteria: [] }), /Small read-only inspection cap/i);
 
     assert.equal(compactCapacity({ providers: { antigravity: { available: true, capacity: { remainingPercent: null } } } }).antigravity.remainingPercent, null);
     assert.equal(numericOrNull(null), null);
@@ -173,7 +174,7 @@ function run() {
 
     const cheapScan = route(base(temp, { taskKind: "repository-scan", allowAntigravity: true, preferredProvider: "auto" }), inventory());
     assert.equal(cheapScan.provider, "antigravity");
-    assert.equal(cheapScan.request.model, "gemini-3.5-flash-medium");
+    assert.equal(cheapScan.request.model, "Gemini 3.5 Flash (Medium)");
 
     const noAntigravity = route(base(temp, { taskKind: "repository-scan", allowAntigravity: false, preferredProvider: "antigravity" }), inventory());
     assert.equal(noAntigravity.action, "direct");

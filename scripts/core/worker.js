@@ -17,6 +17,9 @@ function communicationContract(mode = "smart-compact") {
 
 function promptFor(contract) {
   const maxWords = Math.max(250, Math.min(2200, Math.floor((contract.maxWorkerOutputTokens || 1200) * 0.72)));
+  const smallReadOnlyCap = contract.readOnly && contract.complexity === "small"
+    ? "Small read-only inspection cap: inspect at most three direct files or commands from the listed scope. Do not recurse through directories, scan logs broadly, or inspect unrelated files. If those checks cannot establish the answer, stop and report the missing evidence as the blocker."
+    : "";
   return [
     "You are one bounded worker inside a larger project. Complete only this lane.",
     `Project outcome: ${contract.projectGoal || "Not supplied"}`,
@@ -30,6 +33,7 @@ function promptFor(contract) {
     contract.expectedFiles.length ? `Allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
     contract.acceptanceCriteria.length ? `Acceptance criteria:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
     contract.nextStep ? `Useful next step after this lane: ${contract.nextStep}` : "",
+    smallReadOnlyCap,
     "Do not investigate, implement, or repeat the current-Codex lane. Do not run another agent, start a manager loop, create recurring work, or broaden scope.",
     "Completing this lane is evidence for current Codex. It does not complete the project outcome.",
     communicationContract(contract.communicationMode),

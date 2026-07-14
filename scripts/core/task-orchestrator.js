@@ -140,6 +140,7 @@ function orchestrateTask(args, resources, histories, createJob) {
         readOnly: lane.readOnly !== false,
         relevantFiles: lane.relevantFiles,
         currentCodexFiles: args.currentCodexFiles || [],
+        currentCodexReserved: args.currentCodexReserved === true,
         expectedFiles: lane.expectedFiles || [],
         verificationCommands: lane.verificationCommands || [],
         timeoutSeconds: lane.timeoutSeconds,
@@ -207,6 +208,7 @@ function orchestrateTask(args, resources, histories, createJob) {
     currentCodex: {
       goal: currentCodexGoal,
       files: args.currentCodexFiles || [],
+      reserved: args.currentCodexReserved === true,
       acceptanceCriteria: args.currentCodexAcceptanceCriteria || [],
     },
     candidateLanes: args.candidateLanes,

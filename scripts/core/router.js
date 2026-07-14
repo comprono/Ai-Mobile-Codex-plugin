@@ -83,6 +83,9 @@ function normalizeRequest(input = {}) {
     readOnly,
     relevantFiles: paths(input.workspace, input.relevantFiles),
     currentCodexFiles: paths(input.workspace, input.currentCodexFiles),
+    // An active Codex lane may be intentionally reserved for different work. This is
+    // never a blanket bypass: only disjoint, read-only external evidence lanes qualify.
+    currentCodexReserved: input.currentCodexReserved === true,
     expectedFiles,
     verificationCommands: Array.isArray(input.verificationCommands) ? input.verificationCommands : [],
     timeoutSeconds: clamp(input.timeoutSeconds, 30, 3600, 900),
@@ -121,6 +124,13 @@ function modelFamily(value) {
   return String(value || "").toLowerCase().replace(/^claude-/, "").replace(/[^a-z]+/g, " ").trim().split(/\s+/)[0] || "";
 }
 
+function normalizedModelId(value) {
+  return String(value || "").toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 function windowApplies(window, model) {
   const scope = String(window?.scope || "all").toLowerCase();
   if (scope === "all") return true;
@@ -130,16 +140,21 @@ function windowApplies(window, model) {
 }
 
 function antigravityModel(request, state) {
-  if (request.model) return request.model;
+  const printable = (row) => row?.displayName || row?.id || "";
   const models = (state.models || []).filter((item) => item.quota?.status !== "exhausted" && Number(item.quota?.remainingPercent ?? 1) > 0);
+  if (request.model) {
+    const requested = normalizedModelId(request.model);
+    const matched = models.find((item) => normalizedModelId(item.id) === requested || normalizedModelId(item.displayName) === requested);
+    return matched ? printable(matched) : request.model;
+  }
   const wanted = request.taskKind === "browser" || request.complexity === "large"
     ? [/gemini.*flash.*high/i, /gemini.*flash.*medium/i, /flash/i]
     : [/gemini.*flash.*medium/i, /gemini.*flash.*low/i, /flash/i];
   for (const pattern of wanted) {
     const row = models.find((item) => pattern.test(`${item.id} ${item.displayName}`));
-    if (row) return row.id;
+    if (row) return printable(row);
   }
-  return models[0]?.id || "";
+  return printable(models[0]);
 }
 
 function providerModel(id, request, state, profile) {
@@ -268,21 +283,31 @@ function route(input, inventory, histories = {}) {
   if (!request.goal) throw new Error("A bounded worker goal is required.");
   const userMandated = request.selectionAuthority === "user";
   const warnings = request.selectionCorrection ? [request.selectionCorrection] : [];
-  if (request.complexity === "small" && !userMandated) return { action: "direct", reason: "Dispatch overhead exceeds the likely savings for this small task.", request, considered: [] };
   const coordinationBlocker = coordinationGate(request);
   if (coordinationBlocker) return { action: "direct", reason: coordinationBlocker, hardBlocker: userMandated || undefined, request, considered: [] };
+  const externalReadOnlyLane = request.currentCodexReserved
+    && request.readOnly
+    && request.preferredProvider !== "codex";
+  if (request.complexity === "small" && !userMandated && !externalReadOnlyLane) {
+    return { action: "direct", reason: "Dispatch overhead exceeds the likely savings for this small task.", request, considered: [] };
+  }
   const economics = economicEstimate(request);
   request.economics = economics;
   if (!economics.positive || request.complexity === "small") {
-    if (!userMandated) {
+    if (!userMandated && !externalReadOnlyLane) {
       return { action: "direct", reason: `Delegation is not economically positive (${economics.savingsPercent}% estimated token-equivalent saving).`, request, considered: [] };
     }
+    const exception = userMandated
+      ? `dispatching anyway because the user explicitly mandated ${request.preferredProvider}${request.model ? `/${request.model}` : ""}`
+      : "dispatching a disjoint read-only lane because current Codex is reserved for an active different lane";
     warnings.push(`Economic warning: ${request.complexity === "small"
       ? "small-task dispatch overhead normally keeps this lane in current Codex"
-      : `the estimated token-equivalent saving is ${economics.savingsPercent}%, below the ${request.minimumSavingsPercent}% threshold`}; dispatching anyway because the user explicitly mandated ${request.preferredProvider}${request.model ? `/${request.model}` : ""}.`);
+      : `the estimated token-equivalent saving is ${economics.savingsPercent}%, below the ${request.minimumSavingsPercent}% threshold`}; ${exception}.`);
   }
 
-  const ids = request.preferredProvider === "auto" ? ["codex", "claude", "antigravity", "cursor"] : [request.preferredProvider];
+  const ids = request.preferredProvider === "auto"
+    ? (request.currentCodexReserved ? ["claude", "antigravity", "cursor"] : ["codex", "claude", "antigravity", "cursor"])
+    : [request.preferredProvider];
   const considered = ids.map((id) => {
     const gate = providerEligibility(id, request, inventory, profile, histories[id]);
     const scored = gate.eligible ? providerScore(id, request, profile, histories[id], gate) : { score: null, factors: null };
@@ -306,6 +331,8 @@ function route(input, inventory, histories = {}) {
     provider: selected.provider,
     reason: userMandated
       ? `User-mandated ${selected.provider}${selected.model ? `/${selected.model}` : ""} passed the hard authentication, capacity, billing, ownership, and safety gates${warnings.length ? "; economic and correction warnings were recorded without blocking" : ""}.`
+      : externalReadOnlyLane
+        ? `Disjoint read-only ${selected.provider} lane dispatched while current Codex remains reserved for its active different lane.`
       : request.preferredProvider === "auto"
         ? `${selected.provider} has the best fit-adjusted score (${selected.score}) for this independent ${request.taskKind} lane.`
         : `Explicit ${selected.provider} selection passed independence, capacity, billing, and economic gates.`,

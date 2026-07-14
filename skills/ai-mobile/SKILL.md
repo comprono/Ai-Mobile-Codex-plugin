@@ -29,6 +29,7 @@ Build the call from the user request, current workspace, and already available c
 - `blockingConditions`: genuine external or user-only stop conditions, kept separate from completion proof;
 - `currentCodexGoal`: concrete critical-path work Codex starts immediately;
 - `currentCodexFiles`: only the files Codex currently owns, when known;
+- `currentCodexReserved: true` only when a live Codex task owns different work and must not receive this lane. It permits only a disjoint, read-only external evidence lane to bypass the small-task economic gate; never use it for writers, overlapping paths, or to bypass capacity, billing, or safety checks;
 - `candidateLanes`: one or two genuinely independent bounded worker options;
 - each candidate includes a clear goal, independence reason, read boundary, task kind, complexity, and realistic direct-token estimate;
 - writers also require exact `expectedFiles`; unknown write boundaries stay read-only;

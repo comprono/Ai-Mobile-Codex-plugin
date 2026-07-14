@@ -43,11 +43,14 @@ try {
     cooledAntigravity: route(request({ taskKind: "repository-scan", allowAntigravity: true, preferredProvider: "auto" }), resources, { antigravity: { cooledDown: true, consecutiveFailures: 2 }, claude: { successRate: 1 } }),
     userMandatedFableSmall: route(request({ preferredProvider: "antigravity", model: "fable", selectionAuthority: "user", complexity: "small", estimatedDirectTokens: 900, allowAntigravity: true }), fableResources),
     routerFableUneconomic: route(request({ preferredProvider: "claude", model: "sonnet", complexity: "small" }), fableResources),
+    reservedReadOnlyClaude: route(request({ preferredProvider: "claude", complexity: "small", estimatedDirectTokens: 900, currentCodexReserved: true }), fableResources),
+    reservedReadOnlyOverlap: route(request({ preferredProvider: "claude", complexity: "small", estimatedDirectTokens: 900, currentCodexReserved: true, relevantFiles: ["backend/dashboard"] }), fableResources),
   };
   assert.equal(scenarios.smallDirect.action, "direct");
   assert.equal(scenarios.duplicateRejected.action, "direct");
   assert.equal(scenarios.disjointArchitecture.provider, "claude");
   assert.equal(scenarios.cheapRepositoryScan.provider, "antigravity");
+  assert.equal(scenarios.cheapRepositoryScan.request.model, "Gemini 3.5 Flash (Medium)", "Antigravity CLI must receive the installed display-name model selector");
   assert.equal(scenarios.cooledAntigravity.provider, "claude");
   assert.ok(scenarios.disjointArchitecture.economics.delegatedTokens < scenarios.disjointArchitecture.economics.directTokens);
   assert.ok(scenarios.disjointArchitecture.request.maxWorkerOutputTokens <= 2000);
@@ -56,6 +59,11 @@ try {
   assert.equal(scenarios.userMandatedFableSmall.request.model, "fable");
   assert.ok(scenarios.userMandatedFableSmall.warnings.some((item) => /Economic warning/i.test(item)), "waived economics must surface as a warning");
   assert.equal(scenarios.routerFableUneconomic.action, "direct", "router-preference small lanes keep the token-saving direct default");
+  assert.equal(scenarios.reservedReadOnlyClaude.action, "delegate", "a disjoint read-only lane may use external capacity while current Codex is reserved");
+  assert.equal(scenarios.reservedReadOnlyClaude.provider, "claude");
+  assert.ok(scenarios.reservedReadOnlyClaude.warnings.some((item) => /current Codex is reserved/i.test(item)), "the reserved-Codex economic exception must remain visible");
+  assert.equal(scenarios.reservedReadOnlyOverlap.action, "direct", "reserving Codex must never bypass an overlapping file boundary");
+  assert.match(scenarios.reservedReadOnlyOverlap.reason, /file ownership overlaps/i);
   const report = Object.fromEntries(Object.entries(scenarios).map(([name, value]) => [name, {
     action: value.action,
     provider: value.provider || "current-codex",
