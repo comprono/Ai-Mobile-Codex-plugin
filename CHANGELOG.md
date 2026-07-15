@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 - 2026-07-16
+
+- Added caller-declared task binding in `.ai-mobile/current-work.json`: current-Codex goal, ownership boundaries, optional model/integration point, dispatches, and a task-scoped handoff inbox. It never guesses, stores, or controls a Codex chat, title, transcript, or selected model.
+- Replaced serial cold capacity discovery with parallel, deadline-bounded passive provider probes. A slow provider now reports unknown evidence instead of delaying the whole first orchestration call; the shared deadline is tuned to admit the installed Claude/Antigravity CLI discovery while keeping startup bounded.
+- Added terminal `handoff.json` artifacts plus append-only task handoff events. Results state their exact expected contribution, integration action, changed files, verification state, and blocker without a manager loop or model-side status polling.
+- Added finite worker leases. A worker that misses its deadline is terminated best-effort and becomes a truthful terminal failure instead of a forever-running artifact.
+- Preserved the six-tool surface, finite execution contract, read-only Antigravity safeguards, user-mandated model routing, and all prior ownership/economic gates.
+
 ## 0.5.6 - 2026-07-15
 
 - Fixed a false hard rejection for a user-requested, bounded read-only review running alongside an active Codex implementation lane. Shared project terminology no longer counts as ownership overlap for evidence lanes; overlapping file boundaries remain a hard stop.

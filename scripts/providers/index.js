@@ -292,4 +292,12 @@ function discoverAll() {
   return { codex: discoverCodex(), claude: discoverClaude(), antigravity: discoverAntigravity(), cursor: discoverCursor() };
 }
 
-module.exports = { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, normalizeClaudeUsage, numericOrNull, runProvider };
+function discoverProvider(id) {
+  if (id === "codex") return discoverCodex();
+  if (id === "claude") return discoverClaude();
+  if (id === "antigravity") return discoverAntigravity();
+  if (id === "cursor") return discoverCursor();
+  return provider(id || "unknown", false, { reason: "Unknown provider." });
+}
+
+module.exports = { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, discoverProvider, normalizeClaudeUsage, numericOrNull, runProvider };

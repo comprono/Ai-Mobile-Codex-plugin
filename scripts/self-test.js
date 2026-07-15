@@ -135,6 +135,10 @@ function run() {
     assert.equal(finite.workers[0].provider, "claude");
     assert.equal(Object.hasOwn(finite.capacity.claude, "command"), false);
     assert.ok(fs.existsSync(path.join(temp, ".ai-mobile", "tasks", `${finite.taskId}.json`)));
+    const binding = JSON.parse(fs.readFileSync(path.join(temp, ".ai-mobile", "current-work.json"), "utf8"));
+    assert.equal(binding.taskId, finite.taskId);
+    assert.equal(binding.currentCodex.ownershipConfidence, "declared");
+    assert.match(binding.handoffInbox, /handoffs\.jsonl$/);
     const duplicateDispatch = orchestrateTask(finiteArgs, inventory(), {}, () => { throw new Error("duplicate lane must not dispatch"); });
     assert.equal(duplicateDispatch.workersStarted, 0);
     assert.match(duplicateDispatch.rejectedLanes[0].reason, /already dispatched/i);
@@ -392,6 +396,16 @@ function run() {
     const activeId = "job-test-running";
     writeFixtureJob(temp, activeId, "running");
     assert.match(conflictFor(temp, { laneKey: "different", goal: "Review dashboard accessibility.", relevantFiles: ["src/dashboard"], expectedFiles: [], maxExternalWorkers: 2 }), /overlaps|similar/i);
+
+    const expiredId = "job-test-expired";
+    const expiredDir = writeFixtureJob(temp, expiredId, "running");
+    const expiredStatusPath = path.join(expiredDir, "status.json");
+    const expiredStatus = JSON.parse(fs.readFileSync(expiredStatusPath, "utf8"));
+    fs.writeFileSync(expiredStatusPath, `${JSON.stringify({ ...expiredStatus, leaseExpiresAt: new Date(Date.now() - 1000).toISOString() }, null, 2)}\n`);
+    const expired = readJob(temp, expiredId, "compact");
+    assert.equal(expired.state, "failed");
+    assert.match(expired.blocker, /lease expired/i);
+    assert.equal(expired.handoff.state, "failed");
 
     const waitId = "job-test-local-wait";
     const waitDir = writeFixtureJob(temp, waitId, "running");

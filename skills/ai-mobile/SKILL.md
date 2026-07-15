@@ -53,10 +53,10 @@ If a user-mandated lane is rejected, report that exact blocker to the user once.
 
 After `orchestrate-task` returns:
 
-1. Keep its `taskId`, job ids, root outcome, and completion evidence in working context.
+1. Keep its `taskId`, job ids, root outcome, and completion evidence in working context. The bridge writes the caller-declared binding to `.ai-mobile/current-work.json` and terminal handoffs to the task-scoped inbox. It never infers, reads, or changes the host-selected Codex chat/model.
 2. Start the returned current-Codex lane immediately. Do not wait for workers and do not narrate orchestration. A baseline check, restart, queue count, or status report does not satisfy this step.
 3. Do not investigate a worker-owned question or touch its file boundary while that worker is active.
-4. Collect each worker once with `read-job` at its natural integration point. Use `waitSeconds` up to 60 only when Codex has reached that point; the bridge waits locally without extra model turns.
+4. Collect each worker once with `read-job` at its natural integration point. Use `waitSeconds` up to 60 only when Codex has reached that point; the bridge waits locally without extra model turns. Do not poll a running job: its finite lease will produce one terminal handoff or terminal failure.
 5. Integrate useful evidence once. Run `verify-job` or direct deterministic checks before any reasoning review.
 6. Reject, narrowly repair, or fail over one time when evidence is unusable. Never create a premium-model review chain.
 7. Continue the next dependency-ready project work in the same task until all completion evidence is verified or a genuine blocker requires the user.

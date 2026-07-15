@@ -213,6 +213,9 @@ function orchestrateTask(args, resources, histories, createJob) {
       files: args.currentCodexFiles || [],
       reserved: args.currentCodexReserved === true,
       acceptanceCriteria: args.currentCodexAcceptanceCriteria || [],
+      model: String(args.currentCodexModel || "").trim().slice(0, 160),
+      integrationPoint: String(args.currentCodexIntegrationPoint || "").trim().slice(0, 600),
+      ownershipConfidence: (args.currentCodexFiles || []).length ? "declared" : "unknown",
       // Passive app-server metadata only. Do not persist prompts, titles,
       // thread ids, or transcripts in the project task record.
       runtime: resources.providers?.codex?.activeWork || { supported: false },
@@ -229,6 +232,15 @@ function orchestrateTask(args, resources, histories, createJob) {
     invocationCount: Number(previous?.invocationCount || 0) + 1,
   };
   writeJson(recordPath, record);
+  // This is a caller-declared binding, not an attempt to infer or control the
+  // selected Codex chat. It gives every worker the same durable integration
+  // target without persisting a transcript, title, or thread id.
+  writeJson(path.join(workspace, ".ai-mobile", "current-work.json"), {
+    schemaVersion: 1, taskId: id, updatedAt: record.updatedAt,
+    rootOutcome, currentCodex: record.currentCodex,
+    dispatches: record.dispatches.map((item) => ({ jobId: item.jobId, lane: item.lane, provider: item.provider, model: item.model })),
+    handoffInbox: path.join(workspace, ".ai-mobile", "tasks", `${id}.handoffs.jsonl`),
+  });
   const blockedMandate = rejected.find((item) => item.selectionAuthority === "user");
 
   return {
@@ -240,6 +252,11 @@ function orchestrateTask(args, resources, histories, createJob) {
     capacityEvidence: { generatedAt: resources.generatedAt || null, cached: resources.cached === true, horizonHours: Math.max(1, Math.min(24, Number(args.horizonHours || 5))) },
     capacity: compactCapacity(resources),
     currentCodex: record.currentCodex,
+    taskBinding: {
+      confidence: record.currentCodex.ownershipConfidence,
+      rule: "Binding records only caller-declared current-Codex ownership. The host-selected chat/model is never guessed or changed by this plugin.",
+      handoffInbox: path.join(workspace, ".ai-mobile", "tasks", `${id}.handoffs.jsonl`),
+    },
     workers: dispatches,
     workersStarted: dispatches.length,
     rejectedLanes: rejected,

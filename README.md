@@ -19,7 +19,7 @@ AI Mobile follows eight foundation rules:
 7. The complete project outcome remains fixed; a passing milestone triggers the next dependency-ready milestone instead of ending the work.
 8. Reasoning stays deep while communication stays compact, answer-first, and easy to scan.
 
-Provider jobs are durable and write compact artifacts locally. A failed lane gets at most one justified failover; otherwise current Codex takes the bounded work back.
+Provider jobs are durable and write compact artifacts locally. Each task also has a caller-declared binding at `.ai-mobile/current-work.json` and one append-only handoff inbox. The binding never guesses or controls the host-selected Codex chat; it records only the declared current-Codex goal, file ownership, optional model, and integration point. A failed lane gets at most one justified failover; otherwise current Codex takes the bounded work back.
 
 ## Use
 
@@ -83,14 +83,14 @@ When the user explicitly names a provider or model ("use Fable 5"), the lane car
 ## Token-Efficiency Contract
 
 - No plugin call for trivial or tightly coupled work.
-- One compact orchestration call at project-task start; capacity refresh only after a reset, material provider change, or failure.
+- One compact orchestration call at project-task start; passive provider probes run in parallel under a fixed deadline, so an unavailable provider becomes unknown rather than stalling startup. Capacity refresh only after a reset, material provider change, or failure.
 - No parent transcript in worker prompts.
 - No dispatch without a distinct current-Codex lane, an independence reason, and non-overlapping ownership.
 - Zero to two external lanes normally.
 - No repeated status reads.
 - Worker outputs default to 1,200-2,000 tokens. Claude subscriptions use measured quota windows and finite leases; dollar caps appear only for explicitly authorized PAYG lanes.
 - Every new lane declares its expected contribution and the one-time action current Codex takes when the result arrives. A completed worker result is integrated before Codex does that lane itself.
-- Compact result readback, with full diagnostics only after a real blocker.
+- One terminal handoff artifact per worker, with compact result readback and full diagnostics only after a real blocker. A finite worker lease turns stalled workers into terminal failures rather than persistent "running" noise.
 - Deterministic verification before qualitative review.
 - No premium-on-premium review chain.
 - Worker dispatch, waiting, retries, and unchanged reviews do not count as progress.

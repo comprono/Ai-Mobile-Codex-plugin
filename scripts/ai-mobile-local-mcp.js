@@ -20,15 +20,15 @@ function arg(name, fallback = "") { const i = process.argv.indexOf(name); return
 function jsonInput() { const file = arg("--json-file"); return file ? JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")) : {}; }
 function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 
-try {
-  if (action === "serve") serve(entrypoint);
-  else if (action === "self-test") output(selfTest());
+async function main() {
+  if (action === "serve") return serve(entrypoint);
+  if (action === "self-test") return output(selfTest());
   else if (action === "resource-inventory-cli") {
-    const resources = inventory({ refresh: process.argv.includes("--refresh") });
+    const resources = await inventory({ refresh: process.argv.includes("--refresh") });
     output({ generatedAt: resources.generatedAt, cached: resources.cached, passive: true, providers: compactCapacity(resources) });
   }
   else if (action === "orchestrate-task-cli") {
-    const input = jsonInput(); const workspace = safeWorkspace(input.workspace); const resources = inventory({});
+    const input = jsonInput(); const workspace = safeWorkspace(input.workspace); const resources = await inventory({});
     output(orchestrateTask({ ...input, workspace }, resources, providerHistory(workspace), (contract) => createJob(contract, entrypoint)));
   }
   else if (action === "read-job-cli") output(readJob(arg("--workspace"), arg("--job-id"), arg("--detail", "compact"), Number(arg("--wait-seconds", "0"))));
@@ -37,7 +37,9 @@ try {
   else if (action === "orchestrator-profile-cli") output(arg("--patch") ? writeProfile(JSON.parse(arg("--patch"))) : readProfile());
   else if (action === "worker") process.exitCode = executeWorker(jsonInput());
   else throw new Error(`Unknown action: ${action}`);
-} catch (error) {
+}
+
+main().catch((error) => {
   process.stderr.write(`${error.stack || error.message}\n`);
   process.exitCode = 1;
-}
+});

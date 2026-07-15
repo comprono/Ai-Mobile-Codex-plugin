@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "description": "Finite, token-efficient Codex orchestration across bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Let Codex work with local AI workers without orchestration waste.",
-    "longDescription": "AI Mobile adds a compact capacity-aware worker layer to the current Codex task on Windows. An explicit project invocation begins with one finite orchestration call that preserves the root outcome, inventories current capacity, detects passive active-work state, assigns current Codex a concrete critical path, and routes at most two economically positive independent lanes through authenticated Codex CLI, Claude Code, explicitly authorized Antigravity, or optional headless Cursor. Codex worker models and effort levels are selected from current native catalog metadata and private policy, not a hardcoded model order. Runtime gates reject duplicated goals, repeated root lanes, overlapping files, unsafe billing, exhausted capacity, provider cooldowns, and low-value handoffs before model use. Claude subscription routing reads real five-hour, shared-weekly, and model-specific usage windows without displaying a dollar balance. There is no manager loop, Goal, heartbeat, schedule, repeated poll, or desktop popup.",
+    "longDescription": "AI Mobile adds a compact capacity-aware worker layer to the current Codex task on Windows. An explicit project invocation records caller-declared current-Codex ownership, inventories current capacity in parallel, assigns current Codex a concrete critical path, and routes at most two economically positive independent lanes through authenticated Codex CLI, Claude Code, explicitly authorized Antigravity, or optional headless Cursor. Terminal workers produce one durable handoff artifact and cannot remain running past their finite lease. Codex worker models and effort levels are selected from current native catalog metadata and private policy, not a hardcoded model order. Runtime gates reject duplicated goals, repeated root lanes, overlapping files, unsafe billing, exhausted capacity, provider cooldowns, and low-value handoffs before model use. There is no manager loop, Goal, heartbeat, schedule, repeated poll, desktop popup, or attempt to silently control the host-selected Codex chat.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",

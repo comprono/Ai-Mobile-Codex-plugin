@@ -23,9 +23,29 @@ function locate(workspace, id) {
   throw new Error(`Job not found: ${clean}`);
 }
 function event(dir, type, data = {}) { appendJsonl(path.join(dir, "events.jsonl"), { at: utcNow(), type, ...data }); }
+function terminal(state) { return ["completed", "failed", "cancelled", "rejected"].includes(state); }
+function writeHandoff(dir, status) {
+  const contract = readJson(path.join(dir, "contract.json"), {});
+  if (!contract.taskId) return;
+  const taskDir = path.join(contract.workspace || path.dirname(path.dirname(path.dirname(dir))), ".ai-mobile", "tasks");
+  const handoff = {
+    at: utcNow(), jobId: status.id || path.basename(dir), taskId: contract.taskId,
+    state: status.state, provider: status.provider || contract.provider || "unknown", model: status.model || contract.model || "",
+    expectedContribution: contract.expectedContribution || "", integrationAction: contract.integrationAction || "",
+    blocker: status.blocker || "", resultPath: path.join(dir, "result.md"),
+    changedFiles: readJson(path.join(dir, "changed-files.json"), []),
+    verificationState: status.verificationState || "not-requested",
+  };
+  writeJson(path.join(dir, "handoff.json"), handoff);
+  appendJsonl(path.join(taskDir, `${contract.taskId}.handoffs.jsonl`), handoff);
+}
 function setStatus(dir, patch) {
   const current = readJson(path.join(dir, "status.json"), {});
   const next = { ...current, ...patch, updatedAt: utcNow() };
+  if (terminal(next.state) && !current.handoffWritten) {
+    writeHandoff(dir, next);
+    next.handoffWritten = true;
+  }
   writeJson(path.join(dir, "status.json"), next);
   event(dir, `job.${next.state || "updated"}`, { provider: next.provider, blocker: next.blocker || "" });
   return next;
@@ -65,7 +85,9 @@ function createJob(contract, entrypoint) {
   fs.mkdirSync(dir, { recursive: true });
   const stored = { ...contract, id, workspace, createdAt: utcNow(), schemaVersion: 2 };
   writeJson(path.join(dir, "contract.json"), stored);
-  writeJson(path.join(dir, "status.json"), { id, state: "queued", provider: contract.provider, model: contract.model || "", taskKind: contract.taskKind || "generic", laneKey: contract.laneKey, createdAt: stored.createdAt, updatedAt: stored.createdAt, pid: null, blocker: "", collectedAt: null, collectionCount: 0 });
+  const leaseSeconds = Math.max(30, Math.min(3900, Number(contract.timeoutSeconds || 600) + 90));
+  const leaseExpiresAt = new Date(Date.now() + leaseSeconds * 1000).toISOString();
+  writeJson(path.join(dir, "status.json"), { id, state: "queued", provider: contract.provider, model: contract.model || "", taskKind: contract.taskKind || "generic", laneKey: contract.laneKey, createdAt: stored.createdAt, updatedAt: stored.createdAt, pid: null, blocker: "", collectedAt: null, collectionCount: 0, leaseExpiresAt });
   fs.writeFileSync(path.join(dir, "request.md"), `${contract.goal}\n`, "utf8");
   event(dir, "job.queued", { provider: contract.provider });
   const payloadFile = path.join(dir, "worker-payload.json");
@@ -78,6 +100,10 @@ function createJob(contract, entrypoint) {
   return { jobId: id, state: readJson(path.join(dir, "status.json"), {}).state || "running", provider: contract.provider, artifactDirectory: dir };
 }
 function repairStale(dir, status) {
+  if (["queued", "starting", "running"].includes(status.state) && Date.parse(status.leaseExpiresAt || "") > 0 && Date.parse(status.leaseExpiresAt) <= Date.now()) {
+    const stopped = terminateTree(status.pid);
+    return setStatus(dir, { state: "failed", finishedAt: utcNow(), blocker: `Worker lease expired before a terminal result (${stopped.ok ? "process stopped" : "process state unknown"}).` });
+  }
   if (["queued", "starting", "running"].includes(status.state) && status.pid && !processAlive(status.pid)) {
     return setStatus(dir, { state: "failed", finishedAt: utcNow(), blocker: "Worker process exited without a terminal status." });
   }
@@ -125,7 +151,7 @@ function readJob(workspaceValue, id, detail = "compact", waitSeconds = 0) {
     taskId: contract.taskId || null,
     rootOutcome: contract.projectGoal || "",
     completionEvidence: contract.completionEvidence || [],
-    blocker: status.blocker || "", startedAt: status.startedAt || null, finishedAt: status.finishedAt || null,
+    blocker: status.blocker || "", startedAt: status.startedAt || null, finishedAt: status.finishedAt || null, leaseExpiresAt: status.leaseExpiresAt || null,
     waitedSeconds: Number(((Date.now() - waitStarted) / 1000).toFixed(1)),
     collectionReady: terminal,
     alreadyCollected,
@@ -146,6 +172,7 @@ function readJob(workspaceValue, id, detail = "compact", waitSeconds = 0) {
     integration: terminal
       ? { required: status.state === "completed", projectCompleteAllowed: false, expectedContribution: contract.expectedContribution || "", action: contract.integrationAction || "", instruction: alreadyCollected && detail !== "full" && !found.legacy ? "This result was already collected, so compact mode did not repeat it. Use the prior result; request full detail only to recover from an interrupted integration." : (status.state === "completed" ? "Apply the declared integration action once, then continue the root outcome. Worker completion alone never completes the project." : "Use this blocker once; either take the lane into current Codex or fail over once to a materially different provider.") }
       : { required: false, instruction: "Continue the disjoint current-Codex lane. Do not poll this job; collect it once at the declared integration point or lease." },
+    handoff: readJson(path.join(found.dir, "handoff.json"), null),
   };
   if (detail === "full") {
     result.diff = readText(path.join(found.dir, "worker.diff"), 50000);
