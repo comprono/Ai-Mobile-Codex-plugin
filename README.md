@@ -67,7 +67,7 @@ The default surface excludes project-manager cycles, status polling, setup tools
 ## Resource Selection
 
 - **Current Codex:** critical reasoning, integration, ambiguous debugging, final verification, protected live state, and external effects.
-- **Codex worker:** independent high-value work while shared Codex capacity remains above the 15% reserve.
+- **Codex worker:** independent high-value work while shared Codex capacity remains above the 15% reserve. The router ranks the current native catalog from its advertised capability metadata and supported effort levels. It does not assume a Sol/Terra/Luna order; a private profile can still constrain or prefer a user's own allowed models.
 - **Claude Code:** substantial bounded code, refactoring, debugging, and architecture work. Sonnet-class models are the normal default; premium Fable/Opus capacity is for genuinely hard work or a valuable dedicated window near reset.
 - **Antigravity CLI:** broad read-only inspection, research, browser-oriented analysis, drafting, and low-cost validation. It is never auto-launched without explicit authorization.
 - **Antigravity UI:** named visible project/chat state, authentication, model selection, or a verified CLI limitation only.
@@ -89,7 +89,7 @@ When the user explicitly names a provider or model ("use Fable 5"), the lane car
 - Zero to two external lanes normally.
 - No repeated status reads.
 - Worker outputs default to 1,200-2,000 tokens. Claude subscriptions use measured quota windows and finite leases; dollar caps appear only for explicitly authorized PAYG lanes.
-- A completed worker result is integrated before Codex does that lane itself.
+- Every new lane declares its expected contribution and the one-time action current Codex takes when the result arrives. A completed worker result is integrated before Codex does that lane itself.
 - Compact result readback, with full diagnostics only after a real blocker.
 - Deterministic verification before qualitative review.
 - No premium-on-premium review chain.

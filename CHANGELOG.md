@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5 - 2026-07-15
+
+- Removed accidental first-model routing for standalone Codex workers. The router now ranks the current native model catalog using advertised capability descriptions and supported reasoning efforts: bounded work favors fast/efficient rows, ordinary work favors balanced rows, and hard work favors frontier/capable rows. This is catalog- and policy-driven, not tied to Sol, Terra, Luna, or any future model name.
+- Added private `codexPreferredModelPattern`, `codexPreferredTaskPattern`, and `codexDefaultEffort` policy fields. Existing allowlists and all six MCP tools remain compatible.
+- Added a privacy-preserving passive Codex active-work signal from the installed app-server schema. It records counts only; no prompt text, title, thread id, turn, or transcript is cached or sent to providers.
+- Added `expectedContribution` and `integrationAction` to worker contracts, prompts, durable results, and MCP schema. New lanes state exactly how their output changes the current Codex task, preventing artifact-only delegation.
+- Preserved the existing sandboxed Antigravity behavior, user-mandated model routing, billing and reserve gates, six-tool surface, and finite lifecycle. Added regression coverage for model-order independence, supported-effort selection, passive active-work compatibility, and integration handoffs.
+
 ## 0.5.4 - 2026-07-15
 
 - Reproduced a real run where the user explicitly requested Fable 5: the lane first targeted Fable through the wrong provider, was then corrected to Claude/Fable, and was still rejected twice by the economic gate, so no Fable worker ever started.

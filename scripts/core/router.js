@@ -78,6 +78,8 @@ function normalizeRequest(input = {}) {
     independenceReason: String(input.independenceReason || "").trim().slice(0, 2000),
     acceptanceCriteria: boundedList(input.acceptanceCriteria, 20, 1000),
     nextStep: String(input.nextStep || "").trim().slice(0, 3000),
+    expectedContribution: String(input.expectedContribution || "").trim().slice(0, 1600),
+    integrationAction: String(input.integrationAction || input.nextStep || "").trim().slice(0, 1600),
     workspace: input.workspace,
     preferredProvider,
     readOnly,
@@ -94,6 +96,7 @@ function normalizeRequest(input = {}) {
     model,
     selectionAuthority,
     selectionCorrection,
+    effortProvided: Boolean(input.effort),
     effort: String(input.effort || (readOnly ? "low" : "medium")).trim(),
     allowAntigravity: input.allowAntigravity === undefined ? null : input.allowAntigravity === true,
     allowPaidApi: input.allowPaidApi === true,
@@ -157,12 +160,57 @@ function antigravityModel(request, state) {
   return printable(models[0]);
 }
 
+function codexModelRecord(state, model) {
+  const wanted = normalizedModelId(model);
+  return (state.models || []).find((row) => normalizedModelId(row.id) === wanted || normalizedModelId(row.displayName) === wanted) || null;
+}
+
+function codexModelScore(row, request, profile) {
+  const text = `${row.id || ""} ${row.displayName || ""} ${row.description || ""}`.toLowerCase();
+  const has = (pattern) => pattern.test(text);
+  let score = row.isDefault ? 1 : 0;
+  // These are capability descriptions, not model-name assumptions. New catalog
+  // rows participate as soon as their native descriptions are exposed.
+  if (request.complexity === "small") {
+    if (has(/\bfast|affordable|small|mini|spark|efficient\b/)) score += 40;
+    if (has(/\bfrontier|ambitious|maximum\b/)) score -= 8;
+  } else if (request.complexity === "medium") {
+    if (has(/\bbalanced|everyday|general|strong\b/)) score += 35;
+    if (has(/\bfast|affordable|mini|spark\b/)) score += 8;
+  } else if (request.complexity === "large") {
+    if (has(/\bfrontier|capable|complex|ambitious|hardest|advanced\b/)) score += 40;
+    if (has(/\bfast|affordable|small|mini|spark\b/)) score -= 12;
+  }
+  if (["architecture", "debug", "review"].includes(request.taskKind) && has(/\bfrontier|capable|complex|advanced\b/)) score += 12;
+  if (profile.codexPreferredModelPattern && match(profile.codexPreferredModelPattern, `${row.id} ${row.displayName}`)) score += 100;
+  if (profile.codexPreferredTaskPattern && match(profile.codexPreferredTaskPattern, `${request.taskKind} ${request.goal}`)) score += 5;
+  return score;
+}
+
+function codexModel(request, state, profile) {
+  if (request.model) return modelAllowed(profile.codexModelAllowPattern, request.model) ? request.model : "";
+  const rows = (state.models || []).filter((row) => modelAllowed(profile.codexModelAllowPattern, row.id || row.displayName));
+  return rows
+    .map((row, index) => ({ row, score: codexModelScore(row, request, profile), index }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.row?.id || "";
+}
+
+function codexEffort(request, record, profile) {
+  const supported = Array.isArray(record?.supportedReasoningEfforts) ? record.supportedReasoningEfforts.filter(Boolean) : [];
+  const requested = request.effortProvided ? request.effort : profile.codexDefaultEffort;
+  const automatic = request.complexity === "large" ? "high" : request.complexity === "small" ? "low" : "medium";
+  const desired = requested && requested !== "auto" ? requested : automatic;
+  if (!supported.length || supported.includes(desired)) return desired;
+  if (request.effortProvided) return "";
+  if (supported.includes(record?.defaultReasoningEffort)) return record.defaultReasoningEffort;
+  return supported[0] || desired;
+}
+
 function providerModel(id, request, state, profile) {
   const requestedFamily = canonicalModelProvider(request.model);
   if (request.model && requestedFamily && requestedFamily !== id && ["codex", "claude", "antigravity"].includes(id)) return "";
   if (id === "codex") {
-    if (request.model) return modelAllowed(profile.codexModelAllowPattern, request.model) ? request.model : "";
-    return state.models?.find((item) => modelAllowed(profile.codexModelAllowPattern, item.id))?.id || "";
+    return codexModel(request, state, profile);
   }
   if (id === "claude") {
     const available = (state.models || []).map((item) => item.id).filter((model) => modelAllowed(profile.claudeModelAllowPattern, model));
@@ -230,12 +278,15 @@ function providerEligibility(id, request, inventory, profile, history) {
     return { eligible: false, reason };
   }
   const capacity = capacityFor(id, state, model);
+  const modelRecord = id === "codex" ? codexModelRecord(state, model) : null;
+  const effort = id === "codex" ? codexEffort(request, modelRecord, profile) : request.effort;
+  if (id === "codex" && !effort) return { eligible: false, reason: `requested effort "${request.effort}" is not supported by selected model "${model}"` };
   const remaining = capacity.remainingPercent;
   if (remaining !== null && remaining <= (id === "codex" ? profile.codexReservePercent : 2)) {
     return { eligible: false, reason: id === "codex" ? `shared Codex reserve (${profile.codexReservePercent}%) is protected` : "reported capacity is exhausted" };
   }
   if (history?.cooledDown && request.preferredProvider !== id) return { eligible: false, reason: `provider cooldown: ${history.cooldownReason || `${history.consecutiveFailures} consecutive failures`}` };
-  return { eligible: true, reason: "eligible", model, ...capacity, authMode: state.authMode || "unknown" };
+  return { eligible: true, reason: "eligible", model, effort, ...capacity, authMode: state.authMode || "unknown" };
 }
 
 function providerScore(id, request, profile, history, gate) {
@@ -326,6 +377,7 @@ function route(input, inventory, histories = {}) {
     };
   }
   request.model = selected.model || request.model;
+  request.effort = selected.effort || request.effort;
   return {
     action: "delegate",
     provider: selected.provider,

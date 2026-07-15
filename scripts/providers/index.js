@@ -43,11 +43,21 @@ function discoverCodex() {
   return provider("codex", auth.loggedIn === true, {
     command: cli.command, version: cli.version, authMode: auth.authMode,
     confidence: auth.loggedIn === true ? "high" : "medium",
-    models: modelRows.slice(0, 100).map((row) => ({ id: row.id || row.model || row.slug || row.displayName, displayName: row.displayName || row.name || "" })).filter((row) => row.id),
+    // Preserve native metadata. The router uses these descriptions and effort
+    // capabilities, rather than a stale model-name leaderboard or list order.
+    models: modelRows.slice(0, 100).map((row) => ({
+      id: row.id || row.model || row.slug || row.displayName,
+      displayName: row.displayName || row.name || "",
+      description: row.description || "",
+      isDefault: row.isDefault === true,
+      defaultReasoningEffort: row.defaultReasoningEffort || "",
+      supportedReasoningEfforts: (row.supportedReasoningEfforts || []).map((item) => item.reasoningEffort || item).filter(Boolean),
+    })).filter((row) => row.id),
     capacity: windows.length
       ? { windows, effectiveRemainingPercent: Math.min(...effectiveWindows.map((item) => item.remainingPercent)), availableResetCredits: native?.rateLimits?.rateLimitResetCredits?.availableCount ?? null, source: "codex-app-server", confidence: "high" }
       : { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: "Exact shared Codex window is unavailable; current Codex remains authoritative." },
     usage: native?.usage?.summary || null,
+    activeWork: native?.threadSignal || { supported: false },
   });
 }
 
@@ -60,7 +70,10 @@ function discoverClaude() {
   const authResult = commandResult(cli.command, ["auth", "status"], { timeout: 7000 });
   const auth = parseClaudeAuth(authResult.stdout);
   const help = commandResult(cli.command, ["--help"], { timeout: 7000 });
-  const usageProbe = auth.loggedIn ? commandResult(cli.command, ["-p", "--safe-mode", "--tools", "", "--no-session-persistence", "--output-format", "text", "/usage"], { timeout: 20000 }) : { status: 1, stdout: "" };
+  // Capacity is useful only if it arrives before it delays the project's first
+  // useful move. A slow Claude usage view is reported as unknown and can be
+  // refreshed later; it never blocks a finite orchestration contract.
+  const usageProbe = auth.loggedIn ? commandResult(cli.command, ["-p", "--safe-mode", "--tools", "", "--no-session-persistence", "--output-format", "text", "/usage"], { timeout: 8000 }) : { status: 1, stdout: "" };
   const windows = usageProbe.status === 0 ? parseClaudeUsage(usageProbe.stdout) : [];
   const shared = windows.filter((window) => window.scope === "all");
   const authenticated = authResult.status === 0 && auth.loggedIn;
@@ -119,9 +132,14 @@ function antigravityLimits() {
 function discoverAntigravity() {
   const cli = resolveCommand("agy", []);
   if (!cli.found) return provider("antigravity", false, { reason: "Antigravity CLI (agy) not found." });
-  const roster = commandResult(cli.command, ["models"], { timeout: 15000 });
-  const models = roster.status === 0 ? roster.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 50).map((displayName) => ({ id: modelId(displayName), displayName })) : [];
   const limits = antigravityLimits();
+  // The helper already supplies the visible, quota-qualified roster. Avoid a
+  // second CLI scan when it is available; that removed several seconds from
+  // cold inventory on the user's machine.
+  const roster = limits.checked ? null : commandResult(cli.command, ["models"], { timeout: 7000 });
+  const models = limits.checked
+    ? limits.models.map((row) => ({ id: row.id, displayName: row.displayName }))
+    : (roster.status === 0 ? roster.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 50).map((displayName) => ({ id: modelId(displayName), displayName })) : []);
   const measured = limits.models;
   const enriched = models.map((model) => ({ ...model, quota: measured.find((row) => row.id === model.id || modelId(row.displayName) === model.id) || null }));
   return provider("antigravity", true, {

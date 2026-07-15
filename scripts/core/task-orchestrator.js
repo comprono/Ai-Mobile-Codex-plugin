@@ -30,6 +30,7 @@ function compactCapacity(resources) {
       remainingPercent: finite(provider.capacity?.effectiveRemainingPercent ?? provider.capacity?.remainingPercent),
       resetAt: provider.capacity?.resetAt || null,
       windows,
+      activeWork: provider.activeWork || null,
       reason: provider.reason || "",
     }];
   }));
@@ -135,6 +136,8 @@ function orchestrateTask(args, resources, histories, createJob) {
         independenceReason: lane.independenceReason,
         acceptanceCriteria: lane.acceptanceCriteria || [],
         nextStep: lane.collectAt || lane.nextStep || "Integrate this result before taking over the lane.",
+        expectedContribution: lane.expectedContribution || "",
+        integrationAction: lane.integrationAction || lane.collectAt || lane.nextStep || "",
         preferredProvider: lane.preferredProvider || "auto",
         selectionAuthority: lane.selectionAuthority || "router",
         readOnly: lane.readOnly !== false,
@@ -210,6 +213,9 @@ function orchestrateTask(args, resources, histories, createJob) {
       files: args.currentCodexFiles || [],
       reserved: args.currentCodexReserved === true,
       acceptanceCriteria: args.currentCodexAcceptanceCriteria || [],
+      // Passive app-server metadata only. Do not persist prompts, titles,
+      // thread ids, or transcripts in the project task record.
+      runtime: resources.providers?.codex?.activeWork || { supported: false },
     },
     candidateLanes: args.candidateLanes,
     dispatches: [

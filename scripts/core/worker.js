@@ -32,6 +32,8 @@ function promptFor(contract) {
     contract.relevantFiles?.length ? `Relevant read scope: ${contract.relevantFiles.join(", ")}` : "",
     contract.expectedFiles.length ? `Allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
     contract.acceptanceCriteria.length ? `Acceptance criteria:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
+    contract.expectedContribution ? `Expected contribution: ${contract.expectedContribution}` : "",
+    contract.integrationAction ? `Integration action for current Codex: ${contract.integrationAction}` : "",
     contract.nextStep ? `Useful next step after this lane: ${contract.nextStep}` : "",
     smallReadOnlyCap,
     "Do not investigate, implement, or repeat the current-Codex lane. Do not run another agent, start a manager loop, create recurring work, or broaden scope.",

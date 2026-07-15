@@ -20,7 +20,17 @@ function finish() {
   try { child.stdin.end(); } catch { /* no-op */ }
   try { child.kill(); } catch { /* no-op */ }
   child.unref();
-  process.stdout.write(`${JSON.stringify({ ok: Boolean(replies.rateLimits || replies.models), ...replies, diagnostic: stderr.slice(0, 500) })}\n`);
+  const threads = Array.isArray(replies.threads?.data) ? replies.threads.data : [];
+  const activeThreads = threads.filter((thread) => thread?.status?.type === "active");
+  // Thread titles, previews, ids, turns, and prompt text deliberately stay out
+  // of inventory and its on-disk cache. This signal is sufficient for routing.
+  const threadSignal = replies.threads === undefined ? { supported: false } : {
+    supported: true,
+    activeCount: activeThreads.length,
+    recentCount: threads.length,
+    activeWorkspaceCount: activeThreads.filter((thread) => Boolean(thread?.cwd)).length,
+  };
+  process.stdout.write(`${JSON.stringify({ ok: Boolean(replies.rateLimits || replies.models), ...replies, threadSignal, diagnostic: stderr.slice(0, 500) })}\n`);
   setTimeout(() => process.exit(0), 20);
 }
 const timer = setTimeout(finish, 6000);
@@ -38,11 +48,13 @@ child.stdout.on("data", (chunk) => {
       send({ id: 2, method: "account/rateLimits/read", params: {} });
       send({ id: 3, method: "model/list", params: { limit: 100, includeHidden: false } });
       send({ id: 4, method: "account/usage/read", params: {} });
+      send({ id: 5, method: "thread/list", params: { limit: 20, useStateDbOnly: true, sortKey: "recency_at", sortDirection: "desc" } });
     }
     if (message.id === 2) replies.rateLimits = message.result || null;
     if (message.id === 3) replies.models = message.result || null;
     if (message.id === 4) replies.usage = message.result || null;
-    if (replies.rateLimits && replies.models && replies.usage) { clearTimeout(timer); finish(); }
+    if (message.id === 5) replies.threads = message.result || null;
+    if (replies.rateLimits && replies.models && replies.usage && replies.threads !== undefined) { clearTimeout(timer); finish(); }
   }
 });
 child.on("error", (error) => { stderr += error.message; clearTimeout(timer); finish(); });

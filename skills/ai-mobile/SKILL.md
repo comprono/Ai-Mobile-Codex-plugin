@@ -31,13 +31,13 @@ Build the call from the user request, current workspace, and already available c
 - `currentCodexFiles`: only the files Codex currently owns, when known;
 - `currentCodexReserved: true` only when a live Codex task owns different work and must not receive this lane. It permits only a disjoint, read-only external evidence lane to bypass the small-task economic gate; never use it for writers, overlapping paths, or to bypass capacity, billing, or safety checks;
 - `candidateLanes`: one or two genuinely independent bounded worker options;
-- each candidate includes a clear goal, independence reason, read boundary, task kind, complexity, and realistic direct-token estimate;
+- each candidate includes a clear goal, independence reason, read boundary, task kind, complexity, realistic direct-token estimate, expected contribution, and exact one-time integration action for current Codex;
 - writers also require exact `expectedFiles`; unknown write boundaries stay read-only;
 - when the user explicitly names a provider or model (for example "use Fable 5" or "have Claude do it"), set `selectionAuthority: "user"` with that exact `preferredProvider`/`model` on the lane. Never use `"user"` for your own routing preference.
 
 If the file map is unknown, use a bounded read-only discovery candidate. `relevantFiles: ["."]` is allowed only for that discovery lane; keep current Codex on a distinct live-state, acceptance, or user-decision path until the result is collected. Never invent narrow paths merely to pass the schema.
 
-The runtime inventories capacity, applies billing, reserve, model, reliability, overlap, and economic gates, and either starts useful workers or returns precise rejection reasons. One call replaces the former inventory-then-dispatch ritual.
+The runtime inventories capacity, applies billing, reserve, model, reliability, overlap, active-work signal, and economic gates, and either starts useful workers or returns precise rejection reasons. Codex catalog rows are ranked from current native capability metadata and private policy, never by a hardcoded Sol/Terra/Luna order or the catalog's incidental order. One call replaces the former inventory-then-dispatch ritual.
 
 ## Explicit User Selection
 
@@ -73,7 +73,7 @@ The initial `turnExitFirewall.finalAnswerAllowedNow` is always false. Do not sen
 
 Select resources from current evidence, not a fixed UI/backend/testing split.
 
-- **Current Codex:** ambiguous reasoning, architecture, live-state control, critical-path implementation, integration, irreversible decisions, and final verification.
+- **Current Codex:** ambiguous reasoning, architecture, live-state control, critical-path implementation, integration, irreversible decisions, and final verification. The current chat's selected model remains host-owned; AI Mobile never claims it can silently change that chat. It chooses a Codex CLI worker model only from the currently discovered catalog, supported effort levels, capacity, and private profile.
 - **Codex CLI worker:** a high-value independent lane when shared Codex capacity remains above the configured reserve. It consumes the same Codex pool, so use it deliberately.
 - **Claude Code:** bounded implementation, refactoring, architecture, debugging, and repository reasoning. Prefer a capable Sonnet-class model by default. Use premium model-specific capacity only when task difficulty and reset horizon justify it.
 - **Antigravity CLI:** inexpensive repository scans, research, browser-oriented analysis, drafting, and validation. Automatic execution requires explicit authorization; read-only sandbox auto-approval never authorizes login, CAPTCHA, external effects, or undeclared paths.

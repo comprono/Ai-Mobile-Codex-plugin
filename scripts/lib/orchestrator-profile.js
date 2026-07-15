@@ -5,13 +5,18 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 5,
+  schemaVersion: 6,
   communicationStyle: "professional",
   communicationMode: "smart-compact",
   address: "",
   updateStyle: "concise-executive",
   role: "technical project manager",
   codexModelAllowPattern: "^gpt-",
+  // Empty by default: the router ranks the current native catalog rather than
+  // assuming a particular model name or catalog order.
+  codexPreferredModelPattern: "(?!)",
+  codexPreferredTaskPattern: "",
+  codexDefaultEffort: "auto",
   claudeModelAllowPattern: ".*",
   claudePreferredModelPattern: "(?!)",
   antigravityPreferredTaskPattern: "browser|research|repository-scan|docs|discovery|scout|summary",
@@ -50,7 +55,7 @@ function normalizeProfile(value = {}) {
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     communicationStyle: style,
     communicationMode: ["smart-compact", "standard", "detailed"].includes(String(value.communicationMode || "").toLowerCase())
       ? String(value.communicationMode).toLowerCase()
@@ -61,6 +66,11 @@ function normalizeProfile(value = {}) {
       : DEFAULT_PROFILE.updateStyle,
     role: cleanText(value.role, 120) || DEFAULT_PROFILE.role,
     codexModelAllowPattern: safePattern(value.codexModelAllowPattern, DEFAULT_PROFILE.codexModelAllowPattern),
+    codexPreferredModelPattern: safePattern(value.codexPreferredModelPattern, DEFAULT_PROFILE.codexPreferredModelPattern),
+    codexPreferredTaskPattern: cleanText(value.codexPreferredTaskPattern, 200),
+    codexDefaultEffort: ["auto", "low", "medium", "high", "xhigh", "max", "ultra"].includes(String(value.codexDefaultEffort || "").toLowerCase())
+      ? String(value.codexDefaultEffort).toLowerCase()
+      : DEFAULT_PROFILE.codexDefaultEffort,
     claudeModelAllowPattern: safePattern(value.claudeModelAllowPattern, DEFAULT_PROFILE.claudeModelAllowPattern),
     claudePreferredModelPattern: safePattern(value.claudePreferredModelPattern, DEFAULT_PROFILE.claudePreferredModelPattern),
     antigravityPreferredTaskPattern: safePattern(value.antigravityPreferredTaskPattern, DEFAULT_PROFILE.antigravityPreferredTaskPattern),

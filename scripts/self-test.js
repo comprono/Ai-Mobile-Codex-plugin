@@ -46,7 +46,7 @@ function inventory() {
 function writeFixtureJob(workspace, id, state = "completed") {
   const dir = path.join(workspace, ".ai-mobile", "jobs", id);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "contract.json"), `${JSON.stringify({ id, taskId: "task-fixture", provider: "claude", model: "sonnet", projectGoal: "Ship a verified project outcome.", completionEvidence: ["End-to-end acceptance passes."], goal: "Review dashboard accessibility.", currentCodexGoal: "Implement backend execution.", relevantFiles: ["src/dashboard"], expectedFiles: [] }, null, 2)}\n`);
+  fs.writeFileSync(path.join(dir, "contract.json"), `${JSON.stringify({ id, taskId: "task-fixture", provider: "claude", model: "sonnet", projectGoal: "Ship a verified project outcome.", completionEvidence: ["End-to-end acceptance passes."], goal: "Review dashboard accessibility.", currentCodexGoal: "Implement backend execution.", relevantFiles: ["src/dashboard"], expectedFiles: [], expectedContribution: "Resolve the accessibility decision with exact evidence.", integrationAction: "Apply only confirmed accessibility fixes to the current implementation." }, null, 2)}\n`);
   fs.writeFileSync(path.join(dir, "status.json"), `${JSON.stringify({ id, state, provider: "claude", pid: state === "running" ? process.pid : null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, null, 2)}\n`);
   fs.writeFileSync(path.join(dir, "result.md"), "Dashboard review completed.\n");
   fs.writeFileSync(path.join(dir, "changed-files.json"), "[]\n");
@@ -69,6 +69,8 @@ function run() {
     assert.equal(dispatchSchema.properties.blockingConditions.maxItems, 8);
     assert.deepEqual(dispatchSchema.properties.candidateLanes.items.properties.selectionAuthority.enum, ["router", "user"]);
     assert.equal(TOOLS.find((tool) => tool.name === "read-job").inputSchema.properties.waitSeconds.maximum, 60);
+    assert.ok(dispatchSchema.properties.candidateLanes.items.properties.expectedContribution);
+    assert.ok(dispatchSchema.properties.candidateLanes.items.properties.integrationAction);
     assert.match(promptFor({ ...base(temp, { complexity: "small" }), maxWorkerOutputTokens: 300, expectedFiles: [], acceptanceCriteria: [] }), /Small read-only inspection cap/i);
 
     assert.equal(compactCapacity({ providers: { antigravity: { available: true, capacity: { remainingPercent: null } } } }).antigravity.remainingPercent, null);
@@ -126,6 +128,7 @@ function run() {
     assert.equal(finite.workersStarted, 1);
     assert.equal(workerContracts.length, 1);
     assert.equal(finite.currentCodex.goal, finiteArgs.currentCodexGoal);
+    assert.equal(finite.currentCodex.runtime.supported, false);
     assert.equal(finite.completionFirewall.projectCompleteAllowed, false);
     assert.equal(finite.turnExitFirewall.finalAnswerAllowedNow, false);
     assert.deepEqual(finite.blockingConditions, finiteArgs.blockingConditions);
@@ -165,6 +168,25 @@ function run() {
     assert.equal(architecture.request.model, "sonnet");
     assert.ok(architecture.economics.positive);
     assert.ok(architecture.considered.find((item) => item.provider === "claude").scoreFactors);
+
+    // Catalog order is not a policy. A generic metadata-based selector picks a
+    // balanced row for ordinary work and a frontier row for hard work.
+    const codexOnly = inventory();
+    codexOnly.providers.claude.available = false;
+    codexOnly.providers.antigravity.available = false;
+    codexOnly.providers.codex.models = [
+      { id: "gpt-frontier-row", description: "Frontier agentic coding model for complex ambitious work.", supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "low" },
+      { id: "gpt-fast-row", description: "Fast and affordable model for bounded tasks.", supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "low" },
+      { id: "gpt-balanced-row", description: "Balanced model for everyday work.", supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+    ];
+    const balancedCodex = route(base(temp, { taskKind: "code", complexity: "medium", preferredProvider: "auto" }), codexOnly);
+    assert.equal(balancedCodex.provider, "codex");
+    assert.equal(balancedCodex.request.model, "gpt-balanced-row");
+    assert.equal(balancedCodex.request.effort, "medium");
+    const hardCodex = route(base(temp, { taskKind: "architecture", complexity: "large", preferredProvider: "auto" }), codexOnly);
+    assert.equal(hardCodex.provider, "codex");
+    assert.equal(hardCodex.request.model, "gpt-frontier-row");
+    assert.equal(hardCodex.request.effort, "high");
 
     const capacitySensitive = inventory();
     capacitySensitive.providers.codex.capacity.effectiveRemainingPercent = 100;
@@ -330,6 +352,8 @@ function run() {
     assert.equal(firstRead.alreadyCollected, false);
     assert.equal(firstRead.integration.required, true);
     assert.equal(firstRead.integration.projectCompleteAllowed, false);
+    assert.equal(firstRead.integration.expectedContribution, "Resolve the accessibility decision with exact evidence.");
+    assert.match(firstRead.integration.action, /Apply only confirmed accessibility fixes/i);
     assert.equal(firstRead.rootOutcome, "Ship a verified project outcome.");
     assert.deepEqual(firstRead.completionEvidence, ["End-to-end acceptance passes."]);
     assert.equal(firstRead.usage.outputTokens, 700);
