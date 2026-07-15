@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.6 - 2026-07-15
+
+- Fixed a false hard rejection for a user-requested, bounded read-only review running alongside an active Codex implementation lane. Shared project terminology no longer counts as ownership overlap for evidence lanes; overlapping file boundaries remain a hard stop.
+- Added regression coverage for Claude Sonnet reviewing a live project while Sol Ultra remains reserved for the critical path.
+
 ## 0.5.5 - 2026-07-15
 
 - Removed accidental first-model routing for standalone Codex workers. The router now ranks the current native model catalog using advertised capability descriptions and supported reasoning efforts: bounded work favors fast/efficient rows, ordinary work favors balanced rows, and hard work favors frontier/capable rows. This is catalog- and policy-driven, not tied to Sol, Terra, Luna, or any future model name.

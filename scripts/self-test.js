@@ -169,6 +169,26 @@ function run() {
     assert.ok(architecture.economics.positive);
     assert.ok(architecture.considered.find((item) => item.provider === "claude").scoreFactors);
 
+    // A reserved active Codex lane can accept a bounded read-only review of
+    // the same outcome; the review must still have a concrete file boundary.
+    const reservedReview = route(base(temp, {
+      currentCodexReserved: true,
+      currentCodexGoal: "Improve the Job Vibhu runtime task with Sol Ultra.",
+      goal: "Use Claude Sonnet to review Job Vibhu runtime efficiency while Sol Ultra continues.",
+      currentCodexFiles: [],
+      relevantFiles: ["src/dashboard"],
+      preferredProvider: "claude",
+      model: "sonnet",
+      selectionAuthority: "user",
+      readOnly: true,
+      taskKind: "review",
+      complexity: "large",
+    }), inventory());
+    assert.equal(reservedReview.action, "delegate");
+    assert.equal(reservedReview.provider, "claude");
+    assert.equal(reservedReview.request.model, "sonnet");
+    assert.ok(reservedReview.warnings.some((item) => /read-only evidence lane/i.test(item)));
+
     // Catalog order is not a policy. A generic metadata-based selector picks a
     // balanced row for ordinary work and a frontier row for hard work.
     const codexOnly = inventory();

@@ -317,7 +317,16 @@ function coordinationGate(request) {
   if (!request.currentCodexGoal) return "Delegation requires the concrete current-Codex lane; otherwise independence cannot be proven.";
   if (!request.independenceReason) return "Delegation requires a concise independence reason.";
   const overlap = goalOverlap(request.goal, request.currentCodexGoal);
-  if (overlap.overlaps) return `Worker and current Codex goals overlap (${overlap.shared.join(", ")}); keep this lane in current Codex.`;
+  const evidenceLane = request.currentCodexReserved
+    && request.readOnly
+    && ["architecture", "docs", "repository-scan", "research", "review", "tests"].includes(request.taskKind)
+    && request.relevantFiles.length > 0
+    && !request.relevantFiles.includes(".");
+  // A bounded read-only evidence lane may share the project outcome with an
+  // active implementation lane. It cannot mutate files, and file ownership
+  // overlap below remains a hard stop. This avoids rejecting useful reviews
+  // merely because both lanes mention the same project or feature.
+  if (overlap.overlaps && !evidenceLane) return `Worker and current Codex goals overlap (${overlap.shared.join(", ")}); keep this lane in current Codex.`;
   const workerFiles = [...request.relevantFiles, ...request.expectedFiles];
   const fileOverlap = boundariesOverlap(workerFiles, request.currentCodexFiles);
   if (fileOverlap.length) return `Worker and current Codex file ownership overlaps (${fileOverlap.map((pair) => pair.join(" <-> ")).join(", ")}); serialize the work.`;
@@ -334,6 +343,9 @@ function route(input, inventory, histories = {}) {
   if (!request.goal) throw new Error("A bounded worker goal is required.");
   const userMandated = request.selectionAuthority === "user";
   const warnings = request.selectionCorrection ? [request.selectionCorrection] : [];
+  if (request.currentCodexReserved && request.readOnly && ["architecture", "docs", "repository-scan", "research", "review", "tests"].includes(request.taskKind) && request.relevantFiles.length && !request.relevantFiles.includes(".") && goalOverlap(request.goal, request.currentCodexGoal).overlaps) {
+    warnings.push("Semantic goal overlap is allowed only because this is a bounded read-only evidence lane; file ownership overlap remains blocked.");
+  }
   const coordinationBlocker = coordinationGate(request);
   if (coordinationBlocker) return { action: "direct", reason: coordinationBlocker, hardBlocker: userMandated || undefined, request, considered: [] };
   const externalReadOnlyLane = request.currentCodexReserved

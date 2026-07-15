@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Finite, token-efficient Codex orchestration across bounded Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
