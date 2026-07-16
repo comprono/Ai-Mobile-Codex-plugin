@@ -7,5 +7,5 @@
 *.jpeg
 *.gif
 *.webp
-!assets/ai-mobile-control-room.png
+!assets/ai-mobile-efficient-workflow.png
 node_modules/

@@ -1,11 +1,12 @@
 ai mobile codex plugin
-codex project manager plugin
 codex resource orchestrator
 native codex worker orchestration
 codex usage window telemetry
 context capsule agents
 cli first ai orchestration
 multi model codex orchestration
+multi project ai orchestration
+portfolio ai orchestration
 claude antigravity codex team
 capacity aware model routing
 mobile codex desktop bridge
@@ -14,11 +15,11 @@ antigravity 2.0 codex plugin
 claude code codex bridge
 cursor codex bridge
 cursor agent codex
-cursor ui handoff
+headless cursor agent
 codex mcp plugin
 devtools mcp antigravity
 codex windows bridge
 local antigravity desktop app
 claude code headless worker
 mcp server for codex
-chromium devtools codex plugin
+git worktree agent isolation

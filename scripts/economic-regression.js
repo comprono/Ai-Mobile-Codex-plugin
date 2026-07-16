@@ -5,73 +5,44 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { route } = require("./core/router");
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-economics-"));
-const resources = { providers: {
-  codex: { available: true, authenticated: true, authMode: "chatgpt", models: [{ id: "gpt-5.6-sol" }], capacity: { effectiveRemainingPercent: 80 } },
-  claude: { available: true, authenticated: true, authMode: "subscription", models: [] },
-  antigravity: { available: true, authenticated: true, authMode: "cli-session", models: [{ id: "gemini-3.5-flash-medium", displayName: "Gemini 3.5 Flash (Medium)" }] },
-  cursor: { available: false, authenticated: false },
-} };
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-v1-economics-"));
+process.env.LOCALAPPDATA = root;
+const workspace = path.join(root, "workspace");
+fs.mkdirSync(path.join(workspace, "src", "ui"), { recursive: true });
+fs.mkdirSync(path.join(workspace, "src", "api"), { recursive: true });
+
+const { economicEstimate } = require("./core/lane-policy");
+const { normalizeRequest, route } = require("./core/router");
 
 function request(patch = {}) {
-  return {
-    workspace,
-    projectGoal: "Deliver a verified product improvement.",
-    currentCodexGoal: "Implement backend runtime recovery.",
-    independenceReason: "The worker owns a disjoint surface and returns one bounded artifact.",
-    currentCodexFiles: ["backend"],
-    goal: "Review frontend accessibility and return exact findings.",
-    relevantFiles: ["frontend"],
-    readOnly: true,
-    complexity: "large",
-    taskKind: "review",
-    estimatedDirectTokens: 12000,
-    ...patch,
-  };
+  return normalizeRequest({ workspace, projectGoal: "Ship verified feature", currentCodexGoal: "Implement API", currentCodexFiles: ["src/api"], goal: "Review UI architecture", independenceReason: "Different files and decision", relevantFiles: ["src/ui"], readOnly: true, complexity: "large", taskKind: "review", estimatedDirectTokens: 14000, maxWorkerOutputTokens: 1000, ...patch });
 }
+function resources(codexRemaining = 80) { return { providers: {
+  codex: { available: true, authenticated: true, authMode: "chatgpt", models: [{ id: "gpt-fixture", description: "balanced capable model" }], capacity: { effectiveRemainingPercent: codexRemaining } },
+  claude: { available: true, authenticated: true, authMode: "subscription", models: [{ id: "sonnet" }, { id: "fable" }], capacity: { windows: [{ scope: "all", remainingPercent: 70 }, { scope: "fable", remainingPercent: 90, resetAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }] } },
+  antigravity: { available: false, authenticated: false, reason: "not installed" },
+  cursor: { available: false, authenticated: false, reason: "not installed" },
+} }; }
 
 try {
-  const fableResources = JSON.parse(JSON.stringify(resources));
-  fableResources.providers.claude.models = [{ id: "fable" }, { id: "sonnet" }];
-  const scenarios = {
-    smallDirect: route(request({ complexity: "small" }), resources),
-    duplicateRejected: route(request({ currentCodexGoal: "Trace the exact cadence blocker and propose the smallest safe fix.", goal: "Identify the exact cadence blocker and implement the smallest safe fix.", currentCodexFiles: [], relevantFiles: [], taskKind: "debug" }), resources),
-    disjointArchitecture: route(request({ taskKind: "architecture", preferredProvider: "auto" }), resources),
-    cheapRepositoryScan: route(request({ taskKind: "repository-scan", allowAntigravity: true, preferredProvider: "auto" }), resources),
-    cooledAntigravity: route(request({ taskKind: "repository-scan", allowAntigravity: true, preferredProvider: "auto" }), resources, { antigravity: { cooledDown: true, consecutiveFailures: 2 }, claude: { successRate: 1 } }),
-    userMandatedFableSmall: route(request({ preferredProvider: "antigravity", model: "fable", selectionAuthority: "user", complexity: "small", estimatedDirectTokens: 900, allowAntigravity: true }), fableResources),
-    routerFableUneconomic: route(request({ preferredProvider: "claude", model: "sonnet", complexity: "small" }), fableResources),
-    reservedReadOnlyClaude: route(request({ preferredProvider: "claude", complexity: "small", estimatedDirectTokens: 900, currentCodexReserved: true }), fableResources),
-    reservedReadOnlyOverlap: route(request({ preferredProvider: "claude", complexity: "small", estimatedDirectTokens: 900, currentCodexReserved: true, relevantFiles: ["backend/dashboard"] }), fableResources),
-  };
-  assert.equal(scenarios.smallDirect.action, "direct");
-  assert.equal(scenarios.duplicateRejected.action, "direct");
-  assert.equal(scenarios.disjointArchitecture.provider, "claude");
-  assert.equal(scenarios.cheapRepositoryScan.provider, "antigravity");
-  assert.equal(scenarios.cheapRepositoryScan.request.model, "Gemini 3.5 Flash (Medium)", "Antigravity CLI must receive the installed display-name model selector");
-  assert.equal(scenarios.cooledAntigravity.provider, "claude");
-  assert.ok(scenarios.disjointArchitecture.economics.delegatedTokens < scenarios.disjointArchitecture.economics.directTokens);
-  assert.ok(scenarios.disjointArchitecture.request.maxWorkerOutputTokens <= 2000);
-  assert.equal(scenarios.userMandatedFableSmall.action, "delegate", "an explicit user Fable mandate must dispatch despite negative economics");
-  assert.equal(scenarios.userMandatedFableSmall.provider, "claude", "a Fable mandate must be corrected to Claude, never Antigravity");
-  assert.equal(scenarios.userMandatedFableSmall.request.model, "fable");
-  assert.ok(scenarios.userMandatedFableSmall.warnings.some((item) => /Economic warning/i.test(item)), "waived economics must surface as a warning");
-  assert.equal(scenarios.routerFableUneconomic.action, "direct", "router-preference small lanes keep the token-saving direct default");
-  assert.equal(scenarios.reservedReadOnlyClaude.action, "delegate", "a disjoint read-only lane may use external capacity while current Codex is reserved");
-  assert.equal(scenarios.reservedReadOnlyClaude.provider, "claude");
-  assert.ok(scenarios.reservedReadOnlyClaude.warnings.some((item) => /current Codex is reserved/i.test(item)), "the reserved-Codex economic exception must remain visible");
-  assert.equal(scenarios.reservedReadOnlyOverlap.action, "direct", "reserving Codex must never bypass an overlapping file boundary");
-  assert.match(scenarios.reservedReadOnlyOverlap.reason, /file ownership overlaps/i);
-  const report = Object.fromEntries(Object.entries(scenarios).map(([name, value]) => [name, {
-    action: value.action,
-    provider: value.provider || "current-codex",
-    reason: value.reason,
-    warnings: value.warnings || [],
-    economics: value.economics || value.request?.economics || null,
-  }]));
-  process.stdout.write(`${JSON.stringify({ ok: true, simulated: true, modelCalls: 0, scenarios: report }, null, 2)}\n`);
+  const good = economicEstimate(request());
+  assert.equal(good.positive, true);
+  const tiny = request({ complexity: "small", estimatedDirectTokens: 800, maxWorkerOutputTokens: 800 });
+  assert.equal(route(tiny, resources(), {}).action, "direct");
+  const medium = route(request(), resources(), {});
+  assert.equal(medium.action, "delegate");
+  const reserve = route(request({ preferredProvider: "codex" }), resources(10), {});
+  assert.equal(reserve.action, "direct");
+  assert.match(reserve.reason, /reserve/);
+  const unknownCodex = resources();
+  unknownCodex.providers.codex.capacity = { effectiveRemainingPercent: null };
+  const unknown = route(request(), unknownCodex, {});
+  assert.notEqual(unknown.provider, "codex");
+  const premium = route(request({ preferredProvider: "claude", model: "fable", selectionAuthority: "user", allowPremiumModel: true }), resources(), {});
+  assert.equal(premium.action, "delegate");
+  assert.equal(premium.provider, "claude");
+  process.stdout.write(`${JSON.stringify({ ok: true, delegatedSavingsPercent: good.savingsPercent, smallTaskDirect: true, codexReserveProtected: true, unknownCodexNotDelegated: true }, null, 2)}\n`);
 } finally {
-  fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true });
 }

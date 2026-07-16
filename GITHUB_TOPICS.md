@@ -1,7 +1,8 @@
 # GitHub Topics
 
-Add these manually in GitHub repo settings for the AI Mobile combined bridge:
+Add these manually in GitHub repository settings:
 
+```text
 codex
 openai-codex
 codex-plugin
@@ -14,10 +15,12 @@ antigravity-2
 claude-code
 mcp
 mcp-server
-devtools-mcp
+ai-orchestration
 ai-agents
 powershell
 windows
+```
 
-Suggested GitHub repo description:
-AI Mobile Codex Plugin â€” connect mobile-started OpenAI Codex sessions to Antigravity 2.0 and Claude Code on Windows.
+Suggested GitHub repository description:
+
+AI Mobile Codex Plugin - coordinate Codex, Claude Code, Antigravity, and headless Cursor across independently verified Windows projects.

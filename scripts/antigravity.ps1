@@ -1,10 +1,8 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','orchestrate-task','read-job','verify-job','cancel-job','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
-  [string]$Workspace = (Get-Location).Path,
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
   [string]$ContractFile = '',
-  [string]$JobId = '',
-  [ValidateSet('compact','full')][string]$Detail = 'compact',
-  [ValidateRange(0,60)][int]$WaitSeconds = 0,
+  [string]$TaskId = '',
+  [string]$PortfolioId = '',
   [switch]$Refresh
 )
 
@@ -17,15 +15,27 @@ function Invoke-Node([string[]]$Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "AI Mobile command failed with exit code $LASTEXITCODE." }
 }
 
+function Require-Contract {
+  if (-not $ContractFile) { throw '-ContractFile is required.' }
+  return (Resolve-Path -LiteralPath $ContractFile).Path
+}
+
+function Get-StateArguments {
+  if ($PortfolioId) { return @('--portfolio-id',$PortfolioId) }
+  if ($TaskId) { return @('--task-id',$TaskId) }
+  throw '-TaskId or -PortfolioId is required.'
+}
+
 switch ($Command) {
   'setup' {
-    $node = Get-Command node -ErrorAction SilentlyContinue
     [ordered]@{
       Installed = Test-Path $Entry
-      NodeReady = $null -ne $node
+      NodeReady = $null -ne (Get-Command node -ErrorAction SilentlyContinue)
+      Version = (Get-Content (Join-Path $Root '.codex-plugin\plugin.json') -Raw | ConvertFrom-Json).version
       PluginRoot = $Root
-      StartupBehavior = 'passive; no desktop application is opened'
-      Tools = @('orchestrate-task','read-job','verify-job','cancel-job','resource-inventory','orchestrator-profile')
+      StartupBehavior = 'passive; no provider desktop application is opened'
+      StateRoot = '%LOCALAPPDATA%\AI Mobile\v1'
+      Tools = @('start-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
@@ -33,31 +43,25 @@ switch ($Command) {
     if ($Refresh) { $args += '--refresh' }
     Invoke-Node $args
   }
-  'orchestrate-task' {
-    if (-not $ContractFile) { throw '-ContractFile is required and must contain the finite orchestration contract JSON.' }
-    $resolved = (Resolve-Path -LiteralPath $ContractFile).Path
-    Invoke-Node @('orchestrate-task-cli','--json-file',$resolved)
-  }
-  'read-job' {
-    if (-not $JobId) { throw '-JobId is required.' }
-    Invoke-Node @('read-job-cli','--workspace',(Resolve-Path -LiteralPath $Workspace).Path,'--job-id',$JobId,'--detail',$Detail,'--wait-seconds',"$WaitSeconds")
-  }
-  'verify-job' {
-    if (-not $JobId) { throw '-JobId is required.' }
-    Invoke-Node @('verify-job-cli','--workspace',(Resolve-Path -LiteralPath $Workspace).Path,'--job-id',$JobId)
-  }
-  'cancel-job' {
-    if (-not $JobId) { throw '-JobId is required.' }
-    Invoke-Node @('cancel-job-cli','--workspace',(Resolve-Path -LiteralPath $Workspace).Path,'--job-id',$JobId)
-  }
+  'start-task' { Invoke-Node @('start-task-cli','--json-file',(Require-Contract)) }
+  'dispatch-round' { Invoke-Node @('dispatch-round-cli','--json-file',(Require-Contract)) }
+  'collect-round' { Invoke-Node @('collect-round-cli','--json-file',(Require-Contract)) }
+  'record-evidence' { Invoke-Node @('record-evidence-cli','--json-file',(Require-Contract)) }
+  'task-summary' { Invoke-Node (@('task-summary-cli') + (Get-StateArguments)) }
+  'complete-task' { Invoke-Node (@('complete-task-cli') + (Get-StateArguments)) }
+  'cancel-task' { Invoke-Node (@('cancel-task-cli') + (Get-StateArguments)) }
   'orchestrator-profile' { Invoke-Node @('orchestrator-profile-cli') }
   'self-test' { Invoke-Node @('self-test') }
   'privacy' {
     [ordered]@{
-      PublicRepoPolicy = 'No credentials, cookies, local transcripts, quota snapshots, or personal project data.'
-      LocalArtifacts = '<workspace>/.ai-mobile/tasks, <workspace>/.ai-mobile/jobs, and %LOCALAPPDATA%/AI Mobile'
-      LegacyArtifacts = '<workspace>/.antigravity-bridge/jobs are read-only compatibility inputs'
+      PublicRepoPolicy = 'No credentials, cookies, transcripts, quota snapshots, personal project data, or machine-specific paths.'
+      LocalState = '%LOCALAPPDATA%\AI Mobile\v1'
+      ProjectRuntimeFiles = 'none'
       DesktopStartup = 'never automatic'
+      WriterIsolation = 'detached Git worktree with patch handoff'
+      PortfolioMode = 'one finite request can coordinate multiple independently verified projects'
+      GlobalGuards = 'provider, quota pool, worker, RAM, file ownership, and worktree storage'
+      WorktreeLifecycle = 'disk quota, free-space gate, maximum age, collection cleanup, cancellation cleanup, and startup crash cleanup'
     } | ConvertTo-Json -Depth 3
   }
 }

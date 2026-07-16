@@ -2,197 +2,172 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for Windows. It lets one Codex project task coordinate bounded workers from the Codex CLI, Claude Code, Antigravity, and optional Cursor while the current Codex model keeps working. The same task can be steered from the ChatGPT mobile app while execution continues on the linked PC.
+AI Mobile is a community Codex MCP plugin for Windows that coordinates the current Codex task with authenticated local Codex CLI, Claude Code, Antigravity CLI, and optional headless Cursor workers. One request can cover one project or a portfolio of separate projects while each project keeps independent outcomes, evidence, patches, and completion state.
 
-The goal is simple: **finish useful project work faster without spending more tokens managing workers than the workers save.**
+The objective is practical: finish more verified work without spending more tokens, time, RAM, or review effort on orchestration than the delegated work saves.
 
-## Operating Model
+## How It Works
 
-AI Mobile follows eight foundation rules:
+1. `start-task` records one finite outcome contract and passively discovers machine and provider capacity once.
+2. Current Codex inspects the minimum authoritative state and immediately advances the highest-value ready critical path.
+3. `dispatch-round` assigns only dependency-ready, disjoint, economically useful work to available headless providers.
+4. Machine-wide leases protect provider slots, quota pools, RAM, file ownership, Codex reserve, and worktree storage across every task and project.
+5. Current Codex continues working while external workers run. No manager loop or polling feed is created.
+6. `collect-round` returns compact handoffs and patches once, then removes collected editing worktrees.
+7. Current Codex integrates accepted work, runs deterministic checks, and records project-specific evidence.
+8. `complete-task` refuses completion until every required project has its own sufficient evidence.
 
-1. Current Codex owns the goal, critical path, integration, verification, and user communication.
-2. One finite first call fixes the root outcome, inventories capacity, keeps Codex working, and routes bounded lanes.
-3. Only genuinely independent bounded work is delegated, never to more than two external workers.
-4. Every lane has one owner: Codex cannot redo a worker question or touch its files before collecting that result.
-5. Codex continues a disjoint critical-path lane immediately after dispatch; there is no polling or heartbeat loop.
-6. Deterministic checks run before any model review, and premium work is not sent to another premium model merely for reassurance.
-7. The complete project outcome remains fixed; a passing milestone triggers the next dependency-ready milestone instead of ending the work.
-8. Reasoning stays deep while communication stays compact, answer-first, and easy to scan.
-
-Provider jobs are durable and write compact artifacts locally. Each task also has a caller-declared binding at `.ai-mobile/current-work.json` and one append-only handoff inbox. The binding never guesses or controls the host-selected Codex chat; it records only the declared current-Codex goal, file ownership, optional model, and integration point. A failed lane gets at most one justified failover; otherwise current Codex takes the bounded work back.
+AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, or recurring status loop.
 
 ## Use
 
-For a substantial project task:
+For one project:
 
 ```text
-@ai-mobile Help complete this project efficiently.
+@ai-mobile Finish this project efficiently.
 Outcome: <measurable result>
+Acceptance: <positive observable proof>
 Constraints: <important boundaries>
 ```
 
-That is enough. The skill should:
+For multiple separate projects:
 
-- call `orchestrate-task` first, before project commands or file reads;
-- preserve the complete outcome and positive completion evidence;
-- keep genuine external stop conditions separate so an empty queue or named gate cannot become a false success path;
-- inventory compact capacity and build the first delivery batch in that same call;
-- keep the critical path in the current Codex task;
-- dispatch only useful independent lanes;
-- continue Codex work instead of waiting;
-- collect each worker once at the integration point;
-- verify with tests, diffs, and policy gates;
-- advance to the next ready milestone in the same turn instead of stopping after the first passing slice;
-- report `Done / Active / Blocked / Capacity / Next` using evidence.
+```text
+@ai-mobile Coordinate these projects as one finite portfolio.
+Portfolio outcome: <overall result>
+Project A: <workspace, outcome, acceptance, priority, blockers>
+Project B: <workspace, outcome, acceptance, priority, blockers>
+```
 
-The orchestration receipt initially forbids a final answer after setup, status, restart, or an empty eligible queue. Codex must first produce verified material progress, satisfy the completion evidence, or prove a genuine external/user-only blocker and that no dependency-ready local work remains.
+The user does not need to design worker lanes. Current Codex discovers the project state first, chooses its own critical path, and proposes only work that passes dependency, ownership, capacity, safety, and economic gates.
 
-Do not ask AI Mobile to create a control room, Goal, automation, schedule, or heartbeat unless that behavior is independently required. Continuous project work does not require recurring chat turns.
+## Resource Decisions
 
-## Default Tool Surface
+- **Current Codex:** owns user intent, ambiguous reasoning, the highest-value critical path, integration, risky actions, and final verification.
+- **Codex CLI:** an additional bounded worker only when measured shared capacity stays above the private reserve, normally 15 percent.
+- **Claude Code:** bounded implementation, refactoring, debugging, architecture, and repository reasoning through the authenticated CLI.
+- **Antigravity CLI:** economical browser-oriented analysis, repository scans, research, drafting, and validation. Read-only use requires explicit or saved local consent.
+- **Cursor:** only a real authenticated headless `cursor-agent`; the desktop launcher is not treated as a worker.
+- **No-model tools:** tests, linters, validators, diffs, and runtime evidence are preferred for verification.
 
-Only six tools are exposed to Codex by default:
+Routing considers capability fit, dependency readiness, quota pools, reset horizon, recent reliability, subscription or API cost, free RAM, user priority, and integration cost. Unknown limits remain unknown. Cached negative availability is re-probed before dispatch rejection.
+
+## Portfolio Safety
+
+- One capacity inventory is shared by all projects in the portfolio.
+- Current Codex works on the highest-priority unblocked project unless new evidence justifies an explicit override.
+- Independent projects can use different providers concurrently.
+- Priority-first round-robin allocation gives each ready project a fair opportunity before a second unit goes to the same project.
+- Provider, quota-pool, and global worker leases are machine-wide, so separate portfolios cannot oversubscribe the same capacity.
+- A blocked project does not stall useful work in another project.
+- Evidence never crosses project boundaries, and portfolio completion requires every required project to pass independently.
+
+## Worker Isolation
+
+Read-only workers inspect the declared shared repository and create no worktree. Editing workers use detached Git worktrees that share repository history and never modify the primary worktree directly.
+
+Worktree controls are private local profile settings:
+
+- `worktreeDiskQuotaMb`;
+- `worktreeMinFreeMb`;
+- `worktreeMaxAgeHours`;
+- cleanup after collection, cancellation, lost worker recovery, startup, and maximum age;
+- removal of dependencies, logs, caches, virtual environments, coverage, and build outputs before patch collection.
+
+Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed repositories and Git branches.
+
+## Tool Surface
 
 | Tool | Purpose |
 | --- | --- |
-| `orchestrate-task` | Mandatory finite first call: preserve the root outcome, inventory capacity, keep Codex on the critical path, and route up to two bounded lanes. |
-| `read-job` | Collect one compact result, optionally waiting locally for up to 60 seconds without model-side polling. |
-| `verify-job` | Run bridge-owned deterministic checks without another model. |
-| `cancel-job` | Stop one recorded local worker process. |
-| `resource-inventory` | Explicit diagnostic capacity refresh; normal project startup already inventories capacity. |
-| `orchestrator-profile` | Read or update private local routing preferences. |
+| `start-task` | Start one finite project task or multi-project portfolio and capture one passive capacity snapshot. |
+| `dispatch-round` | Keep current Codex active and allocate globally safe independent worker units. |
+| `collect-round` | Collect one bounded round and clean collected editing worktrees. |
+| `record-evidence` | Attach verified evidence to one task or one named portfolio project. |
+| `task-summary` | Return one explicit compact evidence summary; it is not a heartbeat. |
+| `complete-task` | Complete only from sufficient project-local acceptance evidence. |
+| `cancel-task` | Stop owned workers, release leases, and clean owned worktrees. |
+| `resource-inventory` | Passively inspect current machine, provider, quota, lease, and storage evidence. |
+| `orchestrator-profile` | Read or update private local routing and resource preferences. |
 
-The default surface excludes project-manager cycles, status polling, setup tools, raw DevTools, and provider-specific internals. This materially reduces tool-schema context in every Codex turn.
+## Token Efficiency
 
-## Resource Selection
+- Trivial or tightly coupled work stays in current Codex.
+- Workers receive compact outcome, ownership, acceptance, and integration contracts, never the parent transcript.
+- Delegation accounts for prompt, worker output, wait, verification, retry, and integration cost.
+- Small or overlapping work is rejected from delegation.
+- Deterministic checks precede qualitative model review.
+- No worker review chain or premium-model reassurance loop is created.
+- A failed worker is retried only after a classified transient failure and changed capacity evidence.
+- Worker activity, process health, elapsed time, and token usage are not reported as outcome progress.
 
-- **Current Codex:** critical reasoning, integration, ambiguous debugging, final verification, protected live state, and external effects.
-- **Codex worker:** independent high-value work while shared Codex capacity remains above the 15% reserve. The router ranks the current native catalog from its advertised capability metadata and supported effort levels. It does not assume a Sol/Terra/Luna order; a private profile can still constrain or prefer a user's own allowed models.
-- **Claude Code:** substantial bounded code, refactoring, debugging, and architecture work. Sonnet-class models are the normal default; premium Fable/Opus capacity is for genuinely hard work or a valuable dedicated window near reset.
-- **Antigravity CLI:** broad read-only inspection, research, browser-oriented analysis, drafting, and low-cost validation. It is never auto-launched without explicit authorization.
-- **Antigravity UI:** named visible project/chat state, authentication, model selection, or a verified CLI limitation only.
-- **Cursor:** only when a true headless `cursor-agent` is installed and suitable.
-- **Local bridge:** deterministic tests and artifact validation with no model tokens.
-
-Model catalogs, effort levels, quota windows, reset times, recent workspace outcomes, and provider health are discovered from current local evidence. Automatic routing scores task fit and recent reliability; it does not choose Claude first by default. Unknown or stale limits remain unknown.
-
-### Explicit User Model Selection
-
-When the user explicitly names a provider or model ("use Fable 5"), the lane carries `selectionAuthority: "user"`. Model-to-provider binding is canonical — Fable/Opus/Sonnet/Haiku are Claude, GPT is Codex, Gemini is Antigravity — and a mismatched explicit pair is corrected deterministically in the same call, so Fable can never dispatch through Antigravity. For a user mandate the economic gate and small-task overhead warn instead of reject, and the mandate covers the premium-model opt-in; hard authentication, quota, billing, ownership-overlap, file-boundary, and safety gates still win. A repeated identical failed mandate returns one final do-not-retry blocker instead of another orchestration round. Automatic routing without a mandate keeps every token-saving default.
-
-## Token-Efficiency Contract
-
-- No plugin call for trivial or tightly coupled work.
-- One compact orchestration call at project-task start; passive provider probes run in parallel under a fixed deadline, so an unavailable provider becomes unknown rather than stalling startup. Capacity refresh only after a reset, material provider change, or failure.
-- No parent transcript in worker prompts.
-- No dispatch without a distinct current-Codex lane, an independence reason, and non-overlapping ownership.
-- Zero to two external lanes normally.
-- No repeated status reads.
-- Worker outputs default to 1,200-2,000 tokens. Claude subscriptions use measured quota windows and finite leases; dollar caps appear only for explicitly authorized PAYG lanes.
-- Every new lane declares its expected contribution and the one-time action current Codex takes when the result arrives. A completed worker result is integrated before Codex does that lane itself.
-- One terminal handoff artifact per worker, with compact result readback and full diagnostics only after a real blocker. A finite worker lease turns stalled workers into terminal failures rather than persistent "running" noise.
-- Deterministic verification before qualitative review.
-- No premium-on-premium review chain.
-- Worker dispatch, waiting, retries, and unchanged reviews do not count as progress.
-- No greetings, repeated prompts, tool-by-tool narration, waiting commentary, or routine postambles.
-- Brevity never removes exact evidence, warnings, caveats, code, commands, paths, errors, or necessary reasoning.
-
-### Smart Compact Communication
-
-AI Mobile includes a communication mode inspired by [Caveman's](https://github.com/Shawnchee/caveman-skill) filler-removal principle, without caveman grammar. It keeps intelligence and verification unchanged, leads with the answer, removes low-value narration, and automatically expands when confusion, risk, ambiguity, or an important decision requires more explanation. The private profile supports `smart-compact` (default), `standard`, and `detailed` modes.
-
-The current Codex task protects a configurable 15% shared-capacity reserve, but capacity above that floor remains available for useful Codex work. A five-hour horizon influences routing; it is not a project deadline.
-
-For broad goals, the plugin keeps a compact `RootOutcome`, `CompletionEvidence`, `CurrentBatch`, and dependency `Frontier`. It stops only on verified completion, a real user/safety decision, a concrete external blocker, exhausted usable capacity, or a forced host-turn boundary. `Next` should describe work already started or the exact condition that prevented it.
-
-## Durable Artifacts
-
-Worker jobs live under the project workspace:
-
-```text
-.ai-mobile/tasks/<taskId>.json
-
-.ai-mobile/jobs/<jobId>/
-  contract.json
-  request.md
-  status.json
-  events.jsonl
-  result.md
-  changed-files.json
-  worker.diff
-  test-output-summary.md
-  verification-evidence.json
-  usage.json
-```
-
-`read-job` returns a bounded summary, provider/model usage, ownership, and an explicit integration instruction. At an integration point, `waitSeconds=60` can absorb a short remaining worker delay inside the local bridge instead of creating repeated model turns. The first terminal read records `collectedAt`; a second read is visibly marked as already collected. Raw status JSON, full diffs, and telemetry dumps require `detail=full` and should be used only for focused diagnosis.
-
-Writers require explicit non-overlapping file boundaries. The bridge records attributable changes and executes allowlisted verification commands as argument arrays rather than trusting worker prose.
+The default communication mode is `smart-compact`: answer first, preserve exact evidence and caveats, and remove low-value narration without reducing reasoning quality.
 
 ## Install
+
+Requirements:
+
+- Windows and Codex plugin support;
+- Node.js on `PATH`;
+- optional authenticated `codex`, `claude`, `agy`, and `cursor-agent` CLIs.
+
+Clone and verify:
 
 ```powershell
 git clone https://github.com/comprono/Ai-Mobile-Codex-plugin.git "$env:USERPROFILE\plugins\ai-mobile"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
 ```
 
-Restart Codex after installation or update, then start a fresh Codex task. Existing tasks keep the plugin skill and MCP schemas they loaded when they started and cannot be upgraded in place. AI Mobile rejects stale-task calls before inventory or worker execution.
+Install the repository as a personal Codex plugin, then restart Codex and start a fresh task. Existing Codex tasks keep the skill and MCP schema loaded when they started and cannot be upgraded in place.
 
-Requirements:
-
-- Windows.
-- Codex plugin support.
-- Node.js on `PATH`.
-- Recommended: official Codex CLI authenticated through the ChatGPT plan.
-- Optional: Claude Code CLI (`claude`).
-- Optional: Antigravity CLI (`agy`) and Antigravity desktop.
-- Optional: a real headless Cursor agent (`cursor-agent`).
-
-The plugin starts no desktop app when Codex starts. The normal MCP manifest registers only `ai-mobile-local`; Antigravity UI control remains an on-demand advanced path.
+The plugin does not launch provider apps during installation or Codex startup. A visible UI fallback is a separate explicit user decision after a verified CLI limitation.
 
 ## CLI Diagnostics
 
-The PowerShell helper remains available for setup and focused diagnostics:
-
 ```powershell
-# Setup and passive capacity checks
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
+# Passive machine and provider evidence
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" resource-inventory -Refresh
 
-# Finite orchestration contract and compact result
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" orchestrate-task -ContractFile ".\ai-mobile-contract.json"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" read-job -Workspace "<path>" -JobId "<job-id>" -WaitSeconds 60
-```
+# Start or advance a task/portfolio from a JSON contract
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" start-task -ContractFile ".\start.json"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" dispatch-round -ContractFile ".\round.json"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" collect-round -ContractFile ".\collect.json"
 
-Old `.antigravity-bridge/jobs` artifacts remain readable, but the legacy manager, heartbeat, polling, and continuous-cycle commands are removed from the executable surface.
+# One explicit evidence summary
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" task-summary -TaskId "<task-id>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" task-summary -PortfolioId "<portfolio-id>"
+```
 
 ## Privacy And Safety
 
-This is a local bridge. Private routing preferences are stored under `%LOCALAPPDATA%\AI Mobile\orchestrator-profile.json` and are not committed to the repository.
+Private routing preferences and runtime records remain local. The public repository must not contain credentials, cookies, browser profiles, transcripts, quota snapshots, personal project data, or machine-specific paths.
 
-The plugin does not bypass model quotas, authentication, CAPTCHA, login, OAuth, external-action confirmation, or workspace boundaries. Browser profiles, cookies, credentials, email/SMS codes, real submissions, sends, deploys, purchases, and destructive actions remain protected current-Codex operations requiring applicable authorization.
-
-Antigravity permission auto-approval is never implicit. A private local opt-in is honored only for sandboxed read-only CLI lanes; it never grants writer, UI, authentication, or external-action authority. Opening Codex must not open, close, restart, or repair Antigravity.
+AI Mobile does not bypass quotas, authentication, CAPTCHA, login, OAuth, confirmation gates, workspace boundaries, or external-action safety. Sends, submissions, deploys, purchases, destructive actions, and similar side effects remain protected current-Codex operations under the user's applicable authorization.
 
 ## Development
 
-Run the local gates before publishing:
+Run all release gates before publishing:
 
 ```powershell
-node ".\scripts\ai-mobile-local-mcp.js" self-test
-node ".\scripts\orchestration-regression.js"
-node ".\scripts\economic-regression.js"
-node ".\scripts\reliability-e2e.js"
-powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" self-test
-powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
+node .\scripts\self-test.js
+node .\scripts\state-capacity-regression.js
+node .\scripts\orchestration-regression.js
+node .\scripts\economic-regression.js
+node .\scripts\worker-isolation-regression.js
+node .\scripts\portfolio-e2e.js
+node .\scripts\global-resource-regression.js
+node .\scripts\storage-lifecycle-regression.js
+node .\scripts\reliability-e2e.js
+# Manual authenticated release canary; consumes one small provider request
+node .\scripts\installed-provider-canary.js
+powershell -ExecutionPolicy Bypass -File .\scripts\antigravity.ps1 self-test
+powershell -ExecutionPolicy Bypass -File .\scripts\antigravity.ps1 privacy
 git diff --check
-python -m pipx run plugin-scanner lint .
-python -m pipx run plugin-scanner verify .
+pipx run plugin-scanner lint .
+pipx run plugin-scanner verify .
 ```
 
-`plugin-scanner verify` may exit nonzero only because it intentionally refuses to execute a local stdio MCP server. `scripts/reliability-e2e.js` performs that missing execution check from a clean copied path; all other scanner checks must pass.
-
-See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for the current evidence model and [AI Mobile Implementation Report](docs/IMPLEMENTATION_REPORT.md) for the researched target architecture, subtractive migration plan, and falsifiable release gates. The progressive-disclosure approach is informed by [Addy Osmani's agent-skills repository](https://github.com/addyosmani/agent-skills).
+See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for decision rules and [Implementation Report](docs/IMPLEMENTATION_REPORT.md) for the v1 architecture and falsifiable gates.
 
 ## License
 

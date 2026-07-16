@@ -5,12 +5,12 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 6,
+  schemaVersion: 8,
   communicationStyle: "professional",
   communicationMode: "smart-compact",
   address: "",
   updateStyle: "concise-executive",
-  role: "technical project manager",
+  role: "AI resource orchestrator",
   codexModelAllowPattern: "^gpt-",
   // Empty by default: the router ranks the current native catalog rather than
   // assuming a particular model name or catalog order.
@@ -24,10 +24,16 @@ const DEFAULT_PROFILE = Object.freeze({
   adaptiveRouting: true,
   cliFirst: true,
   uiFallbackOnly: true,
-  antigravityAutoApprovePermissions: false,
+  antigravityReadOnlyConsent: false,
   subscriptionOnlyClaude: true,
   codexReservePercent: 15,
   maxExternalWorkers: 2,
+  maxGlobalWorkers: 2,
+  maxWorkersPerProvider: 1,
+  minimumFreeRamMb: 1024,
+  worktreeDiskQuotaMb: 2048,
+  worktreeMinFreeMb: 2048,
+  worktreeMaxAgeHours: 6,
   minimumDelegationSavingsPercent: 20,
   useExpiringPremiumCapacity: false,
 });
@@ -55,7 +61,7 @@ function normalizeProfile(value = {}) {
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 6,
+    schemaVersion: 8,
     communicationStyle: style,
     communicationMode: ["smart-compact", "standard", "detailed"].includes(String(value.communicationMode || "").toLowerCase())
       ? String(value.communicationMode).toLowerCase()
@@ -78,10 +84,16 @@ function normalizeProfile(value = {}) {
     adaptiveRouting: value.adaptiveRouting !== false,
     cliFirst: value.cliFirst !== false,
     uiFallbackOnly: value.uiFallbackOnly !== false,
-    antigravityAutoApprovePermissions: value.antigravityAutoApprovePermissions === true,
+    antigravityReadOnlyConsent: value.antigravityReadOnlyConsent === true || value.antigravityAutoApprovePermissions === true,
     subscriptionOnlyClaude: value.subscriptionOnlyClaude !== false,
     codexReservePercent: Math.max(5, Math.min(50, Number(value.codexReservePercent ?? DEFAULT_PROFILE.codexReservePercent))),
     maxExternalWorkers: Math.max(1, Math.min(2, Number(value.maxExternalWorkers ?? DEFAULT_PROFILE.maxExternalWorkers))),
+    maxGlobalWorkers: Math.max(1, Math.min(8, Number(value.maxGlobalWorkers ?? DEFAULT_PROFILE.maxGlobalWorkers))),
+    maxWorkersPerProvider: Math.max(1, Math.min(4, Number(value.maxWorkersPerProvider ?? DEFAULT_PROFILE.maxWorkersPerProvider))),
+    minimumFreeRamMb: Math.max(128, Math.min(65536, Number(value.minimumFreeRamMb ?? DEFAULT_PROFILE.minimumFreeRamMb))),
+    worktreeDiskQuotaMb: Math.max(64, Math.min(102400, Number(value.worktreeDiskQuotaMb ?? DEFAULT_PROFILE.worktreeDiskQuotaMb))),
+    worktreeMinFreeMb: Math.max(64, Math.min(102400, Number(value.worktreeMinFreeMb ?? DEFAULT_PROFILE.worktreeMinFreeMb))),
+    worktreeMaxAgeHours: Math.max(0.25, Math.min(168, Number(value.worktreeMaxAgeHours ?? DEFAULT_PROFILE.worktreeMaxAgeHours))),
     minimumDelegationSavingsPercent: Math.max(10, Math.min(70, Number(value.minimumDelegationSavingsPercent ?? DEFAULT_PROFILE.minimumDelegationSavingsPercent))),
     useExpiringPremiumCapacity: value.useExpiringPremiumCapacity === true,
   };

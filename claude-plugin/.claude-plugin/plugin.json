@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile-workers",
-  "version": "0.1.0",
-  "description": "Bounded Claude Code worker roles for AI Mobile orchestration.",
+  "version": "1.0.0",
+  "description": "Bounded Claude Code worker roles for AI Mobile single-project and portfolio orchestration.",
   "author": {
     "name": "comprono"
   },

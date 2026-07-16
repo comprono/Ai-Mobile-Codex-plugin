@@ -3,92 +3,126 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { boundaryAllows, changedFingerprints, collectDiff, fingerprint, statusPaths } = require("./git-evidence");
-const { event, jobDirectory, setStatus } = require("./job-store");
+const { event, setStatus } = require("./job-store");
 const { runVerification } = require("./verification");
 const { clearInventoryCache } = require("./capacity");
 const { bounded, readJson, redact, safeWorkspace, utcNow, writeJson } = require("./utils");
+const { jobDirectory } = require("./state-store");
+const { releaseResourceLease } = require("./resource-leases");
+const { cleanTransientOutputs } = require("./workspace-isolation");
 const { runProvider } = require("../providers");
 
 function communicationContract(mode = "smart-compact") {
-  if (mode === "detailed") return "Explain the outcome and material reasoning clearly, but omit greetings, repeated task text, tool narration, waiting commentary, and offers for more work.";
-  if (mode === "standard") return "Use concise complete prose. Lead with the outcome and omit greetings, repeated task text, tool narration, waiting commentary, and postambles.";
-  return "Think deeply; communicate compactly. Lead with the outcome. Use short bullets where useful. Omit greetings, repeated task text, tool narration, waiting commentary, and postambles. Preserve exact facts, numbers, paths, commands, errors, caveats, and evidence. Expand when ambiguity, safety, irreversible action, or a decision requires explanation.";
+  if (mode === "detailed") return "Explain the result and material reasoning clearly, without greetings, task repetition, tool narration, waiting commentary, or offers for more work.";
+  if (mode === "standard") return "Use concise complete prose. Lead with the result and omit greetings, task repetition, tool narration, waiting commentary, and postambles.";
+  return "Think deeply and communicate compactly. Lead with the result. Preserve exact facts, paths, commands, errors, caveats, and evidence. Omit greetings, repeated context, tool narration, waiting commentary, and postambles.";
 }
 
 function promptFor(contract) {
-  const maxWords = Math.max(250, Math.min(2200, Math.floor((contract.maxWorkerOutputTokens || 1200) * 0.72)));
-  const smallReadOnlyCap = contract.readOnly && contract.complexity === "small"
-    ? "Small read-only inspection cap: inspect at most three direct files or commands from the listed scope. Do not recurse through directories, scan logs broadly, or inspect unrelated files. If those checks cannot establish the answer, stop and report the missing evidence as the blocker."
-    : "";
+  const maxWords = Math.max(220, Math.min(1400, Math.floor((contract.maxWorkerOutputTokens || 1000) * 0.7)));
   return [
-    "You are one bounded worker inside a larger project. Complete only this lane.",
-    `Project outcome: ${contract.projectGoal || "Not supplied"}`,
-    contract.completionEvidence?.length ? `Project completion evidence (not your lane completion):\n- ${contract.completionEvidence.join("\n- ")}` : "",
-    `Your lane: ${contract.goal}`,
-    `Current Codex owns this different lane: ${contract.currentCodexGoal}`,
-    `Why the lanes are independent: ${contract.independenceReason}`,
-    `Workspace: ${contract.workspace}`,
-    `Mode: ${contract.readOnly ? "read-only" : "writer"}`,
-    contract.relevantFiles?.length ? `Relevant read scope: ${contract.relevantFiles.join(", ")}` : "",
-    contract.expectedFiles.length ? `Allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
-    contract.acceptanceCriteria.length ? `Acceptance criteria:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
-    contract.expectedContribution ? `Expected contribution: ${contract.expectedContribution}` : "",
-    contract.integrationAction ? `Integration action for current Codex: ${contract.integrationAction}` : "",
-    contract.nextStep ? `Useful next step after this lane: ${contract.nextStep}` : "",
-    smallReadOnlyCap,
-    "Do not investigate, implement, or repeat the current-Codex lane. Do not run another agent, start a manager loop, create recurring work, or broaden scope.",
-    "Completing this lane is evidence for current Codex. It does not complete the project outcome.",
+    "You are one bounded worker in a finite project round. Complete only the assigned unit.",
+    `Project outcome: ${contract.projectGoal}`,
+    `Your unit: ${contract.goal}`,
+    `Current Codex owns and is actively doing: ${contract.currentCodexGoal}`,
+    `Why this is independent: ${contract.independenceReason}`,
+    `Execution workspace: ${contract.executionWorkspace}`,
+    `Mode: ${contract.readOnly ? "read-only" : "isolated writer"}`,
+    contract.relevantFiles?.length ? `Read scope: ${contract.relevantFiles.join(", ")}` : "",
+    contract.expectedFiles?.length ? `Only allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
+    contract.acceptanceCriteria?.length ? `Unit acceptance:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
+    contract.expectedContribution ? `Required contribution: ${contract.expectedContribution}` : "",
+    contract.integrationAction ? `Current Codex integration action: ${contract.integrationAction}` : "",
+    "Do not delegate, start another agent, create recurring work, inspect the current-Codex unit, or broaden scope.",
+    "Do not claim the project outcome is complete. Return only your unit result, evidence, checks, changed files, and one blocker if present.",
     communicationContract(contract.communicationMode),
-    `Hard result budget: at most ${contract.maxWorkerOutputTokens || 1200} output tokens (about ${maxWords} words), five evidence bullets, and one blocker. Stop after sufficient evidence.`,
-    "Finish with concise evidence: result, files changed, checks run, and one concrete blocker if any.",
+    `Hard summary budget: ${contract.maxWorkerOutputTokens || 1000} output tokens, approximately ${maxWords} words. Code changes belong in files, not the summary.`,
   ].filter(Boolean).join("\n\n");
 }
 
 function executeWorker(payload) {
-  const workspace = safeWorkspace(payload.workspace);
-  const dir = jobDirectory(workspace, payload.id);
+  const taskId = String(payload.taskId || "");
+  const jobId = String(payload.jobId || "");
+  const dir = jobDirectory(taskId, jobId);
   const contract = readJson(path.join(dir, "contract.json"), null);
   if (!contract) throw new Error("Missing job contract.");
-  const beforeStatus = statusPaths(workspace);
-  const observedBoundaries = contract.readOnly ? [] : contract.expectedFiles;
-  const before = fingerprint(workspace, observedBoundaries, 5000);
-  setStatus(dir, { state: "running", pid: process.pid, startedAt: readJson(path.join(dir, "status.json"), {}).startedAt || utcNow() });
-  const providerState = { [contract.provider]: { available: true, authenticated: true, command: contract.providerCommand } };
-  const response = runProvider(providerState, contract, promptFor(contract));
-  if (!response.ok || response.typedBlocker) clearInventoryCache();
-  const resultLimit = Math.max(1600, Math.min(12000, Number(contract.maxWorkerOutputTokens || 1200) * 4));
-  fs.writeFileSync(path.join(dir, "provider-output.txt"), redact(bounded(response.text, resultLimit)), "utf8");
-  const afterStatus = statusPaths(workspace);
-  const after = fingerprint(workspace, observedBoundaries, 5000);
-  const currentCodexPaths = contract.currentCodexFiles || [];
-  const newlyDirty = afterStatus.paths.filter((file) => !beforeStatus.paths.includes(file) && !currentCodexPaths.some((boundary) => boundaryAllows(file, [boundary])));
-  const changed = contract.readOnly ? [] : [...new Set([...changedFingerprints(before, after), ...newlyDirty])];
-  const outside = changed.filter((file) => !boundaryAllows(file, contract.expectedFiles));
-  const mutationViolation = contract.readOnly && changed.length > 0;
-  writeJson(path.join(dir, "changed-files.json"), changed);
-  fs.writeFileSync(path.join(dir, "worker.diff"), collectDiff(workspace, changed), "utf8");
-  const usage = { provider: contract.provider, ...response.usage, capturedAt: utcNow() };
-  const outputTokens = Number(usage.outputTokens ?? usage.output_tokens);
-  const equivalentUsd = Number(usage.equivalentUsd ?? usage.total_cost_usd);
-  usage.budgetExceeded = (Number.isFinite(outputTokens) && outputTokens > contract.maxWorkerOutputTokens)
-    || (contract.providerAuthMode === "api-key" && Number.isFinite(equivalentUsd) && equivalentUsd > contract.maxApiBudgetUsd);
-  usage.outputBudgetTokens = contract.maxWorkerOutputTokens;
-  usage.apiBudgetUsd = contract.providerAuthMode === "api-key" ? contract.maxApiBudgetUsd : null;
-  writeJson(path.join(dir, "usage.json"), usage);
-  let verification = null;
-  let blocker = response.typedBlocker ? `${response.typedBlocker}: ${bounded(response.text, 500)}` : "";
-  if (outside.length) blocker = `Writer boundary violation: ${outside.join(", ")}`;
-  if (mutationViolation) blocker = `Read-only worker modified files: ${changed.join(", ")}`;
-  if (!blocker && response.ok) {
-    verification = runVerification(workspace, dir, contract.verificationCommands);
-    if (verification.required && !verification.passed) blocker = verification.blocker;
+  const executionWorkspace = safeWorkspace(contract.executionWorkspace || contract.workspace);
+  const observedBoundaries = contract.readOnly ? contract.relevantFiles : contract.expectedFiles;
+  const beforeStatus = statusPaths(executionWorkspace);
+  const before = fingerprint(executionWorkspace, observedBoundaries, 5000);
+  try {
+    setStatus(taskId, jobId, { state: "running", pid: process.pid, startedAt: readJson(path.join(dir, "status.json"), {}).startedAt || utcNow() });
+    const providerState = { [contract.provider]: { available: true, authenticated: true, command: contract.providerCommand } };
+    const runtimeContract = { ...contract, workspace: executionWorkspace };
+    const response = runProvider(providerState, runtimeContract, promptFor(contract));
+    if (!response.ok || response.typedBlocker) clearInventoryCache();
+    const resultLimit = Math.max(1600, Math.min(12000, Number(contract.maxWorkerOutputTokens || 1000) * 4));
+    fs.writeFileSync(path.join(dir, "provider-output.txt"), redact(bounded(response.text, resultLimit)), "utf8");
+
+    const transientCleanup = cleanTransientOutputs(contract.isolation || {});
+    writeJson(path.join(dir, "transient-cleanup.json"), transientCleanup);
+    const afterStatus = statusPaths(executionWorkspace);
+    const after = fingerprint(executionWorkspace, observedBoundaries, 5000);
+    const statusChanges = afterStatus.paths.filter((file) => !beforeStatus.paths.includes(file));
+    const changed = [...new Set([...changedFingerprints(before, after), ...statusChanges])];
+    const outside = changed.filter((file) => !boundaryAllows(file, observedBoundaries));
+    const mutationViolation = contract.readOnly && changed.length > 0;
+    const patch = contract.readOnly ? "" : collectDiff(executionWorkspace, changed);
+    writeJson(path.join(dir, "changed-files.json"), changed);
+    fs.writeFileSync(path.join(dir, "worker.diff"), patch, "utf8");
+
+    const usage = { provider: contract.provider, ...response.usage, capturedAt: utcNow(), outputBudgetTokens: contract.maxWorkerOutputTokens };
+    const outputTokens = Number(usage.outputTokens ?? usage.output_tokens);
+    const equivalentUsd = Number(usage.equivalentUsd ?? usage.total_cost_usd);
+    usage.budgetExceeded = (Number.isFinite(outputTokens) && outputTokens > contract.maxWorkerOutputTokens)
+      || (contract.providerAuthMode === "api-key" && Number.isFinite(equivalentUsd) && equivalentUsd > contract.maxApiBudgetUsd);
+    writeJson(path.join(dir, "usage.json"), usage);
+
+    let blocker = response.typedBlocker ? `${response.typedBlocker}: ${bounded(response.text, 500)}` : "";
+    if (outside.length) blocker = `Writer boundary violation: ${outside.join(", ")}`;
+    if (mutationViolation) blocker = `Read-only worker modified files: ${changed.join(", ")}`;
+    let verification = null;
+    if (!blocker && response.ok) {
+      verification = runVerification(executionWorkspace, dir, contract.verificationCommands);
+      if (verification.required && !verification.passed) blocker = verification.blocker;
+    }
+
+    const state = !response.ok || blocker ? "failed" : "completed";
+    const summary = bounded(response.text, resultLimit);
+    fs.writeFileSync(path.join(dir, "result.md"), `${summary}\n`, "utf8");
+    writeJson(path.join(dir, "handoff.json"), {
+      schemaVersion: 1,
+      state,
+      summary,
+      changedFiles: changed,
+      patchAvailable: Boolean(patch),
+      patchPath: path.join(dir, "worker.diff"),
+      verification,
+      blocker,
+      integrationAction: contract.integrationAction || "",
+      projectCompleteAllowed: false,
+    });
+    setStatus(taskId, jobId, {
+      state,
+      finishedAt: utcNow(),
+      blocker,
+      warning: usage.budgetExceeded ? "worker-budget-exceeded" : "",
+      exitCode: response.exitCode ?? null,
+      verificationState: verification?.state || "not-requested",
+    });
+    event(dir, "worker.finished", { state, changedCount: changed.length });
+    return state === "completed" ? 0 : 1;
+  } catch (error) {
+    clearInventoryCache();
+    const blocker = `worker-runtime-failed: ${bounded(error.message, 600)}`;
+    writeJson(path.join(dir, "handoff.json"), { schemaVersion: 1, state: "failed", summary: "", changedFiles: [], patchAvailable: false, verification: null, blocker, projectCompleteAllowed: false });
+    setStatus(taskId, jobId, { state: "failed", finishedAt: utcNow(), blocker });
+    event(dir, "worker.failed", { blocker });
+    return 1;
+  } finally {
+    try { writeJson(path.join(dir, "lease-release.json"), releaseResourceLease(jobId)); }
+    catch (error) { writeJson(path.join(dir, "lease-release.json"), { released: false, warning: bounded(error.message, 300) }); }
   }
-  const state = !response.ok || blocker ? "failed" : "completed";
-  const result = [bounded(response.text, resultLimit), changed.length ? `\nChanged: ${changed.join(", ")}` : "\nChanged: none", blocker ? `\nBlocker: ${blocker}` : "", usage.budgetExceeded ? "\nBudget warning: provider usage exceeded the declared lane budget; do not send this result to another model for review." : ""].join("").trim();
-  fs.writeFileSync(path.join(dir, "result.md"), `${result}\n`, "utf8");
-  setStatus(dir, { state, finishedAt: utcNow(), blocker, warning: usage.budgetExceeded ? "worker-budget-exceeded" : "", exitCode: response.exitCode ?? null, verificationState: verification?.state || "not-requested" });
-  event(dir, "worker.finished", { state, changedCount: changed.length });
-  return state === "completed" ? 0 : 1;
 }
 
 module.exports = { communicationContract, executeWorker, promptFor };

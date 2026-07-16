@@ -23,6 +23,21 @@ jobs:
       - name: Finite orchestration regression
         run: node scripts/orchestration-regression.js
 
+      - name: Central state and capacity regression
+        run: node scripts/state-capacity-regression.js
+
+      - name: Isolated writer regression
+        run: node scripts/worker-isolation-regression.js
+
+      - name: Multi-project portfolio end-to-end
+        run: node scripts/portfolio-e2e.js
+
+      - name: Machine-wide resource guards
+        run: node scripts/global-resource-regression.js
+
+      - name: Worktree storage lifecycle
+        run: node scripts/storage-lifecycle-regression.js
+
       - name: Delegation economics regression
         run: node scripts/economic-regression.js
 

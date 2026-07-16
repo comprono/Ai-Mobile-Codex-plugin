@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "updated_utc": "2026-07-16T16:27:50Z",
+  "project_state": "active",
+  "current_slice_requirement_id": "PUBLIC_RELEASE",
+  "requirements": [
+    {
+      "id": "STATE_CAPACITY",
+      "description": "Runtime state is central, concurrent-task safe, branch independent, and provider capacity cannot be rejected from stale negative evidence.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Run state tests with two tasks in one workspace and change Git branches between reads.",
+        "Cache a provider as unavailable, make it available, and prove dispatch forces a fresh probe before rejection."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/state-capacity-regression.js",
+          "summary": "Two central tasks survived a Git branch change without workspace state, and a cached unavailable Claude provider was freshly re-probed and recovered before dispatch.",
+          "verified_utc": "2026-07-16T15:32:47Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "FINITE_ORCHESTRATION",
+      "description": "One natural invocation creates a finite task, keeps current Codex on the critical path, and dispatches only useful independent workers after reconnaissance.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Start a task without candidate lanes, dispatch an observed round, collect each worker once, and record evidence.",
+        "Prove small or overlapping work delegates nothing and still gives current Codex a concrete next action."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/orchestration-regression.js; node scripts/worker-isolation-regression.js; node scripts/reliability-e2e.js",
+          "summary": "Finite start and observed dispatch kept Codex active, assigned two disjoint units, kept small overlap direct, collected an isolated writer patch, and enforced evidence-gated MCP completion.",
+          "verified_utc": "2026-07-16T15:46:29Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "NO_FRICTION",
+      "description": "AI Mobile starts no desktop UI, manager loop, Goal, automation, heartbeat, or repeated poll and reports only material transitions.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Run startup and inventory tests with process-spawn capture and prove no desktop application is launched.",
+        "Inspect the skill and MCP surface for removed manager and polling behavior."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/self-test.js; node scripts/reliability-e2e.js",
+          "summary": "The nine-tool MCP lifecycle completed without provider or desktop processes, and source assertions found no manager, status-loop, or continuous-cycle tools.",
+          "verified_utc": "2026-07-16T15:46:29Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "ECONOMIC_VALUE",
+      "description": "Delegation accounts for prompt, worker, wait, verification, and integration cost and does not spend premium capacity on redundant review.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Run small, medium, overlap, premium, and expiring-capacity routing fixtures.",
+        "Prove deterministic verification precedes any model review and failed economics produce direct-work guidance."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/economic-regression.js; node scripts/self-test.js",
+          "summary": "Routing kept small work direct, delegated positive medium work, protected the Codex reserve, refused unknown shared Codex capacity, and allowed explicit premium use without a review chain.",
+          "verified_utc": "2026-07-16T15:46:29Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "PORTFOLIO_COORDINATION",
+      "description": "One finite portfolio request coordinates multiple independent projects from one capacity inventory while current Codex advances the highest-value critical path and external workers run useful disjoint work concurrently.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Coordinate two nontrivial disposable projects with independent outcomes, requirements, priorities, blockers, work graphs, and evidence.",
+        "Prove genuinely independent work overlaps in time and one blocked project does not stall useful work in another.",
+        "Complete each project only from its own acceptance evidence and complete the portfolio only after all required projects pass."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "node scripts/portfolio-e2e.js",
+          "summary": "One portfolio coordinated two disposable Git projects with overlapping headless workers, current Codex on the highest-priority path, blocked-project independence, project-local evidence, independent completion, and no desktop launch.",
+          "verified_utc": "2026-07-16T16:14:33Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "GLOBAL_RESOURCE_GUARDS",
+      "description": "Machine-wide provider leases, quota-pool exclusion, worker limits, fairness, Codex reserve, RAM awareness, and file ownership prevent cross-project oversubscription and conflicting edits.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Attempt conflicting provider, quota-pool, storage, and file-ownership allocations across projects and prove they fail closed.",
+        "Prove unrelated providers and projects can run concurrently within global limits and waiting projects receive fair allocation.",
+        "Prove current Codex retains configured reserve and receives the highest-value ready critical path."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/global-resource-regression.js; node scripts/economic-regression.js; node scripts/portfolio-e2e.js",
+          "summary": "Machine-wide provider, quota-pool, global-worker, file-ownership, fairness, priority, and Codex-reserve gates rejected conflicting allocations while independent providers remained concurrent.",
+          "verified_utc": "2026-07-16T16:14:33Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "STORAGE_LIFECYCLE",
+      "description": "Editing workers use bounded Git worktrees with disk, free-space, age, crash, collection, and cancellation cleanup; read-only workers create no worktree and primary worktrees remain untouched.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Prove editing worktrees share Git history, primary worktrees stay unchanged, and read-only workers create no worktree.",
+        "Prove collection, cancellation, crash/startup, and maximum-age cleanup remove abandoned worktrees.",
+        "Prove disk quota and minimum-free-space gates keep storage within configured limits and transient dependencies, logs, caches, virtual environments, and build outputs are excluded."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/storage-lifecycle-regression.js; node scripts/worker-isolation-regression.js; node scripts/global-resource-regression.js",
+          "summary": "Read-only worktree count stayed zero; editing worktrees shared Git history, preserved primary files, enforced quota/free-space, excluded transient output, and cleaned on collection, cancellation, lost worker, startup recovery, and maximum age.",
+          "verified_utc": "2026-07-16T16:14:33Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "PUBLIC_RELEASE",
+      "description": "Version 1.0.0 is documented, privacy-safe, scanner compliant, locally installed, and proven by a disposable provider canary.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Run all lifecycle, regression, reliability, scanner, and privacy checks.",
+        "Install the plugin locally and complete one disposable current-Codex plus external-worker task without UI fallback."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "plugin-scanner lint/scan; installed v1 lifecycle suites; node scripts/installed-provider-canary.js",
+          "summary": "Scanner lint and scan scored 100/100 with zero findings; Codex reports ai-mobile@personal installed and enabled at 1.0.0; installed self-test, portfolio, and storage suites passed; a real Antigravity Gemini 3.5 Flash Medium handoff returned the exact marker and completed without UI.",
+          "verified_utc": "2026-07-16T16:27:50Z"
+        }
+      ],
+      "blocker": null
+    }
+  ]
+}

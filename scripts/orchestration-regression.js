@@ -5,81 +5,48 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { orchestrateTask } = require("./core/task-orchestrator");
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-orchestration-"));
-const resources = { providers: {
-  codex: { available: true, authenticated: true, authMode: "chatgpt", models: [{ id: "gpt-5.6-sol" }], capacity: { effectiveRemainingPercent: 85 } },
-  claude: { available: true, authenticated: true, authMode: "subscription", models: [{ id: "sonnet" }], capacity: { windows: [{ scope: "all", remainingPercent: 70, resetAt: "2026-07-14T12:00:00Z" }] } },
-  antigravity: { available: true, authenticated: true, authMode: "cli-session", models: [{ id: "gemini-3.5-flash-medium" }], capacity: { remainingPercent: 90 } },
-  cursor: { available: false, authenticated: false, reason: "No headless agent." },
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-v1-orchestration-"));
+process.env.AI_MOBILE_DATA_ROOT = path.join(root, "state");
+process.env.LOCALAPPDATA = path.join(root, "local");
+const workspace = path.join(root, "workspace");
+fs.mkdirSync(path.join(workspace, "src", "api"), { recursive: true });
+fs.mkdirSync(path.join(workspace, "src", "ui"), { recursive: true });
+fs.mkdirSync(path.join(workspace, "tests"), { recursive: true });
+
+const { startTask, dispatchRound } = require("./core/task-orchestrator");
+
+const resources = { generatedAt: new Date().toISOString(), providers: {
+  codex: { available: true, authenticated: true, authMode: "chatgpt", models: [{ id: "gpt-fixture", description: "balanced capable model" }], capacity: { effectiveRemainingPercent: 70 }, quotaPools: [] },
+  claude: { available: true, authenticated: true, authMode: "subscription", models: [{ id: "sonnet" }], capacity: { remainingPercent: 80 }, quotaPools: [] },
+  antigravity: { available: true, authenticated: true, authMode: "cli-session", models: [{ id: "gemini-flash", displayName: "Gemini Flash" }], capacity: { remainingPercent: 90 }, quotaPools: [] },
+  cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
 } };
 
-const dispatched = [];
-const args = {
-  workspace,
-  rootOutcome: "Sustain one authoritative, unique, policy-compliant transaction every seven minutes.",
-  completionEvidence: [
-    "Each transaction has an authoritative confirmation identifier.",
-    "No duplicate or policy-violating transaction occurs.",
-    "The cadence is verified over a representative soak period.",
-  ],
-  currentCodexGoal: "Repair and verify the live executor path end to end.",
-  currentCodexFiles: ["runtime"],
-  currentCodexAcceptanceCriteria: ["The executor is live and produces authoritative evidence."],
-  allowAntigravity: true,
-  candidateLanes: [
-    {
-      goal: "Find the exact eligibility and queue blockers from source evidence.",
-      independenceReason: "This read-only analysis owns policy and queue code while Codex owns the live executor.",
-      relevantFiles: ["workflow/eligibility"],
-      readOnly: true,
-      preferredProvider: "claude",
-      taskKind: "debug",
-      complexity: "large",
-      estimatedDirectTokens: 14000,
-    },
-    {
-      goal: "Audit discovery throughput and return only measured bottlenecks.",
-      independenceReason: "This read-only audit owns discovery code while Codex owns runtime execution and the other worker owns eligibility.",
-      relevantFiles: ["workflow/discovery"],
-      readOnly: true,
-      preferredProvider: "antigravity",
-      allowAntigravity: true,
-      taskKind: "repository-scan",
-      complexity: "large",
-      estimatedDirectTokens: 10000,
-    },
-  ],
-};
+let sequence = 0;
+function fakeCreate(contract) { sequence += 1; return { taskId: contract.taskId, jobId: `job-fixture-${sequence.toString().padStart(4, "0")}`, state: "running", provider: contract.provider, model: contract.model || "", isolation: contract.readOnly ? "shared-read-only" : "isolated-git-worktree" }; }
 
 try {
-  const result = orchestrateTask(args, resources, {}, (contract) => {
-    const receipt = { jobId: `job-regression-${dispatched.length + 1}`, state: "running", provider: contract.provider, artifactDirectory: path.join(workspace, ".ai-mobile", "jobs", `job-regression-${dispatched.length + 1}`) };
-    dispatched.push({ contract, receipt });
-    return receipt;
-  });
+  const task = startTask({ workspace, outcome: "Ship the feature", acceptanceEvidence: ["End-to-end fixture passes"] }, resources);
+  const round = dispatchRound({
+    taskId: task.taskId,
+    currentCodex: { goal: "Implement API behavior", files: ["src/api"] },
+    workUnits: [
+      { goal: "Review UI accessibility and return exact findings", independenceReason: "UI inspection does not touch API implementation", relevantFiles: ["src/ui"], readOnly: true, complexity: "large", taskKind: "review", estimatedDirectTokens: 12000, integrationAction: "Apply confirmed UI fixes" },
+      { goal: "Design independent test cases for user workflows", independenceReason: "Test design is separate from API implementation and UI review", relevantFiles: ["tests"], readOnly: true, complexity: "large", taskKind: "tests", estimatedDirectTokens: 12000, integrationAction: "Add accepted test cases" },
+    ],
+  }, resources, {}, fakeCreate);
+  assert.equal(round.workers.length, 2);
+  assert.equal(round.state, "running");
+  assert.match(round.currentCodex.instruction, /do not wait/i);
 
-  assert.equal(result.workersStarted, 2, "independent useful lanes must be dispatched instead of stopping after inventory");
-  assert.deepEqual(dispatched.map((item) => item.contract.provider), ["claude", "antigravity"]);
-  assert.equal(result.currentCodex.goal, args.currentCodexGoal, "Codex must retain concrete project work");
-  assert.equal(result.completionFirewall.projectCompleteAllowed, false, "a restart or worker result cannot complete the root outcome");
-  assert.deepEqual(result.completionEvidence, args.completionEvidence);
-  assert.match(result.nextAction, /Start the current-Codex lane now/i);
-  assert.doesNotMatch(JSON.stringify(result), /providerCommand|run-project-manager|project-manager-status|heartbeat status/i);
-  assert.ok(JSON.stringify(result).length < 18000, "the startup receipt must remain compact");
-  assert.ok(fs.existsSync(path.join(workspace, ".ai-mobile", "tasks", `${result.taskId}.json`)), "the finite task contract must be durable");
-
-  process.stdout.write(`${JSON.stringify({
-    ok: true,
-    simulated: true,
-    modelCalls: 0,
-    workersStarted: result.workersStarted,
-    providers: result.workers.map((worker) => worker.provider),
-    codexLaneActive: Boolean(result.currentCodex.goal),
-    projectCompleteAllowed: result.completionFirewall.projectCompleteAllowed,
-    receiptCharacters: JSON.stringify(result).length,
-  }, null, 2)}\n`);
+  const directTask = startTask({ workspace, outcome: "Fix one typo", acceptanceEvidence: ["Typo is corrected"] }, resources);
+  const direct = dispatchRound({ taskId: directTask.taskId, currentCodex: { goal: "Fix README typo", files: ["README.md"] }, workUnits: [{ goal: "Review the same README typo", independenceReason: "Claimed review", relevantFiles: ["README.md"], readOnly: true, complexity: "small", taskKind: "review", estimatedDirectTokens: 500 }] }, resources, {}, fakeCreate);
+  assert.equal(direct.workers.length, 0);
+  assert.equal(direct.state, "direct");
+  assert.ok(direct.rejected.length >= 1);
+  assert.equal(fs.existsSync(path.join(workspace, ".ai-mobile")), false);
+  process.stdout.write(`${JSON.stringify({ ok: true, parallelWorkers: round.workers.length, smallTaskWorkers: direct.workers.length, currentCodexActive: true }, null, 2)}\n`);
 } finally {
-  fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true });
 }

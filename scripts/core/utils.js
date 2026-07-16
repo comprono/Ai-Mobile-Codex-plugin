@@ -81,8 +81,27 @@ function readText(file, max = 12000) {
   }
 }
 
+function cmdArgument(value) {
+  const text = String(value ?? "")
+    .replace(/[\r\n\0]+/g, " ")
+    .replace(/"/g, "'")
+    .replace(/%/g, "%%")
+    .replace(/!/g, "^^!");
+  return `"${text}"`;
+}
+
+function commandInvocation(command, args) {
+  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(String(command || ""))) {
+    return { command, args, windowsVerbatimArguments: false };
+  }
+  const shell = process.env.ComSpec || "cmd.exe";
+  const line = `"${[command, ...args].map(cmdArgument).join(" ")}"`;
+  return { command: shell, args: ["/d", "/v:off", "/s", "/c", line], windowsVerbatimArguments: true };
+}
+
 function commandResult(command, args = [], options = {}) {
-  const result = spawnSync(command, args.map(String), {
+  const invocation = commandInvocation(command, args.map(String));
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: options.cwd,
     env: options.env || process.env,
     input: options.input,
@@ -90,6 +109,7 @@ function commandResult(command, args = [], options = {}) {
     timeout: options.timeout || 10000,
     maxBuffer: options.maxBuffer || 4 * 1024 * 1024,
     windowsHide: true,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     shell: false,
   });
   return {
@@ -165,6 +185,7 @@ module.exports = {
   bounded,
   boundedList,
   commandResult,
+  commandInvocation,
   isInside,
   localDataFile,
   processAlive,

@@ -1,131 +1,104 @@
 ---
 name: ai-mobile
-description: For an explicit @ai-mobile request on nontrivial project work, call orchestrate-task before any project shell, file, browser, or runtime action. It creates one finite root-outcome contract, inventories current Codex, Claude Code, Antigravity, and optional Cursor capacity, keeps current Codex working, and starts at most two independent bounded workers without a manager loop or polling control room.
+description: Use when the user explicitly invokes @ai-mobile for nontrivial work in one project or a portfolio of separate projects. AI Mobile makes current Codex and available local Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers operate as one finite, capacity-aware team. Current Codex actively advances the highest-value critical path; external workers receive only useful independent work.
 ---
 
 # AI Mobile
 
 ## Purpose
 
-Use the AI resources already available on the machine as one efficient project team. Current Codex remains accountable for understanding the user, advancing the critical path, integrating evidence, making final judgments, and verifying the complete outcome. Other workers receive only independent bounded lanes whose expected value exceeds their handoff and integration cost.
+AI Mobile is a local AI resource orchestrator. It helps current Codex finish one outcome or a portfolio of independent project outcomes by using authenticated local AI CLIs when delegation reduces total work or improves verified quality.
 
-AI Mobile is a finite execution aid. It is not a project manager chat, scheduler, heartbeat, status loop, or excuse for Codex to stop working.
+It is not a manager-only chat, scheduler, control room, heartbeat, Goal, automation, background supervisor, or reason for Codex to stop working.
 
-## Mandatory First Action
+## Start The Outcome
 
-When the user explicitly invokes `@ai-mobile` for nontrivial project work, the **first project-related tool call must be `orchestrate-task`**.
+For an explicit `@ai-mobile` request involving nontrivial work, make `start-task` the first project-related call. Supply either one project or a portfolio.
 
-Before that call, do not:
+For one project, supply:
 
-- inspect project files, run project commands, open a browser, or change runtime state;
-- call `resource-inventory` separately;
-- search the filesystem, plugin cache, or memory for another AI Mobile skill;
-- create a Codex Goal, task, automation, schedule, heartbeat, or manager run.
+- the concrete workspace;
+- one complete measurable outcome;
+- positive observable acceptance evidence;
+- real constraints and the current Codex model when already known.
 
-Build the call from the user request, current workspace, and already available context:
+For a portfolio, supply one portfolio outcome plus two or more project entries. Every project owns its workspace, outcome, acceptance evidence, priority, blockers, and optional dependency work graph. Do not flatten separate projects into unrelated `start-task` calls.
 
-- `rootOutcome`: the complete measurable result the user actually wants;
-- `completionEvidence`: positive, observable end-to-end proof required before claiming completion; never put "or blocked", "when eligible", "if available", or another escape condition here;
-- `blockingConditions`: genuine external or user-only stop conditions, kept separate from completion proof;
-- `currentCodexGoal`: concrete critical-path work Codex starts immediately;
-- `currentCodexFiles`: only the files Codex currently owns, when known;
-- `currentCodexReserved: true` only when a live Codex task owns different work and must not receive this lane. It permits only a disjoint, read-only external evidence lane to bypass the small-task economic gate; never use it for writers, overlapping paths, or to bypass capacity, billing, or safety checks;
-- `candidateLanes`: one or two genuinely independent bounded worker options;
-- each candidate includes a clear goal, independence reason, read boundary, task kind, complexity, realistic direct-token estimate, expected contribution, and exact one-time integration action for current Codex;
-- writers also require exact `expectedFiles`; unknown write boundaries stay read-only;
-- when the user explicitly names a provider or model (for example "use Fable 5" or "have Claude do it"), set `selectionAuthority: "user"` with that exact `preferredProvider`/`model` on the lane. Never use `"user"` for your own routing preference.
+Do not invent worker lanes before inspecting the project. `start-task` records one finite task and passively inventories capacity. It starts no worker or desktop application.
 
-If the file map is unknown, use a bounded read-only discovery candidate. `relevantFiles: ["."]` is allowed only for that discovery lane; keep current Codex on a distinct live-state, acceptance, or user-decision path until the result is collected. Never invent narrow paths merely to pass the schema.
+Trivial questions, one-line edits, and work whose delegation overhead is obviously larger should be handled directly without AI Mobile unless the user explicitly requires a provider.
 
-The runtime inventories capacity, applies billing, reserve, model, reliability, overlap, active-work signal, and economic gates, and either starts useful workers or returns precise rejection reasons. Codex catalog rows are ranked from current native capability metadata and private policy, never by a hardcoded Sol/Terra/Luna order or the catalog's incidental order. One call replaces the former inventory-then-dispatch ritual.
+## Work As The Lead Engineer
 
-## Explicit User Selection
+After `start-task`:
 
-`selectionAuthority: "user"` changes only the economic layer, never the hard gates:
+1. Inspect the minimum authoritative state needed to identify the acceptance gap. In a portfolio, start with the highest-priority unblocked project.
+2. Choose and begin current Codex's highest-value critical-path unit immediately.
+3. Identify dependency-ready units across all projects that are genuinely parallel, disjoint, independently verifiable, and cheaper than doing and reviewing them directly.
+4. Call `dispatch-round` only after ownership is observed. Exact writer boundaries are mandatory; uncertain work stays read-only or in current Codex.
+5. Continue current Codex work while workers run, including when workers own separate projects. Do not wait, narrate routine orchestration, inspect worker-owned questions, or touch worker-owned files.
+6. At the natural integration point, call `collect-round` once. Use its local wait instead of repeated model-side polling.
+7. Inspect each compact handoff and stored patch once. Accept, reject, or narrowly repair it; run deterministic project checks before any model review.
+8. Call `record-evidence` only for acceptance-linked proof. Portfolio evidence must name its project and never satisfies another project. Then call `complete-task`; it completes each project independently and the portfolio only after all required projects pass.
 
-- model-to-provider binding is canonical: Fable/Opus/Sonnet/Haiku are Claude, GPT is Codex, Gemini is Antigravity. A mismatched explicit pair is corrected deterministically inside the same call, so do not spend a second call fixing the provider yourself;
-- the economic gate and small-task overhead warn instead of reject, and the mandate itself covers the premium-model opt-in;
-- authentication, quota, billing, ownership-overlap, file-boundary, and safety gates still reject with one exact blocker.
-
-If a user-mandated lane is rejected, report that exact blocker to the user once. Do not call `orchestrate-task` again for the same lane (a repeat returns a final do-not-retry blocker), and do not silently substitute a different provider or model for the user's explicit choice.
-
-## Execution Contract
-
-After `orchestrate-task` returns:
-
-1. Keep its `taskId`, job ids, root outcome, and completion evidence in working context. The bridge writes the caller-declared binding to `.ai-mobile/current-work.json` and terminal handoffs to the task-scoped inbox. It never infers, reads, or changes the host-selected Codex chat/model.
-2. Start the returned current-Codex lane immediately. Do not wait for workers and do not narrate orchestration. A baseline check, restart, queue count, or status report does not satisfy this step.
-3. Do not investigate a worker-owned question or touch its file boundary while that worker is active.
-4. Collect each worker once with `read-job` at its natural integration point. Use `waitSeconds` up to 60 only when Codex has reached that point; the bridge waits locally without extra model turns. Do not poll a running job: its finite lease will produce one terminal handoff or terminal failure.
-5. Integrate useful evidence once. Run `verify-job` or direct deterministic checks before any reasoning review.
-6. Reject, narrowly repair, or fail over one time when evidence is unusable. Never create a premium-model review chain.
-7. Continue the next dependency-ready project work in the same task until all completion evidence is verified or a genuine blocker requires the user.
-
-If every candidate lane is rejected, Codex must still execute the current-Codex lane. Take over useful rejected work only when it belongs on that lane; otherwise choose the next dependency-ready local correction. Do not end after explaining why no worker started.
-
-A named gate is not automatically a genuine blocker. Before ending on one, prove that it is external or user-only, identify its owner and required action, and prove that no dependency-ready local implementation, test, queue remediation, UX improvement, or evidence-gathering work remains. An empty eligible queue is a work signal, not completion proof.
-
-A worker completion, passing unit test, service restart, healthy process, milestone, plan, or running supervisor is not the root outcome. It cannot end the task unless it verifies every required completion-evidence item.
-
-The initial `turnExitFirewall.finalAnswerAllowedNow` is always false. Do not send a final answer immediately after orchestration or diagnosis. First produce a verified material change, satisfy completion evidence, or establish a fully evidenced genuine blocker under the rule above.
+A further round is allowed only after the previous round is terminal and integrated, and only when another independent acceptance-linked unit remains. Long projects use several finite rounds, not a perpetual manager loop.
 
 ## Resource Judgment
 
-Select resources from current evidence, not a fixed UI/backend/testing split.
+- **Current Codex:** owns user intent, ambiguous reasoning, architecture, critical-path implementation, integration, risky actions, and final verification. AI Mobile never changes the model selected for the current Codex task.
+- **Codex CLI worker:** use only when shared Codex capacity is measured above the private reserve and a separate high-value unit justifies consuming the same pool.
+- **Claude Code:** bounded implementation, refactoring, debugging, architecture, and repository reasoning. Prefer the user's allowed capable model family; premium or model-specific capacity is used only when difficulty or a near reset justifies it.
+- **Antigravity CLI:** economical browser-oriented analysis, repository scans, research, drafting, and validation. It requires explicit lane authorization or saved read-only consent.
+- **Cursor:** only a real authenticated headless `cursor-agent`; a desktop launcher is not a worker.
+- **No-model tools:** tests, linters, validators, diffs, screenshots, and runtime evidence. Prefer them for verification.
 
-- **Current Codex:** ambiguous reasoning, architecture, live-state control, critical-path implementation, integration, irreversible decisions, and final verification. The current chat's selected model remains host-owned; AI Mobile never claims it can silently change that chat. It chooses a Codex CLI worker model only from the currently discovered catalog, supported effort levels, capacity, and private profile.
-- **Codex CLI worker:** a high-value independent lane when shared Codex capacity remains above the configured reserve. It consumes the same Codex pool, so use it deliberately.
-- **Claude Code:** bounded implementation, refactoring, architecture, debugging, and repository reasoning. Prefer a capable Sonnet-class model by default. Use premium model-specific capacity only when task difficulty and reset horizon justify it.
-- **Antigravity CLI:** inexpensive repository scans, research, browser-oriented analysis, drafting, and validation. Automatic execution requires explicit authorization; read-only sandbox auto-approval never authorizes login, CAPTCHA, external effects, or undeclared paths.
-- **Antigravity UI:** only when visible chat/project state, authentication, or a verified CLI limitation requires it.
-- **Cursor:** only when a real headless `cursor-agent` is available and beneficial. A desktop launcher is not a worker.
-- **No-model tools:** tests, linters, type checks, diffs, validators, and artifact inspection. Prefer these for verification.
+Capacity is evidence with a timestamp, source, expiry, and confidence. Unknown remains unknown. Cached unavailable providers are re-probed before dispatch. Never create unnecessary work merely to consume capacity before reset.
 
-Protect the configured Codex reserve, normally 15%, for integration and recovery. Capacity above it should remain productive when useful work exists. Plan against applicable five-hour and model-specific quota windows, but never treat the horizon as a project deadline. Unknown capacity remains unknown.
+For a portfolio, discover machine and provider capacity once at start. Allocate within the configured horizon using capability fit, dependencies, quota pools, reset horizons, reliability, subscription/API cost, free RAM, project priority, and fairness. Machine-wide leases prevent separate projects or tasks from oversubscribing one provider or quota pool. Current Codex's private reserve remains protected.
 
-## Efficiency Rules
+## Economic Rules
 
-- Start zero to two workers after the mandatory call; the runtime may reject every candidate when direct work is cheaper or safer.
-- One owner per question and file boundary. Parallel means different useful work.
-- Never send the parent transcript. Workers receive the bounded contract only.
-- Keep worker output caps small enough to integrate once.
-- Do not repeatedly refresh capacity. Refresh only after a quota reset, provider failure, material model change, or 60 minutes of active work.
-- Do not repeatedly call `read-job`. Continue Codex work and collect once.
-- Do not spend a premium model re-evaluating successful premium work when deterministic checks establish correctness.
-- Activity is not progress. Dispatches, polling, retries, and elapsed time are not deliverables.
-- Do not use every provider merely because it exists. Idle capacity is correct when a lane would duplicate work, fail, cost more, or add no value.
+- Current Codex always has useful work; it is never only a reporter.
+- Preserve the private Codex reserve, normally 15 percent, while using capacity above it productively.
+- Start zero to the configured machine-wide external-worker limit, normally two. Prefer one ready unit per project before granting a second unit to the same project. Zero is correct when work overlaps, is too small, is unsafe, or would cost more to hand off and review.
+- Count prompt, worker output, waiting, verification, retry, and integration cost. A cheap worker whose result needs expensive re-analysis is not a saving.
+- Never send the parent transcript. Workers receive a compact outcome, owned paths, unit acceptance, and integration action.
+- Never create worker review chains. Deterministic checks come first; another premium model reviews only unresolved high-risk evidence.
+- Retry a transient provider failure at most once after a fresh capacity check. Semantic failures require a changed plan, not another dispatch.
+
+## Isolation And Safety
+
+- Read-only workers may inspect the declared shared workspace.
+- Writer workers operate in detached Git worktrees that share repository history and return a stored patch; they never edit the primary worktree directly. Read-only workers create no worktree.
+- Worktrees are bounded by configured disk quota, minimum free space, and maximum age. They exclude dependencies, logs, caches, virtual environments, and build outputs, and are cleaned after collection, cancellation, crash/startup recovery, or expiry.
+- If safe writer isolation is unavailable, keep the edit in current Codex or use a read-only adviser.
+- Preserve user and concurrent changes. One owner per file boundary and question.
+- Credentials, login, CAPTCHA, messages, applications, purchases, deploys, destructive operations, and other external side effects remain with current Codex under the user's applicable authorization.
+- AI Mobile never auto-opens Codex, Claude, Antigravity, Cursor, or ChatGPT desktop UI. A CLI limitation returns `ui-required`; opening UI is a separate explicit user decision.
+- Classic ChatGPT is not a worker until it exposes a supported callable API, CLI, or MCP surface.
 
 ## Reporting
 
-Report only material transitions in a compact, evidence-backed shape:
+Report only material transitions, normally once after assignments and once after integration. For portfolios, identify the project on every changed, blocked, or verified line:
 
-- `Done`: accepted changes or verified outcomes;
-- `Active`: concrete current-Codex work and genuinely running independent lanes;
-- `Blocked`: exact blocker, evidence, and owner;
-- `Capacity`: only fresh capacity facts relevant to the next decision;
-- `Next`: work already started, or the precise condition preventing it.
+- `Done`: accepted change or verified outcome;
+- `Active`: current Codex unit and genuinely running independent workers;
+- `Blocked`: exact evidence, owner, and recovery action;
+- `Capacity`: only fresh facts that changed the routing decision;
+- `Next`: the material action already starting.
 
-Do not turn the conversation into a control-room feed. Do not announce routine tool calls, waiting, or unchanged status. Respect a private local address/style preference when present, but clarity and truth take priority.
-
-## Safety And Ownership
-
-- Preserve concurrent user and worker changes. Never revert unrelated work.
-- Writers require explicit non-overlapping `expectedFiles` boundaries.
-- Real submissions, sends, deploys, purchases, destructive operations, credentials, OAuth, login, CAPTCHA, email/SMS codes, and protected live state remain with current Codex and the user's applicable authorization.
-- Antigravity permission auto-approval applies only to the declared sandboxed read-only CLI lane.
-- Worker evidence must be integrated and verified by current Codex; it never authorizes a project-completion claim by itself.
+Do not report dispatches, elapsed time, polling, worker count, healthy processes, or token use as progress. A worker completion, passing unit test, service restart, or running process cannot complete the project unless it proves the stated acceptance evidence.
 
 ## Tool Surface
 
-Normal operation exposes six tools:
+- `start-task`: create one project task or a multi-project portfolio and one passive capacity snapshot;
+- `dispatch-round`: keep current Codex on the highest-value path and route bounded independent units globally;
+- `collect-round`: collect one finite task or portfolio round and clean collected editing worktrees;
+- `record-evidence`: attach verified evidence only to the named project's requirements;
+- `task-summary`: explicit compact diagnostic only;
+- `complete-task`: evidence-gated completion;
+- `cancel-task`: stop only task-owned workers;
+- `resource-inventory`: explicit passive capacity diagnostic;
+- `orchestrator-profile`: private local preferences.
 
-- `orchestrate-task`: mandatory finite first call; inventory plus bounded routing and dispatch;
-- `read-job`: one compact result collection;
-- `verify-job`: deterministic no-model verification;
-- `cancel-job`: stop one worker process tree;
-- `resource-inventory`: explicit diagnostic refresh only, not project startup;
-- `orchestrator-profile`: private local routing and communication preferences.
-
-If `orchestrate-task` is missing after an update, or a tool returns `STALE AI MOBILE TASK`, stop every AI Mobile call in that task. Tell the user to restart Codex if the update was installed while Codex was open, then start a fresh Codex task. Existing tasks cannot reload plugin skills or MCP schemas. Do not reconstruct provider commands, search caches, retry inventory, or restore the legacy manager loop.
-
-Load a reference only when its edge case is active: [capacity and routing](references/capacity-and-routing.md), [provider adapters](references/provider-adapters.md), or [context capsules](references/context-capsules.md).
+If a tool reports `STALE AI MOBILE TASK`, stop using AI Mobile in that Codex task. Restart Codex after installation and begin a fresh task so the skill and MCP schema load together. Do not reconstruct removed v0.x commands or revive a manager loop.

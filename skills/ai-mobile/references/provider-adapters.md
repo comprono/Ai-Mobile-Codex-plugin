@@ -20,7 +20,7 @@
 - Use `agy --print` with `default-cli-project`, `--add-dir <workspace>`, and sandboxing for ordinary bounded CLI work.
 - Use a named project id or conversation only when the caller supplies verified identifiers.
 - `allowAntigravity=true` is required because the CLI may request local authorization.
-- A private `antigravityAutoApprovePermissions=true` preference is honored only for sandboxed read-only CLI lanes. It does not apply to writers, UI automation, authentication, or external effects.
+- A private `antigravityReadOnlyConsent=true` preference is honored only for sandboxed read-only CLI lanes. It does not apply to writers, UI automation, authentication, or external effects.
 - `needsUi=true` returns a typed blocker; the runtime never opens the desktop automatically.
 
 ## Cursor

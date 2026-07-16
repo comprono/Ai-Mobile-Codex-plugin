@@ -27,6 +27,11 @@ const FIT = {
   cursor: { architecture: 70, browser: 55, code: 82, debug: 78, docs: 68, generic: 70, "live-state": 50, "repository-scan": 72, research: 62, review: 72, tests: 75 },
 };
 
+function taskFit(id, request, state) {
+  const declared = finiteNumber(state?.capabilities?.[request.taskKind]);
+  return declared === null ? (FIT[id]?.[request.taskKind] || 60) : declared;
+}
+
 function clamp(value, min, max, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
@@ -285,13 +290,20 @@ function providerEligibility(id, request, inventory, profile, history) {
   if (remaining !== null && remaining <= (id === "codex" ? profile.codexReservePercent : 2)) {
     return { eligible: false, reason: id === "codex" ? `shared Codex reserve (${profile.codexReservePercent}%) is protected` : "reported capacity is exhausted" };
   }
+  if (id === "codex" && remaining === null && request.preferredProvider === "auto") {
+    return { eligible: false, reason: "shared Codex capacity is unknown; keep current Codex productive and do not risk its protected integration reserve with an extra Codex worker" };
+  }
   if (history?.cooledDown && request.preferredProvider !== id) return { eligible: false, reason: `provider cooldown: ${history.cooldownReason || `${history.consecutiveFailures} consecutive failures`}` };
   return { eligible: true, reason: "eligible", model, effort, ...capacity, authMode: state.authMode || "unknown" };
 }
 
-function providerScore(id, request, profile, history, gate) {
-  const factors = { taskFit: FIT[id]?.[request.taskKind] || 60, capacity: 0, reliability: 0, billing: 0, preference: 0, sharedPool: 0 };
+function providerScore(id, request, profile, history, gate, state) {
+  const factors = { taskFit: taskFit(id, request, state), capacity: 0, resetHorizon: 0, reliability: 0, billing: 0, preference: 0, sharedPool: 0 };
   if (gate.remainingPercent !== null && gate.remainingPercent !== undefined) factors.capacity = Math.round((gate.remainingPercent - 50) * 0.25);
+  const resetAt = Date.parse(gate.resetAt || "");
+  if (Number.isFinite(resetAt) && resetAt > Date.now() && resetAt <= Date.now() + request.horizonHours * 60 * 60 * 1000 && Number(gate.remainingPercent) >= 10) {
+    factors.resetHorizon = Math.min(8, Math.max(1, Math.round((Number(gate.remainingPercent) - 10) / 10)));
+  }
   if (history?.successRate !== null && history?.successRate !== undefined) factors.reliability = Math.round((history.successRate - 0.5) * 20);
   if (["subscription", "chatgpt", "cli-session"].includes(gate.authMode)) factors.billing = gate.authMode === "cli-session" ? 2 : 4;
   if (gate.authMode === "api-key") factors.billing = -12;
@@ -305,11 +317,8 @@ function providerScore(id, request, profile, history, gate) {
 function applyProfileAuthorization(request, profile) {
   const savedReadOnlyAuthorization = request.allowAntigravity === null
     && request.readOnly
-    && profile.antigravityAutoApprovePermissions === true;
+    && profile.antigravityReadOnlyConsent === true;
   request.allowAntigravity = request.allowAntigravity === true || savedReadOnlyAuthorization;
-  request.antigravityAutoApprovePermissions = request.allowAntigravity
-    && request.readOnly
-    && profile.antigravityAutoApprovePermissions === true;
   return request;
 }
 
@@ -373,7 +382,7 @@ function route(input, inventory, histories = {}) {
     : [request.preferredProvider];
   const considered = ids.map((id) => {
     const gate = providerEligibility(id, request, inventory, profile, histories[id]);
-    const scored = gate.eligible ? providerScore(id, request, profile, histories[id], gate) : { score: null, factors: null };
+    const scored = gate.eligible ? providerScore(id, request, profile, histories[id], gate, inventory.providers[id] || {}) : { score: null, factors: null };
     return { provider: id, ...gate, score: scored.score, scoreFactors: scored.factors, model: gate.model || "" };
   });
   const selected = considered.filter((item) => item.eligible).sort((a, b) => b.score - a.score)[0];

@@ -1,68 +1,97 @@
 # Capacity-Aware Resource Orchestration
 
-AI Mobile is a thin execution layer for the current Codex task. Codex keeps the project outcome, critical path, integration, verification, and user conversation. The plugin discovers usable local CLIs, delegates only independent bounded work with positive expected value, and returns compact evidence.
+AI Mobile v1 is a finite allocation layer, not a background project manager. It converts one explicit request into one project task or a portfolio of independently verifiable projects.
 
-## Mandatory First-Call Contract
+## Decision Flow
 
-An explicit `@ai-mobile` project request begins with one `orchestrate-task` call before project inspection or execution. That finite call records the complete root outcome and completion evidence, passively inventories current capacity, assigns a concrete critical-path lane to current Codex, and routes at most two independent candidates. It replaces the former separate inventory and dispatch calls.
-
-The receipt is an execution contract, not a manager process. Codex starts its lane immediately, worker results are collected once at their integration points, and a task record is retained at `.ai-mobile/tasks/<taskId>.json`. Repeating the same candidate lane for the same root outcome is rejected before another worker can consume capacity.
-
-## Evidence Contract
-
-Every provider record includes availability, authentication mode, source, freshness, and confidence. Exact quota or reset values are reported only when a supported local interface exposes them. Unknown remains unknown; the plugin never converts a subscription into an invented dollar balance.
-
-| Provider | Passive evidence | Normal execution |
-| --- | --- | --- |
-| Codex | Native CLI version and ChatGPT login status | Current Codex by default; one bounded CLI worker only when shared reserve permits |
-| Claude Code | Native executable, version, and auth status | Noninteractive bounded CLI job using the existing subscription unless an API key is explicitly configured |
-| Antigravity | `agy` version and CLI availability | Sandboxed `default-cli-project` plus the declared workspace; named project id only when supplied |
-| Cursor | Real `cursor-agent` detection | Unavailable unless the headless agent actually exists |
-
-Discovery is passive. It does not open, close, restart, or repair desktop applications. UI is a typed blocker for the current Codex task to handle only when visible state or authentication is genuinely required.
-
-## Routing Contract
-
-1. Current Codex keeps tightly coupled, ambiguous, sensitive, and critical-path work.
-2. Small work stays direct because dispatch and review would cost more than execution.
-3. Delegation requires the exact current-Codex lane, worker lane, independence reason, and non-overlapping path ownership. Semantic or path overlap stays direct.
-4. Automatic routing scores task fit, capacity, billing mode, bounded output cost, recent workspace reliability, and local model policy. There is no Claude-first order.
-5. Claude Code normally handles substantial independent code and architecture lanes; Sonnet is the non-premium default.
-6. Explicitly authorized Antigravity CLI normally handles suitable read-only scans, research, browser-oriented analysis, and inexpensive inspection. Repeated failures trigger cooldown.
-7. Cursor is considered only when `cursor-agent` is installed. A separate Codex worker consumes the shared Codex plan and must remain above the reserve.
-8. Writers require explicit, non-overlapping `expectedFiles`; read-only providers receive restrictive tool and permission policies.
-9. The parent reads a worker once at its integration point and integrates it before redoing that lane. One read may wait locally for up to 60 seconds, avoiding repeated model-side polling. Deterministic checks precede any reasoning review.
-10. One concrete failure may justify one provider-diverse retry. There is no retry chain.
-
-Model names and plan limits are deliberately not hardcoded as permanent truth. The private local profile can express user preferences without publishing personal usage data.
-
-## Finite Lifecycle
-
-Each job has a finite state machine:
-
-```text
-queued -> starting -> running -> completed | failed | cancelled
+```mermaid
+flowchart TD
+  A["Start one task or portfolio"] --> B["Inventory machine and providers once"]
+  B --> C["Identify ready project outcomes and dependencies"]
+  C --> D["Assign current Codex the highest-value critical path"]
+  D --> E["Evaluate independent worker candidates"]
+  E --> F{"Useful after all costs?"}
+  F -- No --> G["Keep work in current Codex"]
+  F -- Yes --> H{"Global lease, quota, RAM, storage, and ownership available?"}
+  H -- No --> G
+  H -- Yes --> I["Dispatch bounded headless worker"]
+  I --> J["Current Codex continues without waiting"]
+  J --> K["Collect once at integration point"]
+  K --> L["Deterministic verification and project-local evidence"]
+  L --> M{"All project requirements pass?"}
+  M -- No --> C
+  M -- Yes --> N["Complete project; complete portfolio only when all projects pass"]
 ```
 
-The root contract lives at `.ai-mobile/tasks/<taskId>.json`. Worker artifacts live at `.ai-mobile/jobs/<jobId>/` and contain the bounded contract, append-only transitions, compact result, attributable changed files, bounded diff, deterministic verification, and available usage evidence. Existing `.antigravity-bridge/jobs` artifacts are read-only compatibility inputs.
+## Capacity Evidence
 
-There is no project manager, control room, heartbeat, schedule, repeated status poll, or continuous-cycle runtime. Long projects continue because the current Codex task advances verified dependency milestones, not because the plugin manufactures activity.
+Each provider record includes:
 
-## Efficiency Standard
+- executable and authentication evidence;
+- advertised models and capabilities;
+- quota pools, remaining percentage, and reset time when exposed;
+- source, confidence, observation time, and expiry;
+- recent success/failure history and cooldown state.
 
-The plugin is useful only when all of these remain true:
+Machine evidence includes logical CPU count and free/total RAM. Worktree allocation also checks disk quota and minimum free space.
 
-- exactly six small MCP tools are exposed;
-- `orchestrate-task` is the first visible tool and combines startup inventory with bounded dispatch;
-- startup opens no desktop application;
-- trivial work starts no worker;
-- capacity evidence is cached for up to one active hour and refreshed earlier after a known reset or material provider failure;
-- a worker receives a bounded task capsule, never the parent transcript;
-- duplicate semantic lanes, overlapping paths, and duplicate active jobs are rejected before model use;
-- ordinary worker output is capped at 1,200-2,000 tokens and terminal usage is visible in compact readback;
-- every completed worker result is collected once and integrated before Codex takes over its lane;
-- successful premium work is not sent to another premium model for reassurance;
-- dispatch, waiting, polling, and retries are never reported as project progress;
-- project completion remains a current-Codex judgment backed by end-to-end evidence.
+Fresh positive provider evidence is cached briefly. Negative evidence has a shorter lifetime and is always re-probed before a dispatch rejection. Unknown capacity remains unknown; it is not converted to zero or unlimited.
 
-See [the implementation report](IMPLEMENTATION_REPORT.md) for the migration rationale and falsifiable release gates.
+## Allocation Score
+
+Routing considers:
+
+1. dependency readiness and user priority;
+2. capability fit for the work kind;
+3. ownership independence from current Codex and other workers;
+4. provider authentication and model eligibility;
+5. quota pool remaining capacity and reset horizon;
+6. recent reliability and typed failures;
+7. subscription versus separately billed API cost;
+8. free RAM, global worker limits, and worktree storage;
+9. prompt, output, wait, verification, retry, and integration cost.
+
+Current Codex remains a working agent. It owns the highest-value ready critical path and retains the configured shared-capacity reserve. Additional Codex CLI work is permitted only when measured capacity remains above that reserve.
+
+## Portfolio Allocation
+
+A portfolio stores:
+
+- the portfolio outcome and allocation policy;
+- one child task per project;
+- each project's workspace, outcome, acceptance requirements, priority, blockers, and dependency work graph;
+- project-local rounds, jobs, patches, evidence, and completion state;
+- one shared capacity snapshot and machine-wide lease references.
+
+Candidates are ordered by project priority and then round-robin fairness. A blocked project is skipped, not treated as complete, and does not prevent a ready sibling from advancing. Project evidence is written only to that project's child task.
+
+## Machine-Wide Leases
+
+Before an external worker starts, AI Mobile atomically acquires a local lease covering:
+
+- one global worker slot;
+- one provider slot;
+- every applicable quota pool;
+- the project fairness key;
+- the finite worker deadline.
+
+The lease is released on terminal worker exit, collection, cancellation, or stale-process cleanup. Separate tasks and portfolios share the same lease registry under `%LOCALAPPDATA%\AI Mobile\v1`, preventing cross-project oversubscription.
+
+## Worktree Lifecycle
+
+Editing workers require a Git repository root and use `git worktree add --detach`, so Git history is shared without copying `.git` objects or modifying the primary checkout. Read-only workers use the declared repository directly and create no worktree.
+
+Before creation, the bridge checks configured worktree quota and minimum disk free space. Before patch capture, ignored and known transient dependency, cache, log, virtual-environment, coverage, and build paths are removed. Editing worktrees are removed:
+
+- immediately after first terminal collection;
+- on cancellation;
+- when a worker process is lost;
+- during MCP/CLI startup cleanup;
+- after the configured maximum age;
+- when creation would exceed storage limits.
+
+The compact patch and evidence remain in central task state after worktree cleanup.
+
+## No Background Runtime
+
+AI Mobile advances only through explicit finite actions: start, dispatch, collect, record evidence, summarize, complete, or cancel. It creates no manager loop, heartbeat, Goal, automation, repeated status poll, or automatic desktop launch. Long work uses additional evidence-linked rounds initiated by the active Codex task.

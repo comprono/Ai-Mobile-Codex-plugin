@@ -7,6 +7,13 @@ const { commandResult, resolveCommand, bounded } = require("../core/utils");
 const { codexCliCandidates, parseCodexLoginStatus, buildCodexExecArgs, parseCodexJsonl } = require("../lib/codex-cli");
 const { parseClaudeAuth, parseClaudeModels, parseClaudeUsage } = require("./claude-usage");
 
+const PROVIDER_CAPABILITIES = {
+  codex: { architecture: 88, browser: 45, code: 88, debug: 90, docs: 70, generic: 78, "live-state": 92, "repository-scan": 68, research: 65, review: 82, tests: 78 },
+  claude: { architecture: 94, browser: 45, code: 90, debug: 88, docs: 76, generic: 78, "live-state": 55, "repository-scan": 78, research: 72, review: 90, tests: 76 },
+  antigravity: { architecture: 58, browser: 96, code: 52, debug: 55, docs: 88, generic: 68, "live-state": 70, "repository-scan": 92, research: 94, review: 72, tests: 60 },
+  cursor: { architecture: 70, browser: 55, code: 82, debug: 78, docs: 68, generic: 70, "live-state": 50, "repository-scan": 72, research: 62, review: 72, tests: 75 },
+};
+
 function version(command) {
   if (!command) return "";
   const result = commandResult(command, ["--version"], { timeout: 6000 });
@@ -162,7 +169,7 @@ function unknownCapacity(source) {
 }
 
 function provider(id, available, extra = {}) {
-  return { id, available, authenticated: available, confidence: available ? "medium" : "high", models: [], ...extra };
+  return { id, available, authenticated: available, confidence: available ? "medium" : "high", models: [], capabilities: PROVIDER_CAPABILITIES[id] || {}, ...extra };
 }
 
 function classifyFailure(value, exitCode) {
@@ -257,7 +264,6 @@ function runClaude(providerState, contract, prompt) {
 
 function buildAntigravityArgs(contract, prompt) {
   const args = ["--print", prompt, "--project", contract.projectId || "default-cli-project", "--add-dir", contract.workspace, "--sandbox", "--mode", contract.readOnly ? "plan" : "accept-edits", "--print-timeout", `${contract.timeoutSeconds}s`];
-  if (contract.antigravityAutoApprovePermissions) args.push("--dangerously-skip-permissions");
   if (contract.conversation) args.push("--conversation", contract.conversation);
   if (contract.model) args.push("--model", contract.model);
   return args;
