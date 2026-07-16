@@ -79,8 +79,9 @@ function prepareIsolatedWorkspace(workspaceValue, taskId, jobId, readOnly, profi
   const rootProbe = commandResult("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { timeout: 5000 });
   if (rootProbe.status !== 0) throw new Error("Writer delegation requires a Git repository; use a read-only worker or keep the edit in current Codex.");
   const gitRoot = String(rootProbe.stdout || "").trim();
-  const resolvedGitRoot = fs.existsSync(gitRoot) ? fs.realpathSync(gitRoot) : gitRoot;
-  const resolvedWorkspace = fs.existsSync(workspace) ? fs.realpathSync(workspace) : workspace;
+  const realpath = fs.realpathSync.native || fs.realpathSync;
+  const resolvedGitRoot = fs.existsSync(gitRoot) ? realpath(gitRoot) : gitRoot;
+  const resolvedWorkspace = fs.existsSync(workspace) ? realpath(workspace) : workspace;
   if (normalized(resolvedGitRoot) !== normalized(resolvedWorkspace)) {
     throw new Error("Writer delegation requires the task workspace to be the Git repository root.");
   }
