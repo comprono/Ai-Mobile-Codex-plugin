@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-16T16:27:50Z",
-  "project_state": "active",
+  "updated_utc": "2026-07-16T16:29:39Z",
+  "project_state": "complete",
   "current_slice_requirement_id": "PUBLIC_RELEASE",
   "requirements": [
     {
