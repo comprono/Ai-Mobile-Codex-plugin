@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -37,10 +37,12 @@ async function run() {
     assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "dispatch-round", "collect-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile"]);
     assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 9);
 
-    const task = startTask({ workspace, outcome: "Ship verified fixture", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
+    const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
     assert.equal(task.requirements[0].id, "A1");
     assert.equal(task.currentCodex.reservePercent, 15);
+    assert.equal(task.currentCodex.model, "gpt-5.6-sol");
+    assert.equal(taskSummary({ taskId: task.taskId }).progress.required, 1);
     assert.equal(fs.existsSync(path.join(workspace, ".ai-mobile")), false);
     assert.equal(taskSummary({ taskId: task.taskId }).completionAllowed, false);
     assert.equal(completeTask({ taskId: task.taskId }).completionAllowed, false);

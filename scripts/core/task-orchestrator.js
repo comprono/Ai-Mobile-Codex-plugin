@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const { boundariesOverlap, goalOverlap } = require("./lane-policy");
 const { route } = require("./router");
@@ -92,6 +92,9 @@ function normalizeBlockers(values) {
       id: String(row.id || `B${index + 1}`).slice(0, 80),
       description: String(row.description || "").trim().slice(0, 1000),
       resolved: row.resolved === true,
+      owner: String(row.owner || "current-codex").trim().slice(0, 120),
+      recoveryTrigger: String(row.recoveryTrigger || "New evidence or corrected state is available.").trim().slice(0, 500),
+      recoveryAction: String(row.recoveryAction || "Inspect authoritative state and retry only after the blocker changes.").trim().slice(0, 1000),
     };
   }).filter((row) => row.description);
 }
@@ -141,7 +144,7 @@ function startSingleTask(args, resources, portfolioContext = {}) {
     portfolioId: portfolioContext.portfolioId || null,
     projectId: portfolioContext.projectId || null,
     currentCodex: {
-      model: String(args.currentCodexModel || "").trim().slice(0, 160),
+      model: String(args.currentCodexModel || args.currentModel || args.currentCodex?.model || "").trim().slice(0, 160),
       reservePercent: Math.max(5, Math.min(50, Number(args.codexReservePercent || 15))),
       goal: "Inspect the project and choose the smallest acceptance-linked critical path before proposing external work.",
       files: [],
@@ -610,7 +613,7 @@ function recordEvidence(args) {
 function singleTaskSummary(task) {
   const lastRoundRef = (task.rounds || []).at(-1);
   const lastRound = lastRoundRef ? readRound(task.taskId, lastRoundRef.roundId) : null;
-  const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length }));
+  const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, required: item.required !== false, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length }));
   return {
     taskId: task.taskId,
     projectId: task.projectId || null,

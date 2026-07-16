@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const readline = require("node:readline");
 const { inventory } = require("../core/capacity");
@@ -60,7 +60,7 @@ const TASK_OR_PORTFOLIO = { anyOf: [{ required: ["taskId"] }, { required: ["port
 
 const TOOLS = [
   { name: "start-task", description: "First AI Mobile call for one project or a multi-project portfolio. Creates one finite contract and one passive machine/provider inventory. It starts no worker, UI, loop, Goal, automation, or heartbeat; current Codex advances the highest-value ready critical path next.", inputSchema: { type: "object", required: ["outcome"], anyOf: [{ required: ["workspace", "acceptanceEvidence"] }, { required: ["projects"] }], properties: {
-    workspace: { type: "string" }, outcome: { type: "string" }, acceptanceEvidence: ACCEPTANCE_SCHEMA, projects: { type: "array", minItems: 2, maxItems: 20, items: PROJECT_SCHEMA }, constraints: { type: "array", items: { type: "string" } }, minimumEvidenceLevel: { enum: EVIDENCE_LEVELS }, currentCodexModel: { type: "string" }, codexReservePercent: { type: "number", minimum: 5, maximum: 50 }, horizonHours: { type: "number", minimum: 1, maximum: 24 }
+    workspace: { type: "string" }, outcome: { type: "string" }, acceptanceEvidence: ACCEPTANCE_SCHEMA, projects: { type: "array", minItems: 2, maxItems: 20, items: PROJECT_SCHEMA }, constraints: { type: "array", items: { type: "string" } }, minimumEvidenceLevel: { enum: EVIDENCE_LEVELS }, currentCodexModel: { type: "string" }, currentModel: { type: "string" }, currentCodex: { type: "object", properties: { model: { type: "string" } } }, codexReservePercent: { type: "number", minimum: 5, maximum: 50 }, horizonHours: { type: "number", minimum: 1, maximum: 24 }
   } } },
   { name: "dispatch-round", description: "After reconnaissance, record current Codex's highest-value critical path and allocate a finite set of disjoint worker units under global provider, quota, RAM, storage, and fairness gates.", inputSchema: { type: "object", required: ["currentCodex", "workUnits"], ...TASK_OR_PORTFOLIO, properties: {
     taskId: { type: "string" }, portfolioId: { type: "string" }, horizonHours: { type: "number", minimum: 1, maximum: 24 }, currentCodex: { type: "object", required: ["goal"], properties: { projectId: { type: "string" }, goal: { type: "string" }, files: { type: "array", items: { type: "string" } }, acceptanceCriteria: { type: "array", items: { type: "string" } }, priorityOverrideReason: { type: "string" } } }, workUnits: { type: "array", maxItems: 40, items: WORK_UNIT_SCHEMA }
