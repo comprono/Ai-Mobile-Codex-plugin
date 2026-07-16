@@ -25,14 +25,14 @@ git(["config", "user.name", "AI Mobile Test"]);
 git(["add", "."]);
 git(["commit", "-m", "fixture"]);
 
-const fake = path.join(root, "fake-cursor.js");
+const fake = path.join(root, "fake-worker.js");
 fs.writeFileSync(fake, 'const fs=require("node:fs"),path=require("node:path");const file=path.join(process.cwd(),"src","ui.txt");fs.appendFileSync(file,"isolated-change\\n");process.stdout.write("updated isolated UI file\\n");', "utf8");
 let command;
 if (process.platform === "win32") {
-  command = path.join(root, "cursor-agent.cmd");
+  command = path.join(root, "ai-mobile-worker.cmd");
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`, "utf8");
 } else {
-  command = path.join(root, "cursor-agent");
+  command = path.join(root, "ai-mobile-worker");
   fs.writeFileSync(command, `#!/bin/sh\n"${process.execPath}" "${fake}" "$@"\n`, "utf8");
   fs.chmodSync(command, 0o755);
 }
@@ -45,8 +45,8 @@ const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
 const resources = { generatedAt: new Date().toISOString(), providers: {
   codex: { available: false, authenticated: false, reason: "fixture", models: [], quotaPools: [] },
   claude: { available: false, authenticated: false, reason: "fixture", models: [], quotaPools: [] },
-  antigravity: { available: false, authenticated: false, reason: "fixture", models: [], quotaPools: [] },
-  cursor: { available: true, authenticated: true, authMode: "cli-session", command, models: [], capacity: { remainingPercent: 80 }, quotaPools: [] },
+  antigravity: { available: true, authenticated: true, authMode: "cli-session", command, models: [{ id: "fixture-worker" }], capacity: { remainingPercent: 80 }, quotaPools: [] },
+  cursor: { available: false, authenticated: false, reason: "not part of this isolation fixture", models: [], quotaPools: [] },
 } };
 
 try {
@@ -63,7 +63,8 @@ try {
       complexity: "medium",
       taskKind: "code",
       estimatedDirectTokens: 8000,
-      preferredProvider: "cursor",
+      preferredProvider: "antigravity",
+      allowAntigravity: true,
       selectionAuthority: "user",
       integrationAction: "Apply the stored patch once",
     }],
