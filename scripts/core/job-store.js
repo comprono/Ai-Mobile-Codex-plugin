@@ -199,6 +199,10 @@ function cancelJob(taskIdValue, jobIdValue) {
     return { taskId, jobId, state: status.state, alreadyTerminal: true, workspaceCleanup: cleanup };
   }
   const stopped = terminateTree(status.pid);
+  const stopDeadline = Date.now() + 5000;
+  while (status.pid && processAlive(status.pid) && Date.now() < stopDeadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
   const next = setStatus(taskId, jobId, { state: "cancelled", finishedAt: utcNow(), blocker: "Cancelled by caller." });
   const cleanup = cleanupIsolatedWorkspace(contract.isolation || {});
   releaseResourceLease(jobId);
