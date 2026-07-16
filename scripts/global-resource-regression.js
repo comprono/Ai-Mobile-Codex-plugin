@@ -77,5 +77,5 @@ try {
 
   process.stdout.write(`${JSON.stringify({ ok: true, providerConflictPrevented: true, quotaConflictPrevented: true, globalLimitEnforced: true, fileOwnershipConflictPrevented: true, fairnessRecorded: true }, null, 2)}\n`);
 } finally {
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
