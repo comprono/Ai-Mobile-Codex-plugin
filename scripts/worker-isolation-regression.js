@@ -24,6 +24,7 @@ git(["config", "user.email", "ai-mobile@example.invalid"]);
 git(["config", "user.name", "AI Mobile Test"]);
 git(["add", "."]);
 git(["commit", "-m", "fixture"]);
+const workspaceRoot = spawnSync("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).stdout.trim();
 
 const fake = path.join(root, "fake-worker.js");
 fs.writeFileSync(fake, 'const fs=require("node:fs"),path=require("node:path");const file=path.join(process.cwd(),"src","ui.txt");fs.appendFileSync(file,"isolated-change\\n");process.stdout.write("updated isolated UI file\\n");', "utf8");
@@ -50,7 +51,7 @@ const resources = { generatedAt: new Date().toISOString(), providers: {
 } };
 
 try {
-  const task = startTask({ workspace, outcome: "Update UI fixture", acceptanceEvidence: [{ description: "Patch is isolated and ready for integration", minimumEvidenceLevel: "integration" }] }, resources);
+  const task = startTask({ workspace: workspaceRoot, outcome: "Update UI fixture", acceptanceEvidence: [{ description: "Patch is isolated and ready for integration", minimumEvidenceLevel: "integration" }] }, resources);
   const round = dispatchRound({
     taskId: task.taskId,
     currentCodex: { goal: "Inspect API contract", files: ["src/api.txt"] },
