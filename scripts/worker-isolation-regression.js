@@ -44,8 +44,8 @@ const { collectRound, dispatchRound, startTask } = require("./core/task-orchestr
 const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
 const resources = { generatedAt: new Date().toISOString(), providers: {
   codex: { available: false, authenticated: false, reason: "fixture", models: [], quotaPools: [] },
-  claude: { available: false, authenticated: false, reason: "fixture", models: [], quotaPools: [] },
-  antigravity: { available: true, authenticated: true, authMode: "cli-session", command, models: [{ id: "fixture-worker" }], capacity: { remainingPercent: 80 }, quotaPools: [] },
+  claude: { available: true, authenticated: true, authMode: "subscription", command, models: [{ id: "sonnet" }], capacity: { remainingPercent: 80 }, quotaPools: [] },
+  antigravity: { available: false, authenticated: false, reason: "not part of this isolation fixture", models: [], quotaPools: [] },
   cursor: { available: false, authenticated: false, reason: "not part of this isolation fixture", models: [], quotaPools: [] },
 } };
 
@@ -63,8 +63,7 @@ try {
       complexity: "medium",
       taskKind: "code",
       estimatedDirectTokens: 8000,
-      preferredProvider: "antigravity",
-      allowAntigravity: true,
+      preferredProvider: "claude",
       selectionAuthority: "user",
       integrationAction: "Apply the stored patch once",
     }],
