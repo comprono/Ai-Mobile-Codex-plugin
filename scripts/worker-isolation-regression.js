@@ -68,7 +68,7 @@ try {
       integrationAction: "Apply the stored patch once",
     }],
   }, resources, {}, (contract) => createJob(contract, entrypoint));
-  assert.equal(round.workers.length, 1);
+  assert.equal(round.workers.length, 1, JSON.stringify(round.rejected));
   assert.equal(round.workers[0].isolation, "isolated-git-worktree");
   const contract = readJson(path.join(jobDirectory(task.taskId, round.workers[0].jobId), "contract.json"), {});
   assert.equal(fs.existsSync(contract.isolation.executionWorkspace), true);
