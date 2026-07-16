@@ -11,6 +11,16 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-v1-mcp-"));
 const workspace = path.join(root, "workspace");
 const stateRoot = path.join(root, "state");
 fs.mkdirSync(workspace, { recursive: true });
+fs.mkdirSync(path.join(workspace, ".codex"), { recursive: true });
+fs.writeFileSync(path.join(workspace, ".codex", "PROJECT_OUTCOME.md"), [
+  "# Project Outcome", "", "## North Star", "", "Ship the verified portable MCP outcome.", "",
+].join("\n"), "utf8");
+fs.writeFileSync(path.join(workspace, ".codex", "ACCEPTANCE.json"), JSON.stringify({
+  schema_version: 1,
+  project_state: "active",
+  current_slice_requirement_id: "A1",
+  requirements: [{ id: "A1", description: "MCP lifecycle completes", required: true, status: "failing", minimum_evidence_level: "end-to-end", evidence: [] }],
+}, null, 2) + "\n", "utf8");
 fs.mkdirSync(stateRoot, { recursive: true });
 
 const observedAt = new Date().toISOString();
@@ -47,9 +57,15 @@ function toolValue(message) { return JSON.parse(message.result.content[0].text);
   const initialized = await call("initialize", { protocolVersion: "2025-03-26" });
   assert.equal(initialized.result.serverInfo.name, "ai-mobile-local");
   const listed = await call("tools/list");
-  assert.equal(listed.result.tools.length, 9);
-  const started = toolValue(await call("tools/call", { name: "start-task", arguments: { workspace, outcome: "Verify portable MCP", acceptanceEvidence: ["MCP lifecycle completes"] } }));
+  assert.equal(listed.result.tools.length, 10);
+  const started = toolValue(await call("tools/call", { name: "start-task", arguments: { workspace, outcome: "Perform a bounded architecture review.", userRequest: "Fix and ship the verified portable MCP outcome." } }));
   assert.match(started.taskId, /^task-/);
+  assert.equal(started.outcome, "Ship the verified portable MCP outcome.");
+  assert.equal(started.outcomeReconciliation.changed, true);
+  assert.equal(started.currentCodex.requirementId, "A1");
+  const reconciled = toolValue(await call("tools/call", { name: "reconcile-task", arguments: { taskId: started.taskId, userRequest: "Fix and ship the verified portable MCP outcome.", refreshProjectContext: true } }));
+  assert.equal(reconciled.reconciliationAllowed, true);
+  assert.equal(reconciled.contractVersion, 2);
   const summary = toolValue(await call("tools/call", { name: "task-summary", arguments: { taskId: started.taskId } }));
   assert.equal(summary.progress.passing, 0);
   const refused = toolValue(await call("tools/call", { name: "complete-task", arguments: { taskId: started.taskId } }));
@@ -58,7 +74,7 @@ function toolValue(message) { return JSON.parse(message.result.content[0].text);
   assert.equal(evidenced.progress.passing, 1);
   const completed = toolValue(await call("tools/call", { name: "complete-task", arguments: { taskId: started.taskId } }));
   assert.equal(completed.completionAllowed, true);
-  process.stdout.write(`${JSON.stringify({ ok: true, tools: 9, taskId: started.taskId, noProviderProcessRequired: true }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, tools: 10, taskId: started.taskId, outcomeRecoveredThroughMcp: true, noProviderProcessRequired: true }, null, 2)}\n`);
 })().catch((error) => { process.stderr.write(`${error.stack || error.message}\n`); process.exitCode = 1; }).finally(() => {
   try { child.kill(); } catch { /* no-op */ }
   fs.rmSync(root, { recursive: true, force: true });

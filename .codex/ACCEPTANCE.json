@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-16T16:29:39Z",
+  "updated_utc": "2026-07-16T22:47:12Z",
   "project_state": "complete",
-  "current_slice_requirement_id": "PUBLIC_RELEASE",
+  "current_slice_requirement_id": null,
   "requirements": [
     {
       "id": "STATE_CAPACITY",
@@ -58,7 +58,7 @@
         {
           "level": "integration",
           "ref": "node scripts/self-test.js; node scripts/reliability-e2e.js",
-          "summary": "The nine-tool MCP lifecycle completed without provider or desktop processes, and source assertions found no manager, status-loop, or continuous-cycle tools.",
+          "summary": "The ten-tool MCP lifecycle completed without provider or desktop processes, and source assertions found no manager, status-loop, or continuous-cycle tools.",
           "verified_utc": "2026-07-16T15:46:29Z"
         }
       ],
@@ -148,8 +148,71 @@
       "blocker": null
     },
     {
+      "id": "OUTCOME_RECOVERY",
+      "description": "AI Mobile discovers bounded authoritative project intent and prevents a method such as review, inspection, or planning from silently replacing the real operational outcome.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Create a disposable project with PROJECT_OUTCOME.md and ACCEPTANCE.json whose north star is operational throughput.",
+        "Start a task with an incorrectly narrow architecture-review outcome and prove the MCP result resolves to the project north star, imports its acceptance gap, and gives current Codex the first critical-path action.",
+        "Prove an explicit latest user request whose final deliverable is a review remains a review and is not overwritten."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "node scripts/outcome-recovery-e2e.js; node scripts/reliability-e2e.js",
+          "summary": "A disposable operational project rejected a method-only review contract, recovered its bounded north star and acceptance gap through stdio MCP, preserved an explicit review deliverable, and returned the first current-Codex critical-path unit.",
+          "verified_utc": "2026-07-16T22:47:12Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "TASK_RECONCILIATION",
+      "description": "The latest user correction can revise an existing task or portfolio project, invalidate stale dependent state, and preserve only acceptance evidence that still matches the corrected contract.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Revise a task from a diagnostic method to an operational outcome and prove stale rounds, work graph nodes, and mismatched evidence cannot complete the corrected task.",
+        "Prove unchanged requirements retain valid evidence and a changed outcome reopens a previously completed task.",
+        "Prove active workers are cancelled or revision is refused before a stale contract can continue."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/outcome-recovery-e2e.js",
+          "summary": "In-place reconciliation refused an unsafe stale revision, invalidated stale task and portfolio jobs after cancellation, blocked later stale collection, preserved matching evidence, removed changed evidence, and reopened a previously completed task under the corrected contract.",
+          "verified_utc": "2026-07-16T22:47:12Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "RECOVERY_PLANNING",
+      "description": "Automatic acceptance-linked decomposition and round results provide a concrete recovery transition after rejection, failure, or collection without polling or a manager loop.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Start a task without a work graph and prove one is generated from unresolved acceptance requirements.",
+        "Reject an overlapping worker lane and prove the result names the violated invariant, owner, recovery action, and next current-Codex unit.",
+        "Collect a terminal round and prove the result returns the next unresolved acceptance-linked action without starting another round or desktop application."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/outcome-recovery-e2e.js; node scripts/orchestration-regression.js; node scripts/portfolio-e2e.js",
+          "summary": "Acceptance requirements generated a minimal work graph; rejected overlap returned a typed owner, trigger, and recovery action; terminal collection returned exact integration and acceptance identifiers without polling or starting another round.",
+          "verified_utc": "2026-07-16T22:47:12Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
       "id": "PUBLIC_RELEASE",
-      "description": "Version 1.0.0 is documented, privacy-safe, scanner compliant, locally installed, and proven by a disposable provider canary.",
+      "description": "Version 1.1.0 is documented, privacy-safe, scanner compliant, locally installed, and proven by disposable outcome-recovery and provider canaries.",
       "required": true,
       "status": "passing",
       "minimum_evidence_level": "end-to-end",
@@ -160,9 +223,9 @@
       "evidence": [
         {
           "level": "end-to-end",
-          "ref": "plugin-scanner lint/scan; installed v1 lifecycle suites; node scripts/installed-provider-canary.js",
-          "summary": "Scanner lint and scan scored 100/100 with zero findings; Codex reports ai-mobile@personal installed and enabled at 1.0.0; installed self-test, portfolio, and storage suites passed; a real Antigravity Gemini 3.5 Flash Medium handoff returned the exact marker and completed without UI.",
-          "verified_utc": "2026-07-16T16:27:50Z"
+          "ref": "full regression suite; plugin-scanner 2.0.1109; installed cache 1.1.0; node scripts/installed-provider-canary.js",
+          "summary": "All ten deterministic suites passed; public and strict lint scored 100; full scan scored 100 with zero findings; installed MCP tests passed; and an authenticated Antigravity Gemini 3.5 Flash Medium canary returned the exact marker with no desktop UI.",
+          "verified_utc": "2026-07-16T22:47:12Z"
         }
       ],
       "blocker": null

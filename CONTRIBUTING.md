@@ -21,10 +21,14 @@ Contributions must preserve these invariants:
 
 ```powershell
 node .\scripts\self-test.js
+node .\scripts\outcome-recovery-e2e.js
 node .\scripts\state-capacity-regression.js
 node .\scripts\orchestration-regression.js
 node .\scripts\economic-regression.js
 node .\scripts\worker-isolation-regression.js
+node .\scripts\portfolio-e2e.js
+node .\scripts\global-resource-regression.js
+node .\scripts\storage-lifecycle-regression.js
 node .\scripts\reliability-e2e.js
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
 git diff --check

@@ -162,6 +162,7 @@ function readJob(taskIdValue, jobIdValue, detail = "compact", waitSeconds = 0) {
     provider: contract.provider || status.provider || "",
     model: contract.model || status.model || "",
     goal: contract.goal || "",
+    workGraphNodeId: contract.workGraphNodeId || null,
     blocker: status.blocker || "",
     alreadyCollected,
     verification: readJson(path.join(dir, "verification-evidence.json"), null),

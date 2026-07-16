@@ -13,18 +13,24 @@ It is not a manager-only chat, scheduler, control room, heartbeat, Goal, automat
 
 ## Start The Outcome
 
-For an explicit `@ai-mobile` request involving nontrivial work, make `start-task` the first project-related call. Supply either one project or a portfolio.
+For an explicit `@ai-mobile` request involving nontrivial work, make `start-task` the first project-related call. Pass the latest user request verbatim in `userRequest`; do not silently rewrite a method such as review, inspection, planning, or monitoring into the final outcome. Supply either one project or a portfolio.
 
 For one project, supply:
 
 - the concrete workspace;
-- one complete measurable outcome;
-- positive observable acceptance evidence;
+- the latest user request;
+- the complete measurable outcome and positive acceptance evidence when they are not already in a bounded project contract;
 - real constraints and the current Codex model when already known.
+
+`start-task` reads only bounded explicit contracts: `.codex/PROJECT_OUTCOME.md`, `.codex/ACCEPTANCE.json`, and optional `.ai-mobile/project.json`. If Codex supplies a narrow diagnostic method while the project contract defines a broader operational outcome, AI Mobile restores the project outcome and reports the reconciliation. If the user explicitly wants the diagnostic artifact as the final deliverable, set `outcomeAuthority: "user"`.
 
 For a portfolio, supply one portfolio outcome plus two or more project entries. Every project owns its workspace, outcome, acceptance evidence, priority, blockers, and optional dependency work graph. Do not flatten separate projects into unrelated `start-task` calls.
 
-Do not invent worker lanes before inspecting the project. `start-task` records one finite task and passively inventories capacity. It starts no worker or desktop application.
+Do not invent worker lanes before inspecting the project. `start-task` records one finite task, imports the bounded acceptance gap, creates a minimal requirement work graph when needed, and passively inventories capacity. It starts no worker or desktop application.
+
+When `.codex/ACCEPTANCE.json` names an unresolved `current_slice_requirement_id`, use the returned current-Codex unit for that slice unless an explicit dependency blocks it.
+
+When the user corrects the goal, scope, acceptance, blocker, or priority, call `reconcile-task` on the same task before more work. Do not start a replacement task. Reconciliation cancels only workers made stale by the changed contract, invalidates their round, preserves evidence only for unchanged acceptance requirements, and returns the next owned action.
 
 Trivial questions, one-line edits, and work whose delegation overhead is obviously larger should be handled directly without AI Mobile unless the user explicitly requires a provider.
 
@@ -32,13 +38,13 @@ Trivial questions, one-line edits, and work whose delegation overhead is obvious
 
 After `start-task`:
 
-1. Inspect the minimum authoritative state needed to identify the acceptance gap. In a portfolio, start with the highest-priority unblocked project.
-2. Choose and begin current Codex's highest-value critical-path unit immediately.
+1. Start the returned current-Codex acceptance unit immediately; inspect only enough authoritative state to prove the gap and establish file ownership. In a portfolio, start with the highest-priority unblocked project.
+2. If the recovered outcome is wrong because the user truly changed it, call `reconcile-task` once with the latest request, the full corrected outcome, and `outcomeAuthority: "user"` before continuing.
 3. Identify dependency-ready units across all projects that are genuinely parallel, disjoint, independently verifiable, and cheaper than doing and reviewing them directly.
 4. Call `dispatch-round` only after ownership is observed. Exact writer boundaries are mandatory; uncertain work stays read-only or in current Codex.
 5. Continue current Codex work while workers run, including when workers own separate projects. Do not wait, narrate routine orchestration, inspect worker-owned questions, or touch worker-owned files.
 6. At the natural integration point, call `collect-round` once. Use its local wait instead of repeated model-side polling.
-7. Inspect each compact handoff and stored patch once. Accept, reject, or narrowly repair it; run deterministic project checks before any model review.
+7. Follow the returned recovery plan. Integrate each listed handoff once, or use the typed owner, trigger, and recovery action for a rejection or failure. Never repeat the same rejected worker contract.
 8. Call `record-evidence` only for acceptance-linked proof. Portfolio evidence must name its project and never satisfies another project. Then call `complete-task`; it completes each project independently and the portfolio only after all required projects pass.
 
 A further round is allowed only after the previous round is terminal and integrated, and only when another independent acceptance-linked unit remains. Long projects use several finite rounds, not a perpetual manager loop.
@@ -91,7 +97,8 @@ Do not report dispatches, elapsed time, polling, worker count, healthy processes
 
 ## Tool Surface
 
-- `start-task`: create one project task or a multi-project portfolio and one passive capacity snapshot;
+- `start-task`: recover bounded project intent, create one project task or multi-project portfolio, and capture one passive capacity snapshot;
+- `reconcile-task`: apply the latest correction to the same task, invalidate stale dependent work, preserve matching evidence, and return the next owned action;
 - `dispatch-round`: keep current Codex on the highest-value path and route bounded independent units globally;
 - `collect-round`: collect one finite task or portfolio round and clean collected editing worktrees;
 - `record-evidence`: attach verified evidence only to the named project's requirements;

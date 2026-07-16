@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: complete
-Updated: 2026-07-16T16:29:39Z
+Updated: 2026-07-16T22:47:12Z
 
 ## North Star
 
@@ -19,6 +19,9 @@ AI Mobile must make current Codex and available local AI CLIs work as one effici
 - Every editing worker uses a temporary Git worktree; read-only workers use the shared repository; abandoned worktrees are cleaned after collection, cancellation, crash recovery, and age or disk-limit enforcement.
 - No provider desktop UI, heartbeat, Goal, automation, manager loop, or repeated status poll starts automatically.
 - Completion and progress claims require acceptance evidence, not process health or worker activity.
+- A project request cannot silently narrow an existing operational outcome into a method such as review, inspection, planning, or monitoring.
+- The latest user correction can revise an active task without preserving stale outcome, acceptance, worker, or plan assumptions.
+- A rejected or completed worker round returns the next acceptance-linked recovery transition instead of leaving Codex at a dead end.
 
 ## User Intent
 
@@ -59,13 +62,13 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - A two-project disposable portfolio now runs independent editing workers concurrently, keeps current Codex on the highest-priority project, allows a ready project to advance past a blocked sibling, and refuses cross-project evidence reuse.
 - Machine-wide tests now prevent provider, quota-pool, global-worker, and file-ownership conflicts while preserving priority fairness and Codex reserve policy.
 - Worktree tests now enforce disk and free-space limits and prove collection, cancellation, lost-worker, startup, and maximum-age cleanup with no primary-worktree edits or read-only worktrees.
-- Plugin Scanner lint and full scan pass at 100/100 with zero findings; verify passes every static check and skips only local stdio execution by scanner policy.
-- Codex reports `ai-mobile@personal` installed and enabled at v1.0.0; the installed cache passes self-test, portfolio end-to-end, and storage lifecycle checks.
+- Plugin Scanner 2.0.1109 public and strict lint pass at 100; its full scan passes at 100/100 with zero findings; standalone verify passes every static check and skips only local stdio execution by scanner policy.
+- Codex has `ai-mobile@personal` v1.1.0 in the personal source and cache; the installed cache passes self-test, outcome recovery, portable MCP, and privacy checks.
+- A method-only review contract now recovers the bounded project north star and acceptance gap while an explicit review deliverable remains authoritative.
+- `reconcile-task` now revises the same task, invalidates stale rounds, preserves matching evidence, removes changed evidence, and reopens completed work when the contract changes.
+- Rejected or completed worker lanes now return typed recovery or exact integration and acceptance identifiers rather than an unowned generic instruction.
 - A real installed Antigravity CLI canary used Gemini 3.5 Flash Medium, returned the exact disposable marker, recorded integration evidence, completed successfully, and opened no desktop UI.
-- Verified v1 was committed as `16adcf7` and pushed to `origin/main` at `https://github.com/comprono/Ai-Mobile-Codex-plugin`.
-- Existing unit, regression, and simulated reliability tests pass but do not cover stale negatives, branch-safe state, concurrent tasks, or live provider integration.
-- Current orchestration stores task and job state inside each workspace and requires candidate lanes before project inspection.
-- Current capacity cache can be reused for one hour and has produced false provider absence.
+- All ten deterministic release suites pass, including portfolio isolation, global resource leases, storage lifecycle cleanup, and no automatic desktop launch.
 
 ## Context Pointers
 
@@ -85,30 +88,26 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 ## Decisions
 
-- Keep the existing repository and plugin identity, but release the replacement as v1.0.0.
 - Current Codex is an active integrator, not a passive manager.
 - Use finite hybrid rounds with at most two external workers and a default 15 percent Codex reserve.
 - Store runtime state under `%LOCALAPPDATA%\AI Mobile\v1`, never in the managed workspace.
 - CLI is automatic; UI fallback is explicit and user initiated.
-- A portfolio is finite orchestration state, not a manager loop: it advances only on explicit start, dispatch, collect, evidence, summary, complete, or cancel calls.
-- Discover capacity once per portfolio start and refresh only when dispatch evidence is stale or negative, not through polling.
+- Recover intent from bounded project contracts and the latest user request; never add an unbounded manager loop or hidden model call to interpret it.
 
 ## Failure Memory
 
-- A stale negative capacity record must never hard-reject a provider without a fresh probe.
-- Asking Codex to invent file ownership before reconnaissance can reject all useful workers and must not return.
-- Workspace-local orchestration state is invalid because branch and cleanup operations can erase or confuse it.
-- Worker activity, polling, and process health must not be reported as outcome progress.
-- Delegating work whose review costs as much as the work is a routing failure.
-- Cross-project concurrency without machine-wide leases can oversubscribe one provider or quota pool and is invalid.
-- Worktree isolation without disk, age, crash, cancellation, and collection cleanup is an unbounded storage leak.
+- A method-shaped task contract can faithfully orchestrate the wrong outcome; project intent must be reconciled before dispatch.
+- A latest user correction must invalidate stale outcome, acceptance, round, and worker assumptions instead of continuing sunk work.
+- Rejected delegation is a planning event, not a reason to stop or return an unowned "do it directly" instruction.
+- Worker activity, polling, process health, and review chains are not outcome progress and may cost more than direct work.
+- Resource and worktree limits must remain machine-wide and bounded while the outcome-recovery layer changes.
 
 ## Current Slice
 
-- Acceptance ID: PUBLIC_RELEASE
-- Goal: Pass scanner/privacy gates, install v1 locally, and prove one authenticated disposable provider handoff without UI fallback.
-- Evidence target: end-to-end installed-plugin and real-provider canary evidence.
+- Acceptance ID: none
+- Goal: AI Mobile 1.1.0 outcome recovery and task reconciliation are locally complete.
+- Evidence target: all required entries in `.codex/ACCEPTANCE.json` pass.
 
 ## Next
 
-No required v1 work remains. Restart Codex before using the new skill and MCP schema in a fresh task.
+Commit and publish AI Mobile 1.1.0, restart Codex, then validate it against Job Vibhu as a separate project phase.

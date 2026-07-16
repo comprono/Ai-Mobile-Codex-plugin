@@ -7,7 +7,7 @@ const { inventory } = require("./core/capacity");
 const { createJob } = require("./core/job-store");
 const { providerHistory } = require("./core/provider-history");
 const { cleanupStaleLeases, resourceLeaseSnapshot } = require("./core/resource-leases");
-const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, recordEvidence, startTask, taskSummary } = require("./core/task-orchestrator");
+const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, reconcileTask, recordEvidence, startTask, taskSummary } = require("./core/task-orchestrator");
 const { cleanupAbandonedWorktrees, storageStatus } = require("./core/workspace-isolation");
 const { executeWorker } = require("./core/worker");
 const { readProfile, writeProfile } = require("./lib/orchestrator-profile");
@@ -39,6 +39,7 @@ async function main() {
     const input = jsonInput();
     return output(startTask(input, await inventory({ refresh: false })));
   }
+  if (action === "reconcile-task-cli") return output(reconcileTask(jsonInput()));
   if (action === "dispatch-round-cli") {
     const input = jsonInput();
     return output(dispatchRound(input, await inventory({ forDispatch: true }), providerHistory(), (contract) => createJob(contract, entrypoint)));

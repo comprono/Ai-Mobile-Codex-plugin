@@ -33,15 +33,18 @@ async function run() {
       cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
     } };
 
-    assert.equal(TOOLS.length, 9);
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "dispatch-round", "collect-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile"]);
-    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 9);
+    assert.equal(TOOLS.length, 10);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "collect-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile"]);
+    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 10);
 
     const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
     assert.equal(task.requirements[0].id, "A1");
     assert.equal(task.currentCodex.reservePercent, 15);
     assert.equal(task.currentCodex.model, "gpt-5.6-sol");
+    assert.equal(task.currentCodex.requirementId, "A1");
+    assert.deepEqual(task.workGraph.map((row) => row.id), ["R-A1"]);
+    assert.equal(task.outcomeReconciliation.source, "supplied-outcome");
     assert.equal(taskSummary({ taskId: task.taskId }).progress.required, 1);
     assert.equal(fs.existsSync(path.join(workspace, ".ai-mobile")), false);
     assert.equal(taskSummary({ taskId: task.taskId }).completionAllowed, false);
@@ -83,7 +86,7 @@ async function run() {
     assert.match(promptFor(contract), /bounded worker/);
     assert.match(communicationContract(), /communicate compactly/);
     const verification = runVerification(workspace, root, [{ name: "node-version", command: "node", args: ["--version"] }]);
-    assert.equal(verification.passed, true);
+    assert.equal(verification.passed, true, JSON.stringify(verification));
 
     const serverSource = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
     const skillSource = fs.readFileSync(path.join(__dirname, "..", "skills", "ai-mobile", "SKILL.md"), "utf8");
@@ -91,7 +94,7 @@ async function run() {
       assert.equal(serverSource.includes(forbidden), false);
       assert.equal(skillSource.includes(forbidden), false);
     }
-    return { ok: true, assertions: 43, durationMs: Date.now() - started, tools: TOOLS.length };
+    return { ok: true, assertions: 46, durationMs: Date.now() - started, tools: TOOLS.length };
   } finally {
     if (savedDataRoot === undefined) delete process.env.AI_MOBILE_DATA_ROOT; else process.env.AI_MOBILE_DATA_ROOT = savedDataRoot;
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocalAppData;

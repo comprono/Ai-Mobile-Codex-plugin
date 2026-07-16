@@ -1,5 +1,5 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
   [string]$ContractFile = '',
   [string]$TaskId = '',
   [string]$PortfolioId = '',
@@ -35,7 +35,7 @@ switch ($Command) {
       PluginRoot = $Root
       StartupBehavior = 'passive; no provider desktop application is opened'
       StateRoot = '%LOCALAPPDATA%\AI Mobile\v1'
-      Tools = @('start-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile')
+      Tools = @('start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
@@ -44,6 +44,7 @@ switch ($Command) {
     Invoke-Node $args
   }
   'start-task' { Invoke-Node @('start-task-cli','--json-file',(Require-Contract)) }
+  'reconcile-task' { Invoke-Node @('reconcile-task-cli','--json-file',(Require-Contract)) }
   'dispatch-round' { Invoke-Node @('dispatch-round-cli','--json-file',(Require-Contract)) }
   'collect-round' { Invoke-Node @('collect-round-cli','--json-file',(Require-Contract)) }
   'record-evidence' { Invoke-Node @('record-evidence-cli','--json-file',(Require-Contract)) }

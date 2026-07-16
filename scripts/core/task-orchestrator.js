@@ -5,6 +5,14 @@ const { route } = require("./router");
 const { cancelTaskJobs, readJob, statusFor, TERMINAL_STATES } = require("./job-store");
 const { resourceLeaseSnapshot } = require("./resource-leases");
 const {
+  compactProjectContext,
+  criticalPath,
+  defaultWorkGraph,
+  discoverProjectContext,
+  resolveOutcome,
+  safeId: safeContractId,
+} = require("./project-context");
+const {
   createPortfolioRecord,
   createPortfolioRoundRecord,
   createRoundRecord,
@@ -69,12 +77,25 @@ function requirementRows(values, defaultLevel = "end-to-end") {
   return values.slice(0, 12).map((value, index) => {
     const item = typeof value === "string" ? { description: value } : value || {};
     const description = String(item.description || "").trim().slice(0, 1200);
-    if (!description) throw new Error(`acceptanceEvidence[${index}] requires a description.`);
+    if (!description) throw new Error("acceptanceEvidence[" + index + "] requires a description.");
     if (/\bor\s+(?:blocked|a blocker|unavailable)\b|\bif available\b|\bwhen eligible\b/i.test(description)) {
       throw new Error("Acceptance evidence must describe positive observable proof, not an escape condition.");
     }
     const minimumEvidenceLevel = EVIDENCE_RANK[item.minimumEvidenceLevel] === undefined ? defaultLevel : item.minimumEvidenceLevel;
-    return { id: `A${index + 1}`, description, required: item.required !== false, status: "failing", minimumEvidenceLevel, evidence: [] };
+    const evidence = (Array.isArray(item.evidence) ? item.evidence : []).filter((row) => (
+      EVIDENCE_RANK[row?.level] !== undefined
+      && String(row?.ref || "").trim()
+      && String(row?.summary || "").trim()
+    )).slice(-10).map((row) => ({
+      level: row.level,
+      ref: String(row.ref).trim().slice(0, 1000),
+      summary: String(row.summary).trim().slice(0, 1200),
+      verifiedAt: row.verifiedAt || row.verified_utc || null,
+      imported: row.imported === true || item.imported === true,
+    }));
+    const sourceStatus = ["passing", "failing", "blocked"].includes(item.status) ? item.status : "failing";
+    const status = sourceStatus === "passing" && evidence.length ? "passing" : sourceStatus === "blocked" ? "blocked" : "failing";
+    return { id: safeContractId(item.id, "A" + (index + 1)), description, required: item.required !== false, status, minimumEvidenceLevel, evidence: status === "passing" ? evidence : [], sourceStatus, imported: item.imported === true };
   });
 }
 
@@ -113,7 +134,8 @@ function normalizeWorkGraph(values) {
       priority: Math.max(1, Math.min(100, Number(row.priority || 50))),
       state: ["pending", "running", "awaiting-evidence", "completed", "blocked"].includes(row.state) ? row.state : "pending",
       owner: row.owner || null,
-      evidenceRefs: [],
+      evidenceRefs: cleanStrings(row.evidenceRefs, 10, 1000),
+      acceptanceRequirementId: row.acceptanceRequirementId ? safeContractId(row.acceptanceRequirementId) : null,
     };
   });
 }
@@ -128,34 +150,162 @@ function highestValueReadyProject(portfolio) {
     .sort((left, right) => Number(right.priority || 50) - Number(left.priority || 50) || String(left.projectId).localeCompare(String(right.projectId)))[0] || null;
 }
 
+function requirementsForStart(args, context, defaultLevel) {
+  if (Array.isArray(args.acceptanceEvidence) && args.acceptanceEvidence.length) {
+    return requirementRows(args.acceptanceEvidence, defaultLevel);
+  }
+  if (context.requirements.length) return requirementRows(context.requirements, defaultLevel);
+  throw new Error("At least one acceptanceEvidence item is required, either in the request or a bounded project contract.");
+}
+
+function graphForStart(args, context, requirements) {
+  if (Array.isArray(args.workGraph) && args.workGraph.length) return normalizeWorkGraph(args.workGraph);
+  if (context.workGraph.length) return normalizeWorkGraph(context.workGraph);
+  return normalizeWorkGraph(defaultWorkGraph(requirements, context.currentSliceRequirementId));
+}
+
+function codexPlan(args, requirements, workGraph) {
+  const plan = criticalPath(requirements, workGraph);
+  return {
+    model: String(args.currentCodexModel || args.currentModel || args.currentCodex?.model || "").trim().slice(0, 160),
+    reservePercent: Math.max(5, Math.min(50, Number(args.codexReservePercent || 15))),
+    goal: plan.goal,
+    files: [],
+    acceptanceCriteria: plan.acceptanceCriteria || [],
+    requirementId: plan.requirementId || null,
+    workGraphNodeId: plan.workGraphNodeId || null,
+    reason: plan.reason,
+  };
+}
+
+function requirementKey(row) {
+  return String(row?.description || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function mergeRequirements(existing, proposed) {
+  const current = new Map((existing || []).map((row) => [requirementKey(row), row]));
+  return (proposed || []).map((row) => {
+    const match = current.get(requirementKey(row));
+    if (!match || match.minimumEvidenceLevel !== row.minimumEvidenceLevel) return { ...row, status: row.status === "blocked" ? "blocked" : "failing", evidence: [] };
+    return {
+      ...row,
+      status: match.status,
+      evidence: [...(match.evidence || [])].slice(-10),
+      sourceStatus: row.sourceStatus || match.sourceStatus,
+    };
+  });
+}
+
+function classifyRecovery(reason) {
+  const value = String(reason || "");
+  if (/overlap|ownership|serialize/i.test(value)) {
+    return {
+      failureClass: "ownership-conflict",
+      owner: "current-codex",
+      recoveryTrigger: "The current Codex lane completes or the worker receives genuinely disjoint file and goal boundaries.",
+      recoveryAction: "Finish the current critical-path unit, then serialize this work or redefine it with disjoint ownership. Do not retry the same overlapping lane.",
+    };
+  }
+  if (/capacity|quota|reserve|provider|authenticated|unavailable|cooldown|worker limit/i.test(value)) {
+    return {
+      failureClass: "capacity-unavailable",
+      owner: "current-codex",
+      recoveryTrigger: "Fresh capacity evidence changes or another eligible provider becomes available.",
+      recoveryAction: "Keep advancing the acceptance item in current Codex. Re-dispatch only after a fresh capacity transition or a materially different provider choice.",
+    };
+  }
+  if (/economic|overhead|saving|small task/i.test(value)) {
+    return {
+      failureClass: "delegation-not-worthwhile",
+      owner: "current-codex",
+      recoveryTrigger: "The remaining unit becomes materially larger and independently verifiable.",
+      recoveryAction: "Complete the unit directly in current Codex; do not spend another worker prompt or review cycle.",
+    };
+  }
+  if (/dependencies|blocked|not active|work graph/i.test(value)) {
+    return {
+      failureClass: "dependency-blocked",
+      owner: "current-codex",
+      recoveryTrigger: "The named dependency or blocker has verifiably changed.",
+      recoveryAction: "Advance another dependency-ready acceptance item. Retry this unit only after its recorded dependency transition.",
+    };
+  }
+  return {
+    failureClass: "contract-invalid",
+    owner: "current-codex",
+    recoveryTrigger: "The work contract is corrected using the observed rejection.",
+    recoveryAction: "Correct the bounded goal, acceptance, or ownership once. Do not repeat the same rejected contract.",
+  };
+}
+
+function nextPlanForTask(task, failures = [], completed = []) {
+  const base = criticalPath(task.requirements || [], task.workGraph || []);
+  const transitions = failures.slice(0, 12).map((failure) => ({
+    goal: String(failure.goal || "").slice(0, 1200),
+    reason: String(failure.reason || failure.blocker || "").slice(0, 1200),
+    ...classifyRecovery(failure.reason || failure.blocker),
+  }));
+  const integrations = completed.slice(0, 12).map((result) => {
+    const node = (task.workGraph || []).find((row) => row.id === result.workGraphNodeId);
+    return {
+      jobId: result.jobId,
+      goal: String(result.goal || "").slice(0, 1200),
+      workGraphNodeId: result.workGraphNodeId || null,
+      requirementId: node?.acceptanceRequirementId || null,
+      action: String(result.integration?.action || result.handoff?.integrationAction || "").slice(0, 1200),
+      rule: "Inspect this handoff once, run deterministic checks, and record only acceptance-linked evidence.",
+    };
+  });
+  return {
+    state: base.state,
+    owner: "current-codex",
+    requirementId: base.requirementId || null,
+    workGraphNodeId: base.workGraphNodeId || null,
+    goal: base.goal,
+    acceptanceCriteria: base.acceptanceCriteria || [],
+    reason: transitions.length
+      ? "A worker path was rejected or failed; the task remains active on the next unresolved acceptance item."
+      : base.reason,
+    transitions,
+    integrations,
+    instruction: integrations.length
+      ? "Integrate each listed handoff exactly once, run deterministic checks, record acceptance evidence, then continue the returned current Codex goal."
+      : base.state === "verification"
+        ? "Run final deterministic acceptance checks, record sufficient evidence, then request completion."
+        : "Start or continue this acceptance-linked current Codex unit now. Dispatch again only for a new disjoint unit with positive total economics.",
+  };
+}
+
 function startSingleTask(args, resources, portfolioContext = {}) {
-  const outcome = String(args.outcome || "").trim().slice(0, 6000);
-  if (!outcome) throw new Error("outcome is required.");
+  const context = discoverProjectContext(args.workspace);
+  const outcomeReconciliation = resolveOutcome(args, context);
+  const outcome = outcomeReconciliation.resolvedOutcome;
   const defaultLevel = EVIDENCE_RANK[args.minimumEvidenceLevel] === undefined ? "end-to-end" : args.minimumEvidenceLevel;
-  const requirements = requirementRows(args.acceptanceEvidence, defaultLevel);
+  const requirements = requirementsForStart(args, context, defaultLevel);
+  const workGraph = graphForStart(args, context, requirements);
   const record = createTaskRecord({
     workspace: args.workspace,
     outcome,
+    requestedOutcome: outcomeReconciliation.requestedOutcome || outcome,
+    latestUserRequest: outcomeReconciliation.latestUserRequest,
+    outcomeReconciliation,
+    projectContext: compactProjectContext(context),
+    contractVersion: 1,
     requirements,
     constraints: cleanStrings(args.constraints, 12, 1000),
     blockers: normalizeBlockers(args.blockers),
-    workGraph: normalizeWorkGraph(args.workGraph),
+    workGraph,
     priority: Math.max(1, Math.min(100, Number(args.priority || 50))),
     portfolioId: portfolioContext.portfolioId || null,
     projectId: portfolioContext.projectId || null,
-    currentCodex: {
-      model: String(args.currentCodexModel || args.currentModel || args.currentCodex?.model || "").trim().slice(0, 160),
-      reservePercent: Math.max(5, Math.min(50, Number(args.codexReservePercent || 15))),
-      goal: "Inspect the project and choose the smallest acceptance-linked critical path before proposing external work.",
-      files: [],
-    },
+    currentCodex: codexPlan(args, requirements, workGraph),
     capacitySnapshot: compactResources(resources),
   });
   return record;
 }
 
 function startPortfolio(args, resources) {
-  const outcome = String(args.outcome || "").trim().slice(0, 6000);
+  const outcome = String(args.outcome || args.userRequest || "").trim().slice(0, 6000);
   if (!outcome) throw new Error("A portfolio outcome is required.");
   const inputProjects = Array.isArray(args.projects) ? args.projects.slice(0, 20) : [];
   if (inputProjects.length < 2) throw new Error("A portfolio requires at least two separate project entries.");
@@ -190,7 +340,9 @@ function startPortfolio(args, resources) {
         taskId: task.taskId,
         workspace: task.workspace,
         outcome: task.outcome,
-        requirements: task.requirements.map(({ id, description, minimumEvidenceLevel, required }) => ({ id, description, minimumEvidenceLevel, required })),
+        outcomeReconciliation: task.outcomeReconciliation,
+        projectContext: task.projectContext,
+        requirements: task.requirements.map(({ id, description, minimumEvidenceLevel, required, status }) => ({ id, description, minimumEvidenceLevel, required, status })),
         priority: task.priority,
         blockers: task.blockers,
         workGraph: task.workGraph,
@@ -204,14 +356,14 @@ function startPortfolio(args, resources) {
     throw error;
   }
   const current = highestValueReadyProject({ projects });
+  const currentTask = current ? readTask(current.taskId) : null;
   const portfolio = updatePortfolio(provisional.portfolioId, (record) => ({
     ...record,
     projects,
     currentCodex: current ? {
       projectId: current.projectId,
       taskId: current.taskId,
-      goal: "Inspect this highest-priority ready project and advance its smallest acceptance-linked critical path.",
-      files: [],
+      ...currentTask.currentCodex,
     } : {},
   }));
   return {
@@ -233,12 +385,170 @@ function startTask(args, resources) {
     taskId: record.taskId,
     state: record.state,
     outcome: record.outcome,
-    requirements: record.requirements.map(({ id, description, minimumEvidenceLevel }) => ({ id, description, minimumEvidenceLevel })),
+    outcomeReconciliation: record.outcomeReconciliation,
+    projectContext: record.projectContext,
+    requirements: record.requirements.map(({ id, description, minimumEvidenceLevel, status }) => ({ id, description, minimumEvidenceLevel, status })),
+    workGraph: record.workGraph,
     capacity: record.capacitySnapshot,
     currentCodex: record.currentCodex,
-    nextAction: "Current Codex should inspect the minimum authoritative project state, define its own critical-path unit, then call dispatch-round only for genuinely independent bounded work. Small or overlapping work stays direct.",
+    nextAction: "Current Codex should start the returned acceptance-linked unit now, inspect only enough state to establish file ownership, and dispatch only new disjoint work with positive total economics.",
     reportingRule: "Report only assignments, accepted evidence, a real blocker, or the next material action. Do not create a Goal, manager loop, heartbeat, automation, or status feed.",
   };
+}
+
+function activeRound(task) {
+  const reference = (task.rounds || []).at(-1);
+  if (!reference) return null;
+  const round = readRound(task.taskId, reference.roundId);
+  return ["planning", "running"].includes(round.state) ? round : null;
+}
+
+function activePortfolioProjectRound(reference, taskId) {
+  if (!reference) return null;
+  const portfolio = readPortfolio(reference.portfolioId);
+  const latest = (portfolio.rounds || []).at(-1);
+  if (!latest) return null;
+  const round = readPortfolioRound(portfolio.portfolioId, latest.roundId);
+  if (!["planning", "running"].includes(round.state)) return null;
+  return (round.jobs || []).some((job) => job.taskId === taskId)
+    ? { portfolio, round }
+    : null;
+}
+
+function reconcileSingleTask(args, portfolioReference = null) {
+  const task = readTask(args.taskId);
+  const context = discoverProjectContext(task.workspace);
+  const outcomeInput = Object.prototype.hasOwnProperty.call(args, "outcome") ? args.outcome : task.outcome;
+  const resolution = resolveOutcome({
+    ...args,
+    outcome: outcomeInput,
+    userRequest: args.userRequest || args.latestUserRequest || task.latestUserRequest,
+  }, context);
+  const defaultLevel = EVIDENCE_RANK[args.minimumEvidenceLevel] === undefined ? "end-to-end" : args.minimumEvidenceLevel;
+  const hasAcceptance = Array.isArray(args.acceptanceEvidence) && args.acceptanceEvidence.length > 0;
+  const outcomeChanged = resolution.resolvedOutcome !== task.outcome;
+  const refreshFromProject = args.refreshProjectContext === true || outcomeChanged;
+  let proposedRequirements = task.requirements;
+  if (hasAcceptance) proposedRequirements = requirementRows(args.acceptanceEvidence, defaultLevel);
+  else if (refreshFromProject && context.requirements.length) proposedRequirements = requirementRows(context.requirements, defaultLevel);
+  const requirements = mergeRequirements(task.requirements, proposedRequirements);
+
+  const explicitGraph = Array.isArray(args.workGraph);
+  const workGraph = explicitGraph
+    ? normalizeWorkGraph(args.workGraph.length ? args.workGraph : defaultWorkGraph(requirements, context.currentSliceRequirementId))
+    : outcomeChanged || hasAcceptance || args.refreshProjectContext === true
+      ? normalizeWorkGraph(context.workGraph.length ? context.workGraph : defaultWorkGraph(requirements, context.currentSliceRequirementId))
+      : task.workGraph;
+  const constraints = Object.prototype.hasOwnProperty.call(args, "constraints")
+    ? cleanStrings(args.constraints, 12, 1000)
+    : task.constraints;
+  const blockers = Object.prototype.hasOwnProperty.call(args, "blockers")
+    ? normalizeBlockers(args.blockers)
+    : task.blockers;
+  const materialChange = outcomeChanged
+    || hasAcceptance
+    || explicitGraph
+    || Object.prototype.hasOwnProperty.call(args, "constraints")
+    || Object.prototype.hasOwnProperty.call(args, "blockers")
+    || args.refreshProjectContext === true;
+  const taskRound = activeRound(task);
+  const portfolioRound = activePortfolioProjectRound(portfolioReference, task.taskId);
+  const staleRound = taskRound || portfolioRound?.round || null;
+  if (staleRound && materialChange && args.cancelActiveWorkers === false) {
+    return {
+      taskId: task.taskId,
+      state: task.state,
+      reconciliationAllowed: false,
+      blocker: "The latest round still owns workers under the stale contract.",
+      recoveryAction: "Call reconcile-task again with cancelActiveWorkers true, or collect the terminal round before revising.",
+      activeRoundId: staleRound.roundId,
+    };
+  }
+
+  let cancelledWorkers = [];
+  if (staleRound && materialChange) {
+    cancelledWorkers = cancelTaskJobs(task.taskId);
+  }
+  if (taskRound && materialChange) {
+    updateRound(task.taskId, taskRound.roundId, {
+      state: "invalidated",
+      invalidatedAt: utcNow(),
+      invalidatedReason: "Task contract changed from a latest user correction or authoritative project reconciliation.",
+    });
+  }
+  if (portfolioRound && materialChange) {
+    const otherJobs = (portfolioRound.round.jobs || []).filter((job) => job.taskId !== task.taskId);
+    const invalidatedJobs = (portfolioRound.round.jobs || []).filter((job) => job.taskId === task.taskId);
+    updatePortfolioRound(portfolioRound.portfolio.portfolioId, portfolioRound.round.roundId, {
+      state: otherJobs.length ? "running" : "invalidated",
+      jobs: otherJobs,
+      invalidatedJobs: [
+        ...(portfolioRound.round.invalidatedJobs || []),
+        ...invalidatedJobs.map((job) => ({ ...job, invalidatedAt: utcNow(), invalidatedReason: "Project contract changed." })),
+      ].slice(-40),
+      contractRevisions: [
+        ...(portfolioRound.round.contractRevisions || []),
+        { projectId: portfolioReference.projectId, taskId: task.taskId, revisedAt: utcNow() },
+      ].slice(-20),
+    });
+  }
+  const nextCodex = codexPlan({
+    currentCodexModel: args.currentCodexModel || task.currentCodex?.model,
+    codexReservePercent: args.codexReservePercent || task.currentCodex?.reservePercent,
+  }, requirements, workGraph);
+  const updated = updateTask(task.taskId, (current) => ({
+    ...current,
+    state: materialChange && current.state === "completed" ? "active" : current.state === "cancelled" && materialChange ? "active" : current.state,
+    completedAt: materialChange ? null : current.completedAt,
+    cancelledAt: materialChange ? null : current.cancelledAt,
+    outcome: resolution.resolvedOutcome,
+    requestedOutcome: resolution.requestedOutcome || resolution.resolvedOutcome,
+    latestUserRequest: resolution.latestUserRequest,
+    outcomeReconciliation: { ...resolution, contractChanged: materialChange },
+    projectContext: compactProjectContext(context),
+    contractVersion: Number(current.contractVersion || 1) + (materialChange ? 1 : 0),
+    revisedAt: materialChange ? utcNow() : current.revisedAt,
+    requirements,
+    evidence: requirements.flatMap((requirement) => (requirement.evidence || []).map((evidence) => ({ requirementId: requirement.id, ...evidence }))).slice(-50),
+    constraints,
+    blockers,
+    workGraph,
+    currentCodex: materialChange ? nextCodex : current.currentCodex,
+  }));
+
+  if (portfolioReference) {
+    updatePortfolio(portfolioReference.portfolioId, (portfolio) => {
+      portfolio.projects = portfolio.projects.map((project) => project.projectId === portfolioReference.projectId ? {
+        ...project,
+        outcome: updated.outcome,
+        outcomeReconciliation: updated.outcomeReconciliation,
+        projectContext: updated.projectContext,
+        requirements: updated.requirements.map(({ id, description, minimumEvidenceLevel, required, status }) => ({ id, description, minimumEvidenceLevel, required, status })),
+        blockers: updated.blockers,
+        workGraph: updated.workGraph,
+        state: updated.state,
+      } : project);
+      const ready = highestValueReadyProject(portfolio);
+      if (ready) portfolio.currentCodex = { projectId: ready.projectId, taskId: ready.taskId, ...readTask(ready.taskId).currentCodex };
+      return portfolio;
+    });
+  }
+  return {
+    ...singleTaskSummary(updated),
+    reconciliationAllowed: true,
+    reconciliation: updated.outcomeReconciliation,
+    cancelledWorkers,
+    nextPlan: nextPlanForTask(updated),
+  };
+}
+
+function reconcileTask(args) {
+  if (args.taskId) return reconcileSingleTask(args);
+  const portfolio = readPortfolio(args.portfolioId);
+  const projectId = String(args.projectId || "").trim();
+  const project = portfolio.projects.find((row) => row.projectId === projectId);
+  if (!project) throw new Error("reconcile-task with portfolioId requires a valid projectId.");
+  return reconcileSingleTask({ ...args, taskId: project.taskId }, { portfolioId: portfolio.portfolioId, projectId });
 }
 
 function terminalRoundState(rows) {
@@ -297,6 +607,7 @@ function dispatchSingleRound(args, resources, histories, createJob) {
         ...decision.request,
         taskId: task.taskId,
         roundId: round.roundId,
+        workGraphNodeId: unit.workGraphNodeId || null,
         completionEvidence: task.requirements.map((item) => item.description),
         workspace: task.workspace,
         provider: decision.provider,
@@ -305,17 +616,22 @@ function dispatchSingleRound(args, resources, histories, createJob) {
         quotaPoolIds: quotaPoolIds(decision.provider, selected, decision.request.model),
         fairnessKey: task.taskId,
       });
-      jobs.push({ ...receipt, goal: unitGoal, reason: decision.reason, economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
+      jobs.push({ ...receipt, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: decision.reason, economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
       workerOwners.push({ goal: unitGoal, files: unitFiles });
     } catch (error) { rejected.push({ goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
   }
   const state = jobs.length ? "running" : "direct";
   updateRound(task.taskId, round.roundId, { state, jobs, rejected });
-  updateTask(task.taskId, (current) => {
+  const updatedTask = updateTask(task.taskId, (current) => {
     current.currentCodex = { ...current.currentCodex, goal: currentGoal, files: currentFiles, acceptanceCriteria: cleanStrings(currentCodex.acceptanceCriteria, 12, 1000), updatedAt: utcNow() };
     current.capacitySnapshot = compactResources(resources);
+    current.workGraph = (current.workGraph || []).map((node) => {
+      const job = jobs.find((row) => row.workGraphNodeId === node.id);
+      return job ? { ...node, state: "running", owner: { type: "worker", jobId: job.jobId, provider: job.provider } } : node;
+    });
     return current;
   });
+  const nextPlan = nextPlanForTask(updatedTask, rejected);
   return {
     taskId: task.taskId,
     roundId: round.roundId,
@@ -323,7 +639,8 @@ function dispatchSingleRound(args, resources, histories, createJob) {
     currentCodex: { goal: currentGoal, files: currentFiles, instruction: "Start or continue this critical-path unit now; do not wait for workers." },
     workers: jobs,
     rejected,
-    nextAction: jobs.length ? "Continue current Codex work and collect this round once at the natural integration point." : "No worker passed independence and economic gates. Current Codex should do the next dependency-ready work directly.",
+    recoveryPlan: nextPlan,
+    nextAction: jobs.length ? "Continue current Codex work and collect this round once at the natural integration point." : nextPlan.instruction,
   };
 }
 
@@ -477,6 +794,9 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     task.currentCodex = { ...task.currentCodex, goal: currentGoal, files: currentFiles, updatedAt: utcNow() };
     return task;
   });
+  const recoveryPlans = Object.fromEntries(portfolio.projects.map((project) => [
+    project.projectId, nextPlanForTask(readTask(project.taskId), rejected.filter((row) => row.projectId === project.projectId)),
+  ]));
   return {
     portfolioId: portfolio.portfolioId,
     roundId: round.roundId,
@@ -484,7 +804,8 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     currentCodex: { projectId: currentProjectId, taskId: currentProject.taskId, goal: currentGoal, files: currentFiles, instruction: "Advance this highest-value critical path now; do not wait for workers." },
     workers: jobs,
     rejected,
-    nextAction: jobs.length ? "Continue current Codex work. Collect this portfolio round once at the natural integration point." : "No worker passed current global, dependency, independence, and economic gates. Continue the highest-value ready work directly.",
+    recoveryPlans,
+    nextAction: jobs.length ? "Continue current Codex work. Collect this portfolio round once at the natural integration point." : recoveryPlans[currentProjectId].instruction,
   };
 }
 
@@ -495,15 +816,32 @@ function dispatchRound(args, resources, histories, createJob) {
 function collectSingleRound(args) {
   const task = readTask(args.taskId);
   const round = readRound(task.taskId, args.roundId);
+  if (round.state === "invalidated") throw new Error("This round was invalidated by a task contract revision and cannot be collected.");
   const results = (round.jobs || []).map((job) => readJob(task.taskId, job.jobId, args.detail || "compact", Number(args.waitSeconds || 0)));
   const state = terminalRoundState(results);
   updateRound(task.taskId, round.roundId, { state, collectedAt: results.every((row) => row.terminal) ? utcNow() : null });
-  return { taskId: task.taskId, roundId: round.roundId, state, results, nextAction: state === "running" ? "Continue current Codex work; collect again only after a material transition or at integration." : "Integrate each useful handoff once, run deterministic checks, then record only acceptance-linked evidence." };
+  const updatedTask = updateTask(task.taskId, (current) => {
+    current.workGraph = (current.workGraph || []).map((node) => {
+      const job = (round.jobs || []).find((row) => row.workGraphNodeId === node.id);
+      if (!job) return node;
+      const result = results.find((row) => row.jobId === job.jobId);
+      if (!result || !result.terminal) return node;
+      return result.state === "completed"
+        ? { ...node, state: "awaiting-evidence", owner: null }
+        : { ...node, state: "pending", owner: null, lastFailure: String(result.blocker || "Worker failed.").slice(0, 1000) };
+    });
+    return current;
+  });
+  const failures = results.filter((row) => row.terminal && row.state !== "completed").map((row) => ({ goal: row.goal, blocker: row.blocker }));
+  const completed = results.filter((row) => row.terminal && row.state === "completed");
+  const nextPlan = state === "running" ? null : nextPlanForTask(updatedTask, failures, completed);
+  return { taskId: task.taskId, roundId: round.roundId, state, results, recoveryPlan: nextPlan, nextAction: state === "running" ? "Continue current Codex work; collect again only after a material transition or at integration." : nextPlan.instruction };
 }
 
 function collectPortfolioRound(args) {
   const portfolio = readPortfolio(args.portfolioId);
   const round = readPortfolioRound(portfolio.portfolioId, args.roundId);
+  if (round.state === "invalidated") throw new Error("This portfolio round was invalidated by a project contract revision and cannot be collected.");
   const results = (round.jobs || []).map((job) => ({ projectId: job.projectId, ...readJob(job.taskId, job.jobId, args.detail || "compact", Number(args.waitSeconds || 0)) }));
   const state = terminalRoundState(results);
   updatePortfolioRound(portfolio.portfolioId, round.roundId, { state, collectedAt: results.every((row) => row.terminal) ? utcNow() : null });
@@ -516,7 +854,9 @@ function collectPortfolioRound(args) {
         workGraph: (project.workGraph || []).map((node) => {
           const result = owned.find((row) => round.jobs.find((job) => job.jobId === row.jobId)?.workGraphNodeId === node.id);
           if (!result) return node;
-          return { ...node, state: result.state === "completed" ? "awaiting-evidence" : "blocked", owner: null };
+          return result.state === "completed"
+            ? { ...node, state: "awaiting-evidence", owner: null }
+            : { ...node, state: "pending", owner: null, lastFailure: String(result.blocker || "Worker failed.").slice(0, 1000) };
         }),
       };
     });
@@ -529,12 +869,20 @@ function collectPortfolioRound(args) {
       task.workGraph = (task.workGraph || []).map((node) => {
         const result = owned.find((row) => round.jobs.find((job) => job.jobId === row.jobId)?.workGraphNodeId === node.id);
         if (!result) return node;
-        return { ...node, state: result.state === "completed" ? "awaiting-evidence" : "blocked", owner: null };
+        return result.state === "completed"
+          ? { ...node, state: "awaiting-evidence", owner: null }
+          : { ...node, state: "pending", owner: null, lastFailure: String(result.blocker || "Worker failed.").slice(0, 1000) };
       });
       return task;
     });
   }
-  return { portfolioId: portfolio.portfolioId, roundId: round.roundId, state, results, nextAction: state === "running" ? "Continue current Codex work; collect again only after a material transition or at integration." : "Integrate each accepted project handoff once and record evidence only against that project's requirements." };
+  const recoveryPlans = Object.fromEntries(portfolio.projects.map((project) => {
+    const owned = results.filter((result) => result.projectId === project.projectId);
+    const failures = owned.filter((row) => row.terminal && row.state !== "completed").map((row) => ({ goal: row.goal, blocker: row.blocker }));
+    const completed = owned.filter((row) => row.terminal && row.state === "completed");
+    return [project.projectId, nextPlanForTask(readTask(project.taskId), failures, completed)];
+  }));
+  return { portfolioId: portfolio.portfolioId, roundId: round.roundId, state, results, recoveryPlans, nextAction: state === "running" ? "Continue current Codex work; collect again only after a material transition or at integration." : "Integrate each listed handoff once, record project-local evidence, then continue the highest-value ready recovery plan." };
 }
 
 function collectRound(args) {
@@ -618,12 +966,16 @@ function singleTaskSummary(task) {
     taskId: task.taskId,
     projectId: task.projectId || null,
     state: task.state,
+    contractVersion: Number(task.contractVersion || 1),
     outcome: task.outcome,
+    outcomeReconciliation: task.outcomeReconciliation || null,
+    projectContext: task.projectContext || null,
     blockers: task.blockers || [],
     workGraph: task.workGraph || [],
     progress: { passing: requirements.filter((item) => item.status === "passing").length, required: requirements.filter((item) => item.required).length },
     requirements,
     currentCodex: task.currentCodex,
+    nextPlan: nextPlanForTask(task),
     latestRound: lastRound ? { roundId: lastRound.roundId, state: lastRound.state, workers: (lastRound.jobs || []).map((job) => ({ jobId: job.jobId, provider: job.provider, model: job.model, goal: job.goal })) } : null,
     completionAllowed: task.state === "completed",
   };
@@ -702,7 +1054,9 @@ module.exports = {
   completeTask,
   dispatchRound,
   highestValueReadyProject,
+  nextPlanForTask,
   quotaPoolIds,
+  reconcileTask,
   recordEvidence,
   requirementRows,
   startTask,

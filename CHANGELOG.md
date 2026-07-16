@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0 - 2026-07-17
+
+- Added bounded project-context discovery from `.codex/PROJECT_OUTCOME.md`, `.codex/ACCEPTANCE.json`, and optional `.ai-mobile/project.json`.
+- Prevented method-only contracts such as reviews or inspections from silently replacing a broader operational project outcome.
+- Added `reconcile-task` so a latest user correction updates the same task, invalidates stale rounds and workers, and preserves only matching acceptance evidence.
+- Added automatic acceptance work graphs and concrete current-Codex critical-path units when the request does not provide a plan.
+- Prioritized an unresolved `current_slice_requirement_id` when the project contract identifies the active acceptance slice.
+- Added typed recovery transitions for ownership, capacity, economics, dependency, and contract rejections.
+- Made terminal collection return one-time integration actions and the next acceptance-linked current-Codex unit.
+- Added direct core and stdio MCP end-to-end tests for outcome recovery and reconciliation.
+
 ## 1.0.0 - 2026-07-16
 
 - Rebuilt AI Mobile around finite outcome tasks and observed execution rounds instead of manager-only control rooms, Goals, heartbeats, automations, or status polling.

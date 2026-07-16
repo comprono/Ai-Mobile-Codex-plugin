@@ -4,7 +4,7 @@ const readline = require("node:readline");
 const { inventory } = require("../core/capacity");
 const { createJob } = require("../core/job-store");
 const { providerHistory } = require("../core/provider-history");
-const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, recordEvidence, startTask, taskSummary } = require("../core/task-orchestrator");
+const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, reconcileTask, recordEvidence, startTask, taskSummary } = require("../core/task-orchestrator");
 const { cleanupStaleLeases, resourceLeaseSnapshot } = require("../core/resource-leases");
 const { cleanupAbandonedWorktrees, storageStatus } = require("../core/workspace-isolation");
 const { readProfile, writeProfile } = require("../lib/orchestrator-profile");
@@ -50,8 +50,9 @@ const WORK_UNIT_SCHEMA = {
 };
 
 const ACCEPTANCE_SCHEMA = { type: "array", minItems: 1, maxItems: 12, items: { oneOf: [{ type: "string" }, { type: "object", required: ["description"], properties: { description: { type: "string" }, required: { type: "boolean" }, minimumEvidenceLevel: { enum: EVIDENCE_LEVELS } } }] } };
-const PROJECT_SCHEMA = { type: "object", required: ["workspace", "outcome", "acceptanceEvidence"], properties: {
+const PROJECT_SCHEMA = { type: "object", required: ["workspace"], properties: {
   projectId: { type: "string" }, workspace: { type: "string" }, outcome: { type: "string" }, acceptanceEvidence: ACCEPTANCE_SCHEMA,
+  userRequest: { type: "string" }, outcomeAuthority: { enum: ["auto", "user"] },
   constraints: { type: "array", items: { type: "string" } }, priority: { type: "number", minimum: 1, maximum: 100 },
   blockers: { type: "array", items: { oneOf: [{ type: "string" }, { type: "object", properties: { id: { type: "string" }, description: { type: "string" }, resolved: { type: "boolean" } } }] } },
   workGraph: { type: "array", items: { type: "object", required: ["goal"], properties: { id: { type: "string" }, goal: { type: "string" }, dependsOn: { type: "array", items: { type: "string" } }, priority: { type: "number", minimum: 1, maximum: 100 }, state: { enum: ["pending", "running", "awaiting-evidence", "completed", "blocked"] } } } },
@@ -59,8 +60,11 @@ const PROJECT_SCHEMA = { type: "object", required: ["workspace", "outcome", "acc
 const TASK_OR_PORTFOLIO = { anyOf: [{ required: ["taskId"] }, { required: ["portfolioId"] }] };
 
 const TOOLS = [
-  { name: "start-task", description: "First AI Mobile call for one project or a multi-project portfolio. Creates one finite contract and one passive machine/provider inventory. It starts no worker, UI, loop, Goal, automation, or heartbeat; current Codex advances the highest-value ready critical path next.", inputSchema: { type: "object", required: ["outcome"], anyOf: [{ required: ["workspace", "acceptanceEvidence"] }, { required: ["projects"] }], properties: {
-    workspace: { type: "string" }, outcome: { type: "string" }, acceptanceEvidence: ACCEPTANCE_SCHEMA, projects: { type: "array", minItems: 2, maxItems: 20, items: PROJECT_SCHEMA }, constraints: { type: "array", items: { type: "string" } }, minimumEvidenceLevel: { enum: EVIDENCE_LEVELS }, currentCodexModel: { type: "string" }, currentModel: { type: "string" }, currentCodex: { type: "object", properties: { model: { type: "string" } } }, codexReservePercent: { type: "number", minimum: 5, maximum: 50 }, horizonHours: { type: "number", minimum: 1, maximum: 24 }
+  { name: "start-task", description: "First AI Mobile call for one project or a multi-project portfolio. Recovers bounded project intent, creates one finite contract, and captures one passive machine/provider inventory. It starts no worker, UI, loop, Goal, automation, or heartbeat.", inputSchema: { type: "object", anyOf: [{ required: ["workspace"] }, { required: ["projects"] }], properties: {
+    workspace: { type: "string" }, outcome: { type: "string" }, userRequest: { type: "string" }, outcomeAuthority: { enum: ["auto", "user"] }, acceptanceEvidence: ACCEPTANCE_SCHEMA, projects: { type: "array", minItems: 2, maxItems: 20, items: PROJECT_SCHEMA }, constraints: { type: "array", items: { type: "string" } }, minimumEvidenceLevel: { enum: EVIDENCE_LEVELS }, currentCodexModel: { type: "string" }, currentModel: { type: "string" }, currentCodex: { type: "object", properties: { model: { type: "string" } } }, codexReservePercent: { type: "number", minimum: 5, maximum: 50 }, horizonHours: { type: "number", minimum: 1, maximum: 24 }
+  } } },
+  { name: "reconcile-task", description: "Apply the latest user correction or refreshed project contract to the existing task. It invalidates stale dependent state, safely cancels stale workers by default, preserves matching acceptance evidence, and returns the next owned action.", inputSchema: { type: "object", ...TASK_OR_PORTFOLIO, properties: {
+    taskId: { type: "string" }, portfolioId: { type: "string" }, projectId: { type: "string" }, outcome: { type: "string" }, userRequest: { type: "string" }, outcomeAuthority: { enum: ["auto", "user"] }, acceptanceEvidence: ACCEPTANCE_SCHEMA, constraints: { type: "array", items: { type: "string" } }, blockers: PROJECT_SCHEMA.properties.blockers, workGraph: PROJECT_SCHEMA.properties.workGraph, minimumEvidenceLevel: { enum: EVIDENCE_LEVELS }, refreshProjectContext: { type: "boolean" }, cancelActiveWorkers: { type: "boolean" }, currentCodexModel: { type: "string" }, codexReservePercent: { type: "number", minimum: 5, maximum: 50 }
   } } },
   { name: "dispatch-round", description: "After reconnaissance, record current Codex's highest-value critical path and allocate a finite set of disjoint worker units under global provider, quota, RAM, storage, and fairness gates.", inputSchema: { type: "object", required: ["currentCodex", "workUnits"], ...TASK_OR_PORTFOLIO, properties: {
     taskId: { type: "string" }, portfolioId: { type: "string" }, horizonHours: { type: "number", minimum: 1, maximum: 24 }, currentCodex: { type: "object", required: ["goal"], properties: { projectId: { type: "string" }, goal: { type: "string" }, files: { type: "array", items: { type: "string" } }, acceptanceCriteria: { type: "array", items: { type: "string" } }, priorityOverrideReason: { type: "string" } } }, workUnits: { type: "array", maxItems: 40, items: WORK_UNIT_SCHEMA }
@@ -83,6 +87,7 @@ async function invoke(name, args = {}, entrypoint) {
     const resources = await inventory({ refresh: false });
     return { runtimeVersion: pluginVersion(), ...startTask(args, resources) };
   }
+  if (name === "reconcile-task") return { runtimeVersion: pluginVersion(), ...reconcileTask(args) };
   if (name === "dispatch-round") {
     const resources = await inventory({ forDispatch: true });
     return { runtimeVersion: pluginVersion(), ...dispatchRound(args, resources, providerHistory(), (contract) => createJob(contract, entrypoint)) };

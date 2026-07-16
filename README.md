@@ -8,14 +8,15 @@ The objective is practical: finish more verified work without spending more toke
 
 ## How It Works
 
-1. `start-task` records one finite outcome contract and passively discovers machine and provider capacity once.
-2. Current Codex inspects the minimum authoritative state and immediately advances the highest-value ready critical path.
-3. `dispatch-round` assigns only dependency-ready, disjoint, economically useful work to available headless providers.
-4. Machine-wide leases protect provider slots, quota pools, RAM, file ownership, Codex reserve, and worktree storage across every task and project.
-5. Current Codex continues working while external workers run. No manager loop or polling feed is created.
-6. `collect-round` returns compact handoffs and patches once, then removes collected editing worktrees.
-7. Current Codex integrates accepted work, runs deterministic checks, and records project-specific evidence.
-8. `complete-task` refuses completion until every required project has its own sufficient evidence.
+1. `start-task` reads bounded project contracts, prevents a diagnostic method from replacing the real outcome, imports the acceptance gap, and discovers capacity once.
+2. Current Codex immediately starts the returned highest-value acceptance unit.
+3. `reconcile-task` applies a latest user correction to the same task, invalidates stale dependent work, and preserves only matching evidence.
+4. `dispatch-round` assigns only dependency-ready, disjoint, economically useful work to available headless providers.
+5. Machine-wide leases protect provider slots, quota pools, RAM, file ownership, Codex reserve, and worktree storage across every task and project.
+6. Current Codex continues working while external workers run. No manager loop or polling feed is created.
+7. `collect-round` returns each compact handoff once, cleans editing worktrees, and supplies an owned recovery transition for rejection or failure.
+8. Current Codex integrates accepted work, runs deterministic checks, and records project-specific evidence.
+9. `complete-task` refuses completion until every required project has its own sufficient evidence.
 
 AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, or recurring status loop.
 
@@ -24,9 +25,9 @@ AI Mobile starts no desktop application, Goal, automation, heartbeat, manager pr
 For one project:
 
 ```text
-@ai-mobile Finish this project efficiently.
-Outcome: <measurable result>
-Acceptance: <positive observable proof>
+@ai-mobile Finish this project efficiently: <latest user request>
+Outcome and acceptance may be omitted when .codex/PROJECT_OUTCOME.md and
+.codex/ACCEPTANCE.json already define them.
 Constraints: <important boundaries>
 ```
 
@@ -80,7 +81,8 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 
 | Tool | Purpose |
 | --- | --- |
-| `start-task` | Start one finite project task or multi-project portfolio and capture one passive capacity snapshot. |
+| `start-task` | Recover bounded project intent, start one finite task or portfolio, and capture one passive capacity snapshot. |
+| `reconcile-task` | Apply the latest correction to the same task, invalidate stale work, preserve matching evidence, and return the next action. |
 | `dispatch-round` | Keep current Codex active and allocate globally safe independent worker units. |
 | `collect-round` | Collect one bounded round and clean collected editing worktrees. |
 | `record-evidence` | Attach verified evidence to one task or one named portfolio project. |
@@ -93,6 +95,8 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 ## Token Efficiency
 
 - Trivial or tightly coupled work stays in current Codex.
+- Method-only contracts are reconciled against bounded project intent before any worker starts.
+- Rejected or failed delegation returns an owner, recovery trigger, recovery action, and next acceptance unit instead of ending the task.
 - Workers receive compact outcome, ownership, acceptance, and integration contracts, never the parent transcript.
 - Delegation accounts for prompt, worker output, wait, verification, retry, and integration cost.
 - Small or overlapping work is rejected from delegation.
@@ -130,6 +134,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 
 # Start or advance a task/portfolio from a JSON contract
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" start-task -ContractFile ".\start.json"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" reconcile-task -ContractFile ".\correction.json"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" dispatch-round -ContractFile ".\round.json"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" collect-round -ContractFile ".\collect.json"
 
@@ -150,6 +155,7 @@ Run all release gates before publishing:
 
 ```powershell
 node .\scripts\self-test.js
+node .\scripts\outcome-recovery-e2e.js
 node .\scripts\state-capacity-regression.js
 node .\scripts\orchestration-regression.js
 node .\scripts\economic-regression.js
