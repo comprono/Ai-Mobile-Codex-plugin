@@ -27,7 +27,7 @@ function project(name) {
   git(workspace, ["config", "user.name", "AI Mobile Test"]);
   git(workspace, ["add", "."]);
   git(workspace, ["commit", "-m", "fixture"]);
-  return workspace;
+  return spawnSync("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).stdout.trim();
 }
 
 const alpha = project("alpha");
