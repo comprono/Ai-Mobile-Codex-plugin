@@ -95,7 +95,17 @@ function requirementRows(values, defaultLevel = "end-to-end") {
     }));
     const sourceStatus = ["passing", "failing", "blocked"].includes(item.status) ? item.status : "failing";
     const status = sourceStatus === "passing" && evidence.length ? "passing" : sourceStatus === "blocked" ? "blocked" : "failing";
-    return { id: safeContractId(item.id, "A" + (index + 1)), description, required: item.required !== false, status, minimumEvidenceLevel, evidence: status === "passing" ? evidence : [], sourceStatus, imported: item.imported === true };
+    return {
+      id: safeContractId(item.id, "A" + (index + 1)),
+      description,
+      required: item.required !== false,
+      status,
+      minimumEvidenceLevel,
+      evidence: status === "passing" ? evidence : [],
+      blocker: status === "blocked" ? (item.blocker || null) : null,
+      sourceStatus,
+      imported: item.imported === true,
+    };
   });
 }
 
@@ -192,6 +202,7 @@ function mergeRequirements(existing, proposed) {
       status: match.status,
       evidence: [...(match.evidence || [])].slice(-10),
       sourceStatus: row.sourceStatus || match.sourceStatus,
+      blocker: match.status === "blocked" ? (row.blocker || match.blocker || null) : null,
     };
   });
 }
@@ -276,6 +287,66 @@ function nextPlanForTask(task, failures = [], completed = []) {
   };
 }
 
+function executionContract(task, failures = [], completed = []) {
+  const plan = nextPlanForTask(task, failures, completed);
+  const requirement = (task.requirements || []).find((row) => row.id === plan.requirementId) || null;
+  const blocker = requirement?.status === "blocked" ? (requirement.blocker || null) : null;
+  const userActionRequired = plan.state === "blocked" && /\b(user|human)\b/i.test(String(blocker?.owner || ""));
+  const recoveryAction = String(blocker?.recoveryAction || "").trim();
+  const mustStartNow = plan.state !== "blocked" || (!userActionRequired && Boolean(recoveryAction));
+  const action = plan.state === "blocked" && recoveryAction ? recoveryAction : plan.goal;
+  return {
+    mode: "same-turn",
+    status: userActionRequired ? "decision-required" : mustStartNow ? "active" : "blocked",
+    owner: userActionRequired ? blocker.owner : "current-codex",
+    action,
+    reason: blocker?.reason || plan.reason,
+    requirementId: plan.requirementId || null,
+    workGraphNodeId: plan.workGraphNodeId || null,
+    mustStartNow,
+    userActionRequired,
+    mayEndTurn: !mustStartNow,
+    blocker,
+    reporting: {
+      when: ["resource assignment", "accepted evidence", "new blocker", "material recovery transition"],
+      format: "Done / Active / Blocked / Resources / Next",
+      nextRule: "Next names the material action already starting; never hand a safe executable action back to the user.",
+    },
+    stopConditions: [
+      "All required acceptance evidence passes.",
+      "An exact user decision or authorization is required and no other dependency-ready work remains.",
+      "A genuine blocker has no safe recovery action and no other dependency-ready work remains.",
+    ],
+  };
+}
+
+function resourceReport(task, workers = [], rejected = []) {
+  const providers = task.capacitySnapshot?.providers || {};
+  const workerList = Array.isArray(workers) ? workers : [];
+  const selectedWorkers = workerList.map((worker) => ({
+    actor: "external-worker",
+    provider: worker.provider,
+    model: worker.model || "provider-default",
+    role: worker.goal || "bounded independent work",
+    reason: worker.reason || "Selected by the capacity, fit, safety, and economic router.",
+  }));
+  const decisions = Object.entries(providers).map(([provider, state]) => {
+    const selected = workerList.find((worker) => worker.provider === provider);
+    if (selected) return { provider, status: "selected", model: selected.model || "provider-default", reason: selected.reason || "Best eligible fit for an accepted independent lane." };
+    if (!state.available || !state.authenticated) return { provider, status: "unavailable", models: state.models || [], reason: state.reason || "Provider is unavailable or unauthenticated." };
+    if (provider === "codex") return { provider: "codex-cli", status: "reserved", models: state.models || [], reason: `Current Codex is active; no additional Codex CLI lane was accepted, preserving the ${task.currentCodex?.reservePercent || 15}% integration reserve.` };
+    return { provider, status: "idle", models: state.models || [], reason: "No independently owned, economically positive lane has been accepted for this provider yet." };
+  });
+  return {
+    observedAt: task.capacitySnapshot?.generatedAt || null,
+    selected: [
+      { actor: "current-codex", model: task.currentCodex?.model || "current-task-model", role: task.currentCodex?.goal || "highest-value critical path", reason: `Current Codex owns the critical path while preserving a ${task.currentCodex?.reservePercent || 15}% reserve.` },
+      ...selectedWorkers,
+    ],
+    providers: decisions,
+    rejected: (rejected || []).slice(0, 8).map((row) => ({ goal: row.goal || "", reason: row.reason || row.blocker || "Rejected by routing gates." })),
+  };
+}
 function startSingleTask(args, resources, portfolioContext = {}) {
   const context = discoverProjectContext(args.workspace);
   const outcomeReconciliation = resolveOutcome(args, context);
@@ -373,7 +444,9 @@ function startPortfolio(args, resources) {
     projects: portfolio.projects.map((project) => ({ projectId: project.projectId, taskId: project.taskId, workspace: project.workspace, outcome: project.outcome, priority: project.priority, blockers: project.blockers, requirements: project.requirements, workGraph: project.workGraph })),
     capacity: portfolio.capacitySnapshot,
     currentCodex: portfolio.currentCodex,
-    nextAction: "Current Codex should inspect and actively advance the recommended project. Dispatch a finite round only for dependency-ready work that is disjoint and cheaper on another available CLI.",
+    execution: currentTask ? executionContract(currentTask) : { mode: "same-turn", status: "blocked", mustStartNow: false, mayEndTurn: true, reason: "No active portfolio project is ready." },
+    resources: currentTask ? resourceReport(currentTask) : { observedAt: portfolio.capacitySnapshot?.generatedAt || null, selected: [], providers: [] },
+    nextAction: currentTask ? executionContract(currentTask).action : "Resolve the recorded portfolio blocker.",
     reportingRule: "Report only assignments, accepted project evidence, a real blocker, or the next material action. Do not create a Goal, manager loop, heartbeat, automation, UI launch, or status feed.",
   };
 }
@@ -387,11 +460,13 @@ function startTask(args, resources) {
     outcome: record.outcome,
     outcomeReconciliation: record.outcomeReconciliation,
     projectContext: record.projectContext,
-    requirements: record.requirements.map(({ id, description, minimumEvidenceLevel, status }) => ({ id, description, minimumEvidenceLevel, status })),
+    requirements: record.requirements.map(({ id, description, minimumEvidenceLevel, status, blocker }) => ({ id, description, minimumEvidenceLevel, status, blocker: blocker || null })),
     workGraph: record.workGraph,
     capacity: record.capacitySnapshot,
     currentCodex: record.currentCodex,
-    nextAction: "Current Codex should start the returned acceptance-linked unit now, inspect only enough state to establish file ownership, and dispatch only new disjoint work with positive total economics.",
+    execution: executionContract(record),
+    resources: resourceReport(record),
+    nextAction: executionContract(record).action,
     reportingRule: "Report only assignments, accepted evidence, a real blocker, or the next material action. Do not create a Goal, manager loop, heartbeat, automation, or status feed.",
   };
 }
@@ -640,7 +715,9 @@ function dispatchSingleRound(args, resources, histories, createJob) {
     workers: jobs,
     rejected,
     recoveryPlan: nextPlan,
-    nextAction: jobs.length ? "Continue current Codex work and collect this round once at the natural integration point." : nextPlan.instruction,
+    execution: { ...executionContract(updatedTask, rejected), status: "active", action: currentGoal, mustStartNow: true, mayEndTurn: false },
+    resources: resourceReport(updatedTask, jobs, rejected),
+    nextAction: currentGoal,
   };
 }
 
@@ -797,6 +874,7 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
   const recoveryPlans = Object.fromEntries(portfolio.projects.map((project) => [
     project.projectId, nextPlanForTask(readTask(project.taskId), rejected.filter((row) => row.projectId === project.projectId)),
   ]));
+  const currentTaskAfterDispatch = readTask(currentProject.taskId);
   return {
     portfolioId: portfolio.portfolioId,
     roundId: round.roundId,
@@ -805,7 +883,9 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     workers: jobs,
     rejected,
     recoveryPlans,
-    nextAction: jobs.length ? "Continue current Codex work. Collect this portfolio round once at the natural integration point." : recoveryPlans[currentProjectId].instruction,
+    execution: { ...executionContract(currentTaskAfterDispatch, rejected.filter((row) => !row.projectId || row.projectId === currentProjectId)), status: "active", action: currentGoal, mustStartNow: true, mayEndTurn: false },
+    resources: resourceReport(currentTaskAfterDispatch, jobs, rejected),
+    nextAction: currentGoal,
   };
 }
 
@@ -835,7 +915,7 @@ function collectSingleRound(args) {
   const failures = results.filter((row) => row.terminal && row.state !== "completed").map((row) => ({ goal: row.goal, blocker: row.blocker }));
   const completed = results.filter((row) => row.terminal && row.state === "completed");
   const nextPlan = state === "running" ? null : nextPlanForTask(updatedTask, failures, completed);
-  return { taskId: task.taskId, roundId: round.roundId, state, results, recoveryPlan: nextPlan, nextAction: state === "running" ? "Continue current Codex work; collect again only after a material transition or at integration." : nextPlan.instruction };
+  return { taskId: task.taskId, roundId: round.roundId, state, results, recoveryPlan: nextPlan, execution: executionContract(updatedTask, failures, completed), resources: resourceReport(updatedTask, round.jobs || [], failures), nextAction: executionContract(updatedTask, failures, completed).action };
 }
 
 function collectPortfolioRound(args) {
@@ -882,7 +962,8 @@ function collectPortfolioRound(args) {
     const completed = owned.filter((row) => row.terminal && row.state === "completed");
     return [project.projectId, nextPlanForTask(readTask(project.taskId), failures, completed)];
   }));
-  return { portfolioId: portfolio.portfolioId, roundId: round.roundId, state, results, recoveryPlans, nextAction: state === "running" ? "Continue current Codex work; collect again only after a material transition or at integration." : "Integrate each listed handoff once, record project-local evidence, then continue the highest-value ready recovery plan." };
+  const activeTask = readTask(readPortfolio(portfolio.portfolioId).currentCodex?.taskId || portfolio.projects[0].taskId);
+  return { portfolioId: portfolio.portfolioId, roundId: round.roundId, state, results, recoveryPlans, execution: executionContract(activeTask), resources: resourceReport(activeTask, round.jobs || [], results.filter((row) => row.terminal && row.state !== "completed")), nextAction: executionContract(activeTask).action };
 }
 
 function collectRound(args) {
@@ -902,6 +983,7 @@ function recordTaskEvidence(taskId, entries) {
       if (entry.passed === true) {
         if (EVIDENCE_RANK[level] < EVIDENCE_RANK[requirement.minimumEvidenceLevel]) throw new Error(`${requirement.id} requires ${requirement.minimumEvidenceLevel} evidence; ${level} is insufficient.`);
         requirement.status = "passing";
+        requirement.blocker = null;
       }
       task.evidence = [...(task.evidence || []), { requirementId: requirement.id, ...evidence }].slice(-50);
       if (entry.workGraphNodeId) {
@@ -961,7 +1043,7 @@ function recordEvidence(args) {
 function singleTaskSummary(task) {
   const lastRoundRef = (task.rounds || []).at(-1);
   const lastRound = lastRoundRef ? readRound(task.taskId, lastRoundRef.roundId) : null;
-  const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, required: item.required !== false, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length }));
+  const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, required: item.required !== false, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length, blocker: item.blocker || null }));
   return {
     taskId: task.taskId,
     projectId: task.projectId || null,
@@ -976,6 +1058,8 @@ function singleTaskSummary(task) {
     requirements,
     currentCodex: task.currentCodex,
     nextPlan: nextPlanForTask(task),
+    execution: executionContract(task),
+    resources: resourceReport(task, lastRound?.jobs || [], lastRound?.rejected || []),
     latestRound: lastRound ? { roundId: lastRound.roundId, state: lastRound.state, workers: (lastRound.jobs || []).map((job) => ({ jobId: job.jobId, provider: job.provider, model: job.model, goal: job.goal })) } : null,
     completionAllowed: task.state === "completed",
   };

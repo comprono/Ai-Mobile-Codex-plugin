@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: complete
-Updated: 2026-07-16T22:47:12Z
+Updated: 2026-07-17T15:23:00Z
 
 ## North Star
 
@@ -22,6 +22,7 @@ AI Mobile must make current Codex and available local AI CLIs work as one effici
 - A project request cannot silently narrow an existing operational outcome into a method such as review, inspection, planning, or monitoring.
 - The latest user correction can revise an active task without preserving stale outcome, acceptance, worker, or plan assumptions.
 - A rejected or completed worker round returns the next acceptance-linked recovery transition instead of leaving Codex at a dead end.
+- An invocation never ends at passive diagnosis while an authorized, dependency-ready recovery action remains: current Codex starts it in the same turn, and model use plus material progress are reported with reasons.
 
 ## User Intent
 
@@ -45,7 +46,7 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 ### Non-goals
 
-- Managing Job Vibhu itself or guaranteeing job applications or interviews.
+- Managing any downstream project itself or guaranteeing external business outcomes.
 - Creating background project managers, schedules, Goals, or control-room feeds.
 - Treating the classic ChatGPT desktop app as a worker without a supported callable surface.
 - Automatically approving credentials, browser actions, live submissions, or irreversible operations.
@@ -69,6 +70,8 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - Rejected or completed worker lanes now return typed recovery or exact integration and acceptance identifiers rather than an unowned generic instruction.
 - A real installed Antigravity CLI canary used Gemini 3.5 Flash Medium, returned the exact disposable marker, recorded integration evidence, completed successfully, and opened no desktop UI.
 - All ten deterministic release suites pass, including portfolio isolation, global resource leases, storage lifecycle cleanup, and no automatic desktop launch.
+- A production-project field test exposed that imported blocked requirements lose their owner, recovery trigger, and recovery action; start-task also reports provider availability without an explicit use/non-use decision, allowing Codex to stop after diagnosis.
+- AI Mobile 1.1.1 now preserves executable blockers, emits same-turn execution and reasoned resource reports, passes 11 deterministic suites and both scanner profiles at 100, and passes an installed production-project field test.
 
 ## Context Pointers
 
@@ -98,16 +101,16 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 - A method-shaped task contract can faithfully orchestrate the wrong outcome; project intent must be reconciled before dispatch.
 - A latest user correction must invalidate stale outcome, acceptance, round, and worker assumptions instead of continuing sunk work.
-- Rejected delegation is a planning event, not a reason to stop or return an unowned "do it directly" instruction.
+- Rejected delegation or passive capacity discovery is a planning event, not a stopping point; preserve executable recovery metadata and start the owned same-turn action.
 - Worker activity, polling, process health, and review chains are not outcome progress and may cost more than direct work.
 - Resource and worktree limits must remain machine-wide and bounded while the outcome-recovery layer changes.
 
 ## Current Slice
 
 - Acceptance ID: none
-- Goal: AI Mobile 1.1.0 outcome recovery and task reconciliation are locally complete.
+- Goal: AI Mobile 1.1.1 same-turn execution and transparent resource routing are complete.
 - Evidence target: all required entries in `.codex/ACCEPTANCE.json` pass.
 
 ## Next
 
-Commit and publish AI Mobile 1.1.0, restart Codex, then validate it against Job Vibhu as a separate project phase.
+Restart Codex so new tasks load AI Mobile 1.1.1, then continue the target project from the returned same-turn execution contract.

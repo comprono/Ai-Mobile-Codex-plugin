@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A finite, capacity-aware Codex orchestrator for local Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -40,6 +40,9 @@
     ],
     "category": "Productivity",
     "capabilities": [
+      "Same-turn current Codex continuation",
+      "Executable blocker recovery contracts",
+      "Model selection and non-selection reports",
       "Current Codex critical-path ownership",
       "Finite outcome and acceptance contracts",
       "Bounded project outcome recovery",

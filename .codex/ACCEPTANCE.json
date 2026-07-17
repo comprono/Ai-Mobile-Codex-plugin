@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-16T22:47:12Z",
+  "updated_utc": "2026-07-17T15:23:00Z",
   "project_state": "complete",
   "current_slice_requirement_id": null,
   "requirements": [
@@ -226,6 +226,28 @@
           "ref": "full regression suite; plugin-scanner 2.0.1109; installed cache 1.1.0; node scripts/installed-provider-canary.js",
           "summary": "All ten deterministic suites passed; public and strict lint scored 100; full scan scored 100 with zero findings; installed MCP tests passed; and an authenticated Antigravity Gemini 3.5 Flash Medium canary returned the exact marker with no desktop UI.",
           "verified_utc": "2026-07-16T22:47:12Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "EXECUTION_CONTINUITY",
+      "description": "AI Mobile preserves executable blocker transitions, starts the next authorized dependency-ready current-Codex action in the same turn, and reports which models/providers are used or idle with concrete reasons.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Start a disposable task whose highest-priority requirement is blocked with an owner, recovery trigger, and recovery action while another requirement is ready.",
+        "Prove the blocker metadata survives import and the returned execution contract requires current Codex to start the ready action immediately.",
+        "Prove the resource report names current Codex and every external provider as selected, idle, or unavailable with model and reason.",
+        "Prove dispatch reports selected worker models and rejected/non-selected reasons without asking the user to operate the next safe action."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "node scripts/continuation-regression.js; installed cache 1.1.1 production-project start-task field test",
+          "summary": "The regression and installed field test preserved an executable runtime repair transition, required current Codex to start the ready parser slice in the same turn, reserved extra Codex CLI capacity, explained idle/unavailable providers, and reported a selected Claude Sonnet worker with its routing reason.",
+          "verified_utc": "2026-07-17T15:23:00Z"
         }
       ],
       "blocker": null

@@ -20,6 +20,8 @@ The objective is practical: finish more verified work without spending more toke
 
 AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, or recurring status loop.
 
+Every tool response includes a same-turn execution contract and a compact resource report. If safe work remains, current Codex starts it before replying; `Next` describes work already beginning, not a command for the user to operate.
+
 ## Use
 
 For one project:
@@ -156,6 +158,7 @@ Run all release gates before publishing:
 ```powershell
 node .\scripts\self-test.js
 node .\scripts\outcome-recovery-e2e.js
+node .\scripts\continuation-regression.js
 node .\scripts\state-capacity-regression.js
 node .\scripts\orchestration-regression.js
 node .\scripts\economic-regression.js

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 - 2026-07-17
+
+- Preserved blocker owner, recovery trigger, and recovery action when importing project acceptance contracts.
+- Added a same-turn execution contract that prevents passive diagnosis from ending work while a safe dependency-ready action remains.
+- Added explicit resource reports naming current Codex and every provider as selected, idle, or unavailable with model and reason.
+- Made dispatch and collection return the current action already in progress instead of user-operated orchestration instructions.
+- Hardened the AI Mobile skill so exact authorization is requested only when necessary while other safe work continues.
+- Added a production-project-derived continuation regression covering executable blockers, direct Codex work, and Claude Sonnet routing evidence.
+
 ## 1.1.0 - 2026-07-17
 
 - Added bounded project-context discovery from `.codex/PROJECT_OUTCOME.md`, `.codex/ACCEPTANCE.json`, and optional `.ai-mobile/project.json`.

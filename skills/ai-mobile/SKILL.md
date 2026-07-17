@@ -48,6 +48,18 @@ After `start-task`:
 8. Call `record-evidence` only for acceptance-linked proof. Portfolio evidence must name its project and never satisfies another project. Then call `complete-task`; it completes each project independently and the portfolio only after all required projects pass.
 
 A further round is allowed only after the previous round is terminal and integrated, and only when another independent acceptance-linked unit remains. Long projects use several finite rounds, not a perpetual manager loop.
+## Continue Without User-Operated Orchestration
+
+The `execution` object is a binding same-turn contract for Codex, not a suggestion for the user:
+
+- If `mustStartNow` is true, begin `execution.action` in the same turn before producing a final answer. A diagnostic, capacity inventory, test result, or blocker discovery is not a stopping point.
+- Never end by telling the user to run a safe command, perform the next repair, call another AI Mobile tool, or ask for another prompt. Do it under the existing authorization when it is reversible and in scope.
+- When an exact authorization, credential, CAPTCHA, login, or irreversible decision is genuinely required, state the single decision precisely. Continue every other dependency-ready safe unit before pausing.
+- A blocked acceptance item is still executable work when it carries a non-user owner and `recoveryAction`. Start that recovery action; do not merely repeat the blocker.
+- After bounded reconnaissance, call `dispatch-round` when a disjoint economical lane exists. If no worker is assigned, continue directly and report the rejection reason once.
+- Report the current Codex model and each external provider as selected, idle, or unavailable with the routing reason. Availability alone is not a resource plan.
+- Continue through finite implementation, verification, evidence recording, and the next acceptance-linked slice until a listed stop condition is actually reached.
+- The plugin does not create a background loop. Continuity means Codex keeps acting within the current turn and subsequent explicit continuations, with durable task state between them.
 
 ## Resource Judgment
 
@@ -90,10 +102,12 @@ Report only material transitions, normally once after assignments and once after
 - `Done`: accepted change or verified outcome;
 - `Active`: current Codex unit and genuinely running independent workers;
 - `Blocked`: exact evidence, owner, and recovery action;
-- `Capacity`: only fresh facts that changed the routing decision;
+- `Resources`: current Codex and every considered provider as selected, idle, or unavailable, naming the model and routing reason;
 - `Next`: the material action already starting.
 
 Do not report dispatches, elapsed time, polling, worker count, healthy processes, or token use as progress. A worker completion, passing unit test, service restart, or running process cannot complete the project unless it proves the stated acceptance evidence.
+
+Do not send a final response while `execution.mustStartNow` is true. `Next` is never homework for the user; it describes the action Codex has already begun.
 
 ## Tool Surface
 

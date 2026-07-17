@@ -73,6 +73,19 @@ function normalizeEvidence(value) {
   };
 }
 
+function normalizeBlocker(value) {
+  if (!value || typeof value !== "object") return null;
+  const reason = String(value.reason || value.description || "").trim().slice(0, 1200);
+  const recoveryAction = String(value.recovery_action || value.recoveryAction || "").trim().slice(0, 1200);
+  if (!reason && !recoveryAction) return null;
+  return {
+    owner: String(value.owner || "current-codex").trim().slice(0, 160),
+    reason,
+    recoveryTrigger: String(value.recovery_trigger || value.recoveryTrigger || "New authoritative evidence changes the blocker.").trim().slice(0, 800),
+    recoveryAction: recoveryAction || "Inspect the authoritative blocker and continue with the smallest safe recovery action.",
+  };
+}
+
 function normalizeRequirement(value, index, defaultLevel = "end-to-end") {
   const row = typeof value === "string" ? { description: value } : value || {};
   const description = String(row.description || "").trim().slice(0, 1200);
@@ -94,6 +107,7 @@ function normalizeRequirement(value, index, defaultLevel = "end-to-end") {
     evidence: passing ? evidence : [],
     sourceStatus,
     imported: true,
+    blocker: sourceStatus === "blocked" ? normalizeBlocker(row.blocker) : null,
   };
 }
 

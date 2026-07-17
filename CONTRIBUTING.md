@@ -12,6 +12,8 @@ Contributions must preserve these invariants:
 - runtime state stays under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed projects;
 - writers use isolated Git worktrees and return patches;
 - multi-project state and evidence remain isolated, and machine-wide leases prevent provider, quota, file, and storage conflicts;
+- imported blockers retain their executable owner, trigger, and recovery action;
+- safe dependency-ready work starts in current Codex before a response hands control back to the user;
 - cached negative provider evidence is refreshed before dispatch rejection;
 - completion requires acceptance evidence;
 - startup and discovery never open desktop applications;
@@ -22,6 +24,7 @@ Contributions must preserve these invariants:
 ```powershell
 node .\scripts\self-test.js
 node .\scripts\outcome-recovery-e2e.js
+node .\scripts\continuation-regression.js
 node .\scripts\state-capacity-regression.js
 node .\scripts\orchestration-regression.js
 node .\scripts\economic-regression.js
