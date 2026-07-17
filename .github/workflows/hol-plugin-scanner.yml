@@ -23,6 +23,9 @@ jobs:
       - name: Same-turn continuation regression
         run: node scripts/continuation-regression.js
 
+      - name: Fable routing regression
+        run: node scripts/fable-routing-regression.js
+
       - name: Outcome recovery and reconciliation
         run: node scripts/outcome-recovery-e2e.js
 

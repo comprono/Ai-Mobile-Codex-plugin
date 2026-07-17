@@ -320,22 +320,53 @@ function executionContract(task, failures = [], completed = []) {
   };
 }
 
+function workerProviderLabel(provider) {
+  // "codex" alone is ambiguous with current Codex; every worker-facing entry
+  // names the callable CLI explicitly.
+  return provider === "codex" ? "codex-cli" : provider;
+}
+
+function rejectionReasonsByProvider(rejected) {
+  const reasons = {};
+  for (const row of Array.isArray(rejected) ? rejected : []) {
+    for (const item of Array.isArray(row.considered) ? row.considered : []) {
+      if (item.eligible || !item.provider || reasons[item.provider]) continue;
+      reasons[item.provider] = `Lane "${String(row.goal || "").slice(0, 160)}" was not dispatched here: ${String(item.reason || "").slice(0, 500)}`;
+    }
+  }
+  return reasons;
+}
+
 function resourceReport(task, workers = [], rejected = []) {
   const providers = task.capacitySnapshot?.providers || {};
   const workerList = Array.isArray(workers) ? workers : [];
+  const rejectionReasons = rejectionReasonsByProvider(rejected);
   const selectedWorkers = workerList.map((worker) => ({
     actor: "external-worker",
-    provider: worker.provider,
+    provider: workerProviderLabel(worker.provider),
+    jobId: worker.jobId || null,
     model: worker.model || "provider-default",
     role: worker.goal || "bounded independent work",
     reason: worker.reason || "Selected by the capacity, fit, safety, and economic router.",
   }));
   const decisions = Object.entries(providers).map(([provider, state]) => {
+    const label = workerProviderLabel(provider);
     const selected = workerList.find((worker) => worker.provider === provider);
-    if (selected) return { provider, status: "selected", model: selected.model || "provider-default", reason: selected.reason || "Best eligible fit for an accepted independent lane." };
-    if (!state.available || !state.authenticated) return { provider, status: "unavailable", models: state.models || [], reason: state.reason || "Provider is unavailable or unauthenticated." };
-    if (provider === "codex") return { provider: "codex-cli", status: "reserved", models: state.models || [], reason: `Current Codex is active; no additional Codex CLI lane was accepted, preserving the ${task.currentCodex?.reservePercent || 15}% integration reserve.` };
-    return { provider, status: "idle", models: state.models || [], reason: "No independently owned, economically positive lane has been accepted for this provider yet." };
+    if (selected) {
+      return {
+        provider: label,
+        status: "selected",
+        model: selected.model || "provider-default",
+        jobId: selected.jobId || null,
+        reason: `${selected.reason || "Best eligible fit for an accepted independent lane."}${selected.jobId ? ` Dispatched as callable CLI worker job ${selected.jobId}.` : ""}`,
+      };
+    }
+    if (!state.available || !state.authenticated) return { provider: label, status: "unavailable", models: state.models || [], reason: state.reason || "Provider is unavailable or unauthenticated." };
+    if (provider === "codex") {
+      const base = `Current Codex is active; no additional Codex CLI lane was accepted, preserving the ${task.currentCodex?.reservePercent || 15}% integration reserve.`;
+      return { provider: "codex-cli", status: "reserved", models: state.models || [], reason: rejectionReasons.codex ? `${base} ${rejectionReasons.codex}` : base };
+    }
+    return { provider: label, status: "idle", models: state.models || [], reason: rejectionReasons[provider] || "No independently owned, economically positive lane has been accepted for this provider yet." };
   });
   return {
     observedAt: task.capacitySnapshot?.generatedAt || null,
@@ -642,6 +673,29 @@ function quotaPoolIds(providerId, provider, model) {
   return [...new Set(rows.map((pool) => `${providerId}:${pool.id}`))];
 }
 
+function applyUserModelMandate(task, unit) {
+  // An explicitly named model in the recorded user request is a user mandate.
+  // Without this, premium gates silently strand a request like "use Fable"
+  // as an idle provider even though the user asked for that exact model.
+  const model = String(unit?.model || "").trim();
+  if (!model || unit.selectionAuthority) return unit;
+  const text = `${task.latestUserRequest || ""} ${task.requestedOutcome || ""}`.toLowerCase();
+  if (!text.trim()) return unit;
+  const tokens = model.toLowerCase().split(/[^a-z0-9.]+/)
+    .filter((token) => token.length >= 4 && !["claude", "codex", "auto", "model"].includes(token));
+  const named = tokens.some((token) => text.includes(token)) || text.includes(model.toLowerCase());
+  if (!named) return unit;
+  return {
+    ...unit,
+    selectionAuthority: "user",
+    mandateSource: `The recorded user request explicitly names "${model}", so this lane is routed as a user model mandate.`,
+  };
+}
+
+function withMandateNote(reason, unit) {
+  return unit.mandateSource ? `${reason} ${unit.mandateSource}` : reason;
+}
+
 function dispatchSingleRound(args, resources, histories, createJob) {
   const task = readTask(args.taskId);
   if (task.state !== "active") throw new Error(`Task ${task.taskId} is ${task.state}; it cannot dispatch another round.`);
@@ -671,11 +725,12 @@ function dispatchSingleRound(args, resources, histories, createJob) {
     const unitFiles = cleanStrings([...(unit.relevantFiles || []), ...(unit.expectedFiles || [])], 100, 500);
     const workerConflict = workerOwners.find((owner) => boundariesOverlap(unitFiles, owner.files).length || goalOverlap(unitGoal, owner.goal).overlaps);
     if (workerConflict) { rejected.push({ goal: unitGoal, reason: `This unit overlaps another unit in the same round (${workerConflict.goal}); serialize it in current Codex.` }); continue; }
+    const mandatedUnit = applyUserModelMandate(task, unit);
     let decision;
     try {
-      decision = route({ ...unit, workspace: task.workspace, projectGoal: task.outcome, goal: unitGoal, currentCodexGoal: currentGoal, currentCodexFiles: currentFiles, horizonHours: args.horizonHours || 5 }, resources, histories);
-    } catch (error) { rejected.push({ goal: unitGoal, reason: error.message }); continue; }
-    if (decision.action !== "delegate") { rejected.push({ goal: unitGoal, reason: decision.reason, economics: decision.economics || null, considered: decision.considered || [] }); continue; }
+      decision = route({ ...mandatedUnit, workspace: task.workspace, projectGoal: task.outcome, goal: unitGoal, currentCodexGoal: currentGoal, currentCodexFiles: currentFiles, horizonHours: args.horizonHours || 5 }, resources, histories);
+    } catch (error) { rejected.push({ goal: unitGoal, reason: withMandateNote(error.message, mandatedUnit) }); continue; }
+    if (decision.action !== "delegate") { rejected.push({ goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics || null, considered: decision.considered || [] }); continue; }
     try {
       const selected = resources.providers[decision.provider];
       const receipt = createJob({
@@ -691,7 +746,7 @@ function dispatchSingleRound(args, resources, histories, createJob) {
         quotaPoolIds: quotaPoolIds(decision.provider, selected, decision.request.model),
         fairnessKey: task.taskId,
       });
-      jobs.push({ ...receipt, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: decision.reason, economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
+      jobs.push({ ...receipt, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
       workerOwners.push({ goal: unitGoal, files: unitFiles });
     } catch (error) { rejected.push({ goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
   }
@@ -804,10 +859,11 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     const unitFiles = cleanStrings([...(unit.relevantFiles || []), ...(unit.expectedFiles || [])], 100, 500);
     const conflict = workerOwners.find((owner) => owner.workspace.toLowerCase() === project.workspace.toLowerCase() && (boundariesOverlap(unitFiles, owner.files).length || goalOverlap(unitGoal, owner.goal).overlaps));
     if (conflict) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: `Worker ownership overlaps ${conflict.projectId}; serialize this unit.` }); continue; }
+    const mandatedUnit = unit.model && !unit.selectionAuthority ? applyUserModelMandate(readTask(project.taskId), unit) : unit;
     let decision;
     try {
       decision = route({
-        ...unit,
+        ...mandatedUnit,
         workspace: project.workspace,
         projectGoal: project.outcome,
         goal: unitGoal,
@@ -817,8 +873,8 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
         horizonHours: args.horizonHours || portfolio.allocationPolicy.horizonHours || 5,
         projectId: project.projectId,
       }, resources, histories);
-    } catch (error) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: error.message }); continue; }
-    if (decision.action !== "delegate") { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: decision.reason, economics: decision.economics || null, considered: decision.considered || [] }); continue; }
+    } catch (error) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: withMandateNote(error.message, mandatedUnit) }); continue; }
+    if (decision.action !== "delegate") { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics || null, considered: decision.considered || [] }); continue; }
     try {
       const selected = resources.providers[decision.provider];
       const task = readTask(project.taskId);
@@ -837,7 +893,7 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
         quotaPoolIds: quotaPoolIds(decision.provider, selected, decision.request.model),
         fairnessKey: `${portfolio.portfolioId}:${project.projectId}`,
       });
-      jobs.push({ ...receipt, projectId: project.projectId, taskId: project.taskId, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: decision.reason, economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
+      jobs.push({ ...receipt, projectId: project.projectId, taskId: project.taskId, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
       workerOwners.push({ projectId: project.projectId, workspace: project.workspace, goal: unitGoal, files: unitFiles });
     } catch (error) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
   }

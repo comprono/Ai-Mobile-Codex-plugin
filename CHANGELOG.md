@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 - 2026-07-18
+
+- Honored explicitly named user models such as Claude Fable during dispatch, reported callable worker job IDs, and exposed concrete provider rejection reasons.
+- Allowed user-mandated disjoint external lanes through semantic goal overlap while retaining hard file-ownership conflicts.
+- Added Fable and Codex CLI routing regression coverage.
+- Fixed explicit user-mandated external lanes being rejected by semantic goal overlap when file ownership is disjoint; added Fable routing regression coverage.
 ## 1.1.1 - 2026-07-17
 
 - Preserved blocker owner, recovery trigger, and recovery action when importing project acceptance contracts.
