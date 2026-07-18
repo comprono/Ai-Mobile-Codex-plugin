@@ -51,6 +51,10 @@ if (-not [string]$handoff.resumePrompt) {
 }
 
 $codexArgs = @("-C", $workspace, "exec", "resume", [string]$handoff.threadId, [string]$handoff.resumePrompt)
+$refreshPluginIds = @($handoff.refreshPluginIds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+if ($refreshPluginIds.Count -eq 0) {
+    $refreshPluginIds = @("ai-mobile@ai-mobile")
+}
 if ($DryRun -or (-not $Schedule -and -not $Execute)) {
     [pscustomobject]@{
         Valid = $true
@@ -61,6 +65,7 @@ if ($DryRun -or (-not $Schedule -and -not $Execute)) {
         OpensProviderUi = $false
         Recurring = $false
         CleanupPluginIds = @($handoff.cleanupPluginIds)
+        RefreshPluginIds = @($refreshPluginIds)
     } | ConvertTo-Json -Depth 4
     exit 0
 }
@@ -122,8 +127,18 @@ try {
         }
     }
 
+    foreach ($pluginId in $refreshPluginIds) {
+        if ([string]$pluginId -notmatch "^[a-zA-Z0-9][a-zA-Z0-9-]*@[a-zA-Z0-9][a-zA-Z0-9-]*$") {
+            throw "Invalid refresh plugin identifier: $pluginId"
+        }
+        & codex plugin add ([string]$pluginId) --json | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to refresh plugin entry $pluginId before resume."
+        }
+    }
+
     $handoff | Add-Member -NotePropertyName consumedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "resuming" -Message "Obsolete plugin cleanup finished; resuming the exact Codex thread."
+    Save-RestartState -State "resuming" -Message "Plugin cleanup and refresh finished; resuming the exact Codex thread."
     & codex @codexArgs
     $resumeExitCode = $LASTEXITCODE
     if ($resumeExitCode -ne 0) {

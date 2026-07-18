@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.5 - 2026-07-18
+
+- Refreshes the canonical AI Mobile plugin cache after Codex closes and before the exact thread resumes.
+- Keeps older authorized handoffs compatible by defaulting their refresh target to `ai-mobile@ai-mobile`.
+- Reports the refresh target in dry-run output and fails closed if refresh cannot complete.
+
 ## 1.1.4 - 2026-07-18
 
 - Fixed one-shot restart launch failures when the plugin, workspace, or handoff path contains spaces.

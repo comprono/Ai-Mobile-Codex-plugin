@@ -47,6 +47,7 @@ function createRestartHandoff(args = {}) {
     threadId,
     workspace,
     cleanupPluginIds,
+    refreshPluginIds: ["ai-mobile@ai-mobile"],
     taskId: task?.taskId || String(args.taskId || ""),
     outcome: String(task?.outcome || args.outcome || "").slice(0, 6000),
     latestUserRequest: String(task?.latestUserRequest || args.latestUserRequest || "").slice(0, 6000),
