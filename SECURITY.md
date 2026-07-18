@@ -10,7 +10,7 @@ AI Mobile is a local community plugin. It invokes authenticated command-line too
 - Writer workers run in detached Git worktrees and return patches; they do not edit the primary worktree. Machine-wide storage limits and collection, cancellation, crash, startup, and age cleanup prevent abandoned worktrees.
 - Verification commands use an executable allowlist and argument arrays. Inline Node, Python, and PowerShell execution is refused.
 - Antigravity uses sandbox mode. AI Mobile does not pass a broad permission-bypass flag.
-- Credentials, login, CAPTCHA, purchases, messages, applications, deploys, and other external side effects remain with current Codex and normal user authorization.
+- Credentials, login, CAPTCHA, purchases, messages, applications, deploys, and other external side effects remain behind explicit project authorization and evidence gates.
 - Worker output and stored artifacts are bounded and redacted for common secret formats and user paths.
 
 ## Public Repository Rules

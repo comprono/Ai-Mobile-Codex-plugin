@@ -6,14 +6,15 @@ AI Mobile is a community Codex plugin for finite, capacity-aware use of local AI
 
 Contributions must preserve these invariants:
 
-- current Codex works on and owns the critical path;
+- the visible Codex task remains a zero-file lightweight project console;
+- dependency-ready critical-path work is assigned to a separate work-plane worker;
 - external workers receive only bounded, disjoint, acceptance-linked work;
 - total delegation and integration cost must be lower than the expected contribution;
 - runtime state stays under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed projects;
 - writers use isolated Git worktrees and return patches;
 - multi-project state and evidence remain isolated, and machine-wide leases prevent provider, quota, file, and storage conflicts;
 - imported blockers retain their executable owner, trigger, and recovery action;
-- safe dependency-ready work starts in current Codex before a response hands control back to the user;
+- safe dependency-ready work is assigned before the console reports;
 - cached negative provider evidence is refreshed before dispatch rejection;
 - completion requires acceptance evidence;
 - startup and discovery never open desktop applications;

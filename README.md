@@ -8,19 +8,18 @@ The objective is practical: finish more verified work without spending more toke
 
 ## How It Works
 
-1. `start-task` reads bounded project contracts, prevents a diagnostic method from replacing the real outcome, imports the acceptance gap, and discovers capacity once.
-2. Current Codex immediately starts the returned highest-value acceptance unit.
-3. `reconcile-task` applies a latest user correction to the same task, invalidates stale dependent work, and preserves only matching evidence.
-4. `dispatch-round` assigns only dependency-ready, disjoint, economically useful work to available headless providers.
-5. Machine-wide leases protect provider slots, quota pools, RAM, file ownership, Codex reserve, and worktree storage across every task and project.
-6. Current Codex continues working while external workers run. No manager loop or polling feed is created.
-7. `collect-round` returns each compact handoff once, cleans isolated editing worktrees, and supplies an owned recovery transition for rejection or failure.
-8. Current Codex integrates isolated work. Exact Fable 5 or Sonnet 5 workers enabled by private policy may instead change clean bounded primary files directly; their deterministic checks replace a redundant lower-tier model review.
-9. `complete-task` refuses completion until every required project has its own sufficient evidence.
+1. start-task reads the bounded project outcome and acceptance gap and captures one fresh capacity snapshot.
+2. The visible Codex task becomes a lightweight project console. It owns no project files and performs no bulk reading, planning, coding, or expensive review.
+3. The deterministic coordinator returns the highest-value dependency-ready work-plane unit.
+4. dispatch-round selects an actual Codex CLI, Claude, Antigravity, or Cursor worker from task fit, quota pools, reset horizon, reliability, RAM, storage, cost, and user priority.
+5. Machine-wide leases protect provider slots, shared quota, the Codex reserve, file ownership, and worktree storage across projects.
+6. collect-round receives one finite result and cleans its editing worktree.
+7. integrate-round applies an isolated patch exactly once only after boundary checks and declared deterministic primary-workspace verification. Concurrent user changes and unverified patches are refused.
+8. record-evidence advances only the named project requirement. complete-task refuses completion until every required acceptance item has sufficient evidence.
 
-AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, or recurring status loop.
+AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, hidden Codex continuation, or recurring status loop.
 
-Every tool response includes a same-turn execution contract and a compact resource report. If safe work remains, current Codex starts it before replying; `Next` describes work already beginning, not a command for the user to operate.
+The console reports only accepted evidence, real assignments, typed blockers, resource choices, and the next action already assigned. Activity is not progress.
 
 ## Use
 
@@ -42,23 +41,25 @@ Project A: <workspace, outcome, acceptance, priority, blockers>
 Project B: <workspace, outcome, acceptance, priority, blockers>
 ```
 
-The user does not need to design worker lanes. Current Codex discovers the project state first, chooses its own critical path, and proposes only work that passes dependency, ownership, capacity, safety, and economic gates.
+The user does not need to design worker lanes. The coordinator recovers the acceptance gap and proposes only dependency-ready work that passes ownership, capacity, safety, and economic gates.
 
 ## Resource Decisions
 
-- **Current Codex:** owns user intent, ambiguous reasoning, the highest-value critical path, integration, risky actions, and final verification.
-- **Codex CLI:** an additional bounded worker only when measured shared capacity stays above the private reserve, normally 15 percent.
-- **Claude Code:** bounded implementation, refactoring, debugging, architecture, and repository reasoning through the authenticated CLI.
-- **Antigravity CLI:** economical browser-oriented analysis, repository scans, research, drafting, and validation. Read-only use requires explicit or saved local consent.
-- **Cursor:** only a real authenticated headless `cursor-agent`; the desktop launcher is not treated as a worker.
-- **No-model tools:** tests, linters, validators, diffs, and runtime evidence are preferred for verification.
+- Project console: the cheapest capable visible Codex model at low effort for user interaction and compact reports only.
+- Codex CLI: a separate work-plane worker when measured shared capacity remains above the private reserve, normally 15 percent.
+- Claude Code: bounded implementation, debugging, architecture, and repository reasoning through the authenticated subscription CLI.
+- Antigravity CLI: economical browser-oriented work, repository scans, research, drafting, and validation with explicit or saved read-only consent.
+- Cursor: only a real authenticated headless cursor-agent; desktop presence is not a worker.
+- No-model tools: tests, linters, validators, diffs, direct receipts, and deterministic patch integration are preferred for verification.
 
-Routing considers capability fit, dependency readiness, quota pools, reset horizon, recent reliability, subscription or API cost, free RAM, user priority, and integration cost. Unknown limits remain unknown. Cached negative availability is re-probed before dispatch rejection.
+Model names are discovered dynamically. Routing ranks role capability, dependency readiness, quota pool, reset horizon, reliability, subscription or API cost, RAM, user priority, output size, and total integration or review cost. Unknown limits remain unknown.
+
+Bulk context goes to deterministic search or an economical worker. Consequential architecture goes to the strongest suitable available model. A premium result is not automatically re-read by another premium model.
 
 ## Portfolio Safety
 
 - One capacity inventory is shared by all projects in the portfolio.
-- Current Codex works on the highest-priority unblocked project unless new evidence justifies an explicit override.
+- The work plane starts with the highest-priority unblocked project unless new evidence justifies an explicit override.
 - Independent projects can use different providers concurrently.
 - Priority-first round-robin allocation gives each ready project a fair opportunity before a second unit goes to the same project.
 - Provider, quota-pool, and global worker leases are machine-wide, so separate portfolios cannot oversubscribe the same capacity.
@@ -85,32 +86,32 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 
 | Tool | Purpose |
 | --- | --- |
-| `start-task` | Recover bounded project intent, start one finite task or portfolio, and capture one passive capacity snapshot. |
-| `reconcile-task` | Apply the latest correction to the same task, invalidate stale work, preserve matching evidence, and return the next action. |
-| `dispatch-round` | Keep current Codex active and allocate globally safe independent worker units. |
-| `collect-round` | Collect one bounded round and clean collected editing worktrees. |
-| `record-evidence` | Attach verified evidence to one task or one named portfolio project. |
-| `task-summary` | Return one explicit compact evidence summary; it is not a heartbeat. |
-| `complete-task` | Complete only from sufficient project-local acceptance evidence. |
-| `cancel-task` | Stop owned workers, release leases, and clean owned worktrees. |
-| `resource-inventory` | Passively inspect current machine, provider, quota, lease, and storage evidence. |
-| `orchestrator-profile` | Read or update private local routing and resource preferences. |
-| `prepare-restart-handoff` | Persist one authorized thread/task handoff for an unavoidable schema-level Codex restart and return its exact-app/task reopen launcher. |
+| start-task | Recover bounded intent, create one durable project or portfolio task, capture capacity, and return console plus work-plane plans. |
+| reconcile-task | Apply the latest correction to the same task, migrate legacy state, invalidate stale work, and preserve matching evidence. |
+| dispatch-round | Allocate dependency-ready units to real work-plane workers; omitted units use the coordinator recommendation. |
+| collect-round | Collect one bounded round and clean editing worktrees. |
+| integrate-round | Apply verified isolated patches once without a model review; protect concurrent changes and roll back failed verification. |
+| record-evidence | Attach verified evidence to one task or named portfolio project. |
+| task-summary | Return one explicit compact evidence summary; it is not a heartbeat. |
+| complete-task | Complete only from sufficient project-local acceptance evidence. |
+| cancel-task | Stop owned workers, release leases, and clean owned worktrees. |
+| resource-inventory | Passively inspect current provider, model, quota, lease, RAM, and storage evidence. |
+| orchestrator-profile | Read or update private local routing and resource preferences. |
+| prepare-restart-handoff | Persist one authorized exact-package and exact-task restart boundary for a schema upgrade. |
 
 ## Token Efficiency
 
-- Trivial or tightly coupled work stays in current Codex.
-- Method-only contracts are reconciled against bounded project intent before any worker starts.
-- Rejected or failed delegation returns an owner, recovery trigger, recovery action, and next acceptance unit instead of ending the task.
-- Workers receive compact outcome, ownership, acceptance, and integration contracts, never the parent transcript.
-- Delegation accounts for prompt, worker output, wait, verification, retry, and integration cost.
-- Small or overlapping work is rejected from delegation.
-- Deterministic checks precede qualitative model review; verified trusted Fable 5 and Sonnet 5 changes receive no second model review.
-- No worker review chain, lower-tier re-evaluation, or premium-model reassurance loop is created.
-- A failed worker is retried only after a classified transient failure and changed capacity evidence.
-- Worker activity, process health, elapsed time, and token usage are not reported as outcome progress.
+- The visible console never becomes an implementation fallback.
+- Workers receive compact outcome, acceptance, ownership, test, and integration contracts, never the parent transcript.
+- Delegation counts prompt, output, wait, retry, verification, and integration cost.
+- Bulk reading uses deterministic or economical workers; heavy reasoning uses a strong model only for the compact hard question.
+- Deterministic checks precede qualitative review.
+- Verified trusted Fable 5 and Sonnet 5 changes receive no second model review.
+- Isolated patches are integrated deterministically, not reimplemented by Luna.
+- A failed worker is retried only after a classified transient failure and changed evidence.
+- Worker activity, process health, elapsed time, and token usage are never reported as outcome progress.
 
-The default communication mode is `smart-compact`: answer first, preserve exact evidence and caveats, and remove low-value narration without reducing reasoning quality.
+The default communication mode is smart-compact: answer first, preserve exact evidence and caveats, and remove low-value narration without reducing reasoning quality.
 
 ## Install
 
@@ -129,20 +130,20 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 
 The repository is both an AI Mobile Codex marketplace and an AI Mobile Claude Code marketplace. A Git update followed by the same installer updates both host caches from this one source; there is no copied Claude orchestration implementation.
 
-Existing host sessions keep the schema they loaded at startup. When a required Codex upgrade occurs during an authorized long task, `prepare-restart-handoff` writes the exact thread, workspace, requested next model, task, priorities, evidence, and next action. Codex may run the returned one-shot launcher as its final action; the helper closes only processes owned by the installed `OpenAI.Codex` package, activates it through `shell:AppsFolder`, and opens the exact `codex://threads/<thread-id>` deep link. On Windows it deliberately does not run `codex exec resume`: that creates a separate CLI run rather than a visible Desktop task turn. The handoff records `resume-awaiting-visible-turn` until a visible turn is started. It never calls installer-capable `codex app` and never falls back to `OpenAI.ChatGPT-Desktop`.
+Existing host sessions keep the schema they loaded at startup. A schema or runtime upgrade therefore follows one strict order:
 
-Normal continuation does not restart the desktop app. AI Mobile instructs Codex to use the app-native same-task follow-up surface with a compact continuation capsule and a lightweight model/effort selected from current inventory. Today the private preference resolves that role to GPT-5.6 Luna at low effort; future model names are ranked by role, live capability, quota horizon, reliability, and total work cost rather than hard-coded as permanent choices.
+1. Keep the capable setup model active while it fixes, validates, scans, versions, and installs the plugin.
+2. Do not switch the visible task to the lightweight console before restart.
+3. prepare-restart-handoff closes only OpenAI.Codex and refreshes the canonical AI Mobile plugin. Classic ChatGPT is never a fallback.
+4. The official local Codex app-server resumes the exact persisted task while the desktop is closed. A bounded capable-model turn calls AI Mobile resource-inventory once and must observe the expected runtimeVersion.
+5. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and dispatches its next separate work-plane worker.
+6. The launcher then reopens the exact OpenAI.Codex task so the completed continuation is visible.
 
-Every restart handoff records its current phase, helper process id, bounded transition log, and any failure in the handoff JSON. Paths containing spaces are quoted end to end. After Codex closes, the helper refreshes the canonical AI Mobile cache before reopening the exact task. If the exact Codex desktop package cannot be identified or the refresh fails, the helper fails closed without stopping or launching Classic ChatGPT, or reopening with mixed plugin versions.
+This path never uses codex exec resume, a duplicate task, a Goal, an automation, a manager loop, or UI automation. Normal continuation does not restart the app. Today the private console preference is GPT-5.6 Luna at low effort; future models are selected by role and live evidence rather than a permanent product name.
 
-For an existing durable task whose outcome matches the project North Star, `task-summary`, dispatch, and completion refresh requirement status, blockers, and evidence from `.codex/ACCEPTANCE.json`. A separate explicit user-authoritative outcome remains isolated. Summaries distinguish durable task state from current execution as `workers-running`, `ready-for-current-codex`, blocked, or completed.
+For a durable task whose outcome matches the project North Star, summary, dispatch, integration, evidence, and completion refresh authoritative .codex state. Execution states distinguish dispatch-required, workers-running, integration-required, blocked, and completed.
 
-Normal installation, startup, inventory, and dispatch never launch a provider desktop app. Restart-resume is separately authorized in the private profile and only runs when Codex invokes the one-shot launcher.
-
-Private standing preferences for the requested behavior:
-
-```json
-
+Normal installation, startup, inventory, and dispatch never launch a provider desktop app. Restart is a separate explicitly authorized boundary.
 ## CLI Diagnostics
 
 ```powershell
@@ -164,7 +165,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 
 Private routing preferences and runtime records remain local. The public repository must not contain credentials, cookies, browser profiles, transcripts, quota snapshots, personal project data, or machine-specific paths.
 
-AI Mobile does not bypass quotas, authentication, CAPTCHA, login, OAuth, confirmation gates, workspace boundaries, or external-action safety. Sends, submissions, deploys, purchases, destructive actions, and similar side effects remain protected current-Codex operations under the user's applicable authorization.
+AI Mobile does not bypass quotas, authentication, CAPTCHA, login, OAuth, confirmation gates, workspace boundaries, or external-action safety. Sends, submissions, deploys, purchases, destructive actions, and similar side effects remain protected by the project's authorization and evidence gates.
 
 ## Development
 

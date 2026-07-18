@@ -63,10 +63,10 @@ function assertCurrentRuntime(root = PLUGIN_ROOT) {
   const info = runtimeVersionInfo(root);
   if (!info.stale) return info;
   throw new Error(
-    `STALE AI MOBILE TASK: this Codex task loaded AI Mobile ${info.currentVersion}, but ${info.newestVersion} is installed. `
-    + "Stop all AI Mobile calls in this task. Existing Codex tasks cannot reload plugin skills or MCP schemas. "
-    + "Start a fresh Codex task after the plugin update; do not call resource-inventory, retry workers, or claim orchestration here.",
-  );
-}
+    "STALE AI MOBILE TASK: this Codex task loaded AI Mobile " + info.currentVersion + ", but " + info.newestVersion + " is installed. "
+    + "Stop all AI Mobile calls and do not switch this task to the lightweight console. "
+    + "A capable setup model must restart the exact OpenAI.Codex app/task, verify the new runtime version, and only then select the lightweight console. "
+    + "Do not create a fresh task, use codex exec resume, retry workers, or claim orchestration here.",
+  );}
 
 module.exports = { assertCurrentRuntime, comparePluginVersions, pluginVersion, runtimeVersionInfo };

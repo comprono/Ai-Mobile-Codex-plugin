@@ -62,7 +62,7 @@ function discoverCodex() {
     })).filter((row) => row.id),
     capacity: windows.length
       ? { windows, effectiveRemainingPercent: Math.min(...effectiveWindows.map((item) => item.remainingPercent)), availableResetCredits: native?.rateLimits?.rateLimitResetCredits?.availableCount ?? null, source: "codex-app-server", confidence: "high" }
-      : { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: "Exact shared Codex window is unavailable; current Codex remains authoritative." },
+      : { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: "Exact shared Codex capacity is unavailable; the configured reserve remains protected." },
     usage: native?.usage?.summary || null,
     activeWork: native?.threadSignal || { supported: false },
   });
@@ -194,7 +194,7 @@ function runCodex(providerState, contract, prompt) {
   return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, usage: { model, inputTokens: parsed.inputTokens, cachedInputTokens: parsed.cachedInputTokens, outputTokens: parsed.outputTokens }, exitCode: result.status };
 }
 
-const CLAUDE_SYSTEM_PROMPT = "You are a bounded project worker. Follow the supplied lane contract exactly. Never broaden scope, delegate, or repeat work owned by current Codex. Use only the enabled local file tools. For read-only lanes do not edit. Stop when the requested evidence is sufficient and return only the required JSON.";
+const CLAUDE_SYSTEM_PROMPT = "You are a bounded project worker. Follow the supplied lane contract exactly. Never broaden scope, delegate, or interact with the visible project console. Use only the enabled local file tools. For read-only lanes do not edit. Stop when the requested evidence is sufficient and return only the required JSON.";
 
 function claudeResultSchema(maxOutputTokens = 1200) {
   const characterBudget = Math.max(1200, Math.min(12000, Math.floor(Number(maxOutputTokens || 1200) * 3)));

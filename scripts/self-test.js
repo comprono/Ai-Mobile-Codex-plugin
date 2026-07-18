@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -33,16 +33,20 @@ async function run() {
       cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
     } };
 
-    assert.equal(TOOLS.length, 11);
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "collect-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile", "prepare-restart-handoff"]);
-    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 11);
+    assert.equal(TOOLS.length, 12);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "collect-round", "integrate-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile", "prepare-restart-handoff"]);
+    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 12);
 
     const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
     assert.equal(task.requirements[0].id, "A1");
     assert.equal(task.currentCodex.reservePercent, 15);
     assert.equal(task.currentCodex.model, "gpt-5.6-sol");
-    assert.equal(task.currentCodex.requirementId, "A1");
+    assert.equal(task.currentCodex.role, "project-console");
+    assert.deepEqual(task.currentCodex.files, []);
+    assert.equal(task.execution.mustDispatchNow, true);
+    assert.equal(task.execution.mustStartNow, false);
+    assert.equal(task.workPlane.plan.requirementId, "A1");
     assert.deepEqual(task.workGraph.map((row) => row.id), ["R-A1"]);
     assert.equal(task.outcomeReconciliation.source, "supplied-outcome");
     assert.equal(taskSummary({ taskId: task.taskId }).progress.required, 1);

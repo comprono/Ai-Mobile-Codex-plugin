@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
-  "version": "1.1.10",
-  "description": "Finite capacity-aware orchestration for Codex CLI, Claude Code, Antigravity, and optional Cursor workers.",
+  "version": "1.2.0",
+  "description": "A finite local AI work orchestrator with a lightweight Codex console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
   "author": {
     "name": "comprono"
   },

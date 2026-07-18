@@ -6,6 +6,7 @@ const { readProfile } = require("../lib/orchestrator-profile");
 const { readTask } = require("./state-store");
 const { safeWorkspace, utcNow, writeJson } = require("./utils");
 const { stateRoot } = require("./state-store");
+const { pluginVersion } = require("../lib/version");
 
 function safeThreadId(value) {
   const threadId = String(value || process.env.CODEX_THREAD_ID || "").trim();
@@ -16,8 +17,17 @@ function safeThreadId(value) {
 function safeResumeModel(value) {
   const model = String(value || "").trim();
   if (!model) return "";
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(model)) throw new Error("Restart resume model must be an exact safe model id.");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(model)) throw new Error("Restart model must be an exact safe model id.");
   return model;
+}
+
+function safeReasoningEffort(value, fallback = "") {
+  const effort = String(value || fallback).trim().toLowerCase();
+  if (!effort) return "";
+  if (!new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).has(effort)) {
+    throw new Error("Restart reasoning effort is invalid.");
+  }
+  return effort;
 }
 
 function createRestartHandoff(args = {}) {
@@ -28,6 +38,9 @@ function createRestartHandoff(args = {}) {
   const workspace = safeWorkspace(args.workspace);
   const threadId = safeThreadId(args.threadId);
   const resumeModel = safeResumeModel(args.resumeModel || "");
+  const resumeEffort = safeReasoningEffort(args.resumeEffort, "low");
+  const verificationModel = safeResumeModel(args.verificationModel || "");
+  const verificationEffort = safeReasoningEffort(args.verificationEffort || "");
   const task = args.taskId ? readTask(args.taskId) : null;
   const nextAction = String(args.nextAction || task?.currentCodex?.goal || "").trim().slice(0, 4000);
   if (!nextAction) throw new Error("Restart handoff requires the exact next action.");
@@ -44,7 +57,7 @@ function createRestartHandoff(args = {}) {
   }));
   const createdAt = utcNow();
   const handoff = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     oneShot: true,
     userAuthorized: true,
     createdAt,
@@ -54,7 +67,11 @@ function createRestartHandoff(args = {}) {
     restartLog: [{ At: createdAt, State: "prepared", Message: "Authorized one-shot restart handoff prepared; no process has been started." }],
     threadId,
     workspace,
+    expectedRuntimeVersion: pluginVersion(),
+    verificationModel,
+    verificationEffort,
     resumeModel,
+    resumeEffort,
     cleanupPluginIds,
     refreshPluginIds: ["ai-mobile@ai-mobile"],
     taskId: task?.taskId || String(args.taskId || ""),
@@ -64,13 +81,15 @@ function createRestartHandoff(args = {}) {
     evidence,
     nextAction,
     resumePrompt: [
-      "Resume the same AI Mobile task after the required plugin restart.",
-      resumeModel ? `Resume model: ${resumeModel}.` : "",
-      task?.taskId ? `Task: ${task.taskId}.` : "",
-      task?.outcome ? `Outcome: ${task.outcome}` : "",
-      priorities.length ? `Priorities: ${priorities.join(" | ")}` : "",
-      `Start now: ${nextAction}`,
-      "Use the newly loaded AI Mobile runtime. Reconcile the existing durable task; do not ask the user to repeat context, create a duplicate task, or report activity as progress.",
+      "Continue in this exact existing Codex task using the freshly verified AI Mobile runtime.",
+      resumeModel ? "Visible console model: " + resumeModel + " at " + resumeEffort + " effort." : "",
+      "The visible task is a lightweight project console only: invoke coordinator tools, take user direction, and report verified material transitions.",
+      "Do not bulk-read repositories, perform heavy planning, edit project files, review patches, create a duplicate Codex task, AI Mobile task, Goal, automation, manager loop, or hidden CLI continuation.",
+      task?.taskId ? "Reconcile durable task " + task.taskId + " once; do not create another task." : "",
+      task?.outcome ? "Outcome: " + task.outcome : "",
+      priorities.length ? "Priorities: " + priorities.join(" | ") : "",
+      "Start now: " + nextAction,
+      "Immediately dispatch the returned dependency-ready work-plane unit to the best eligible separate worker. End this turn after one compact Done / Active / Blocked / Resources / Next assignment report; do not poll.",
     ].filter(Boolean).join("\n"),
   };
   const root = path.join(stateRoot(), "restart-handoffs");
@@ -87,4 +106,4 @@ function createRestartHandoff(args = {}) {
   };
 }
 
-module.exports = { createRestartHandoff, safeResumeModel, safeThreadId };
+module.exports = { createRestartHandoff, safeReasoningEffort, safeResumeModel, safeThreadId };

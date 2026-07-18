@@ -177,7 +177,7 @@ function readJob(taskIdValue, jobIdValue, detail = "compact", waitSeconds = 0) {
       ? contract.skipModelReview === true && status.state === "completed"
         ? { required: false, alreadyInPrimaryWorkspace: true, action: contract.integrationAction || "", instruction: "Changes are already in the primary workspace and deterministic verification passed. Do not ask another model to re-review them; record acceptance-linked evidence or continue the next dependency." }
         : { required: status.state === "completed" && !alreadyCollected, action: contract.integrationAction || "", instruction: status.state === "completed" ? "Inspect the stored patch/evidence once, integrate only accepted work, then record acceptance evidence." : "Use this typed blocker once; do not retry without changed evidence." }
-      : { required: false, instruction: "Continue current Codex work. Collect again only at the integration point or after a material provider transition." },
+      : { required: false, instruction: "Keep the console lightweight. Collect again only at the integration point or after a material provider transition." },
   };
   if (detail === "full") {
     result.result = readText(path.join(dir, "result.md"), 12000);

@@ -142,12 +142,16 @@ if ($isDryRun) {
         Valid = $true
         OneShot = $true
         HandoffFile = $handoffPath
-        ResumeSurface = "OpenAI.Codex desktop deep link (visible task only)"
+        ResumeSurface = "Official Codex app-server same-task continuation, then exact OpenAI.Codex desktop deep link"
+        ExpectedRuntimeVersion = [string]$handoff.expectedRuntimeVersion
+        VerificationModel = [string]$handoff.verificationModel
+        VerificationEffort = [string]$handoff.verificationEffort
         RequestedResumeModel = $resumeModel
+        RequestedResumeEffort = [string]$handoff.resumeEffort
         ModelSwitchVerified = $false
         ResumeHelper = (Join-Path $PSScriptRoot "resume-codex-thread.ps1")
-        ResumeArguments = @()
-        DesktopLaunchBeforeResume = $true
+        ResumeArguments = @("--handoff-file", $handoffPath)
+        DesktopLaunchBeforeResume = $false
         ResumeDetached = $false
         PackageName = $codexDesktopPackage.PackageName
         PackageFullName = $codexDesktopPackage.PackageFullName
@@ -238,8 +242,37 @@ try {
         }
     }
 
+    $refreshedListText = (& codex plugin list --json 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to verify the refreshed Codex plugin before continuation."
+    }
+    $refreshedPlugin = @((($refreshedListText | ConvertFrom-Json).installed) | Where-Object { $_.pluginId -eq "ai-mobile@ai-mobile" })[0]
+    if (-not $refreshedPlugin) {
+        throw "AI Mobile is not installed after the requested refresh."
+    }
+    if ([string]$refreshedPlugin.version -ne [string]$handoff.expectedRuntimeVersion) {
+        throw "Installed AI Mobile version $($refreshedPlugin.version) does not match expected $($handoff.expectedRuntimeVersion)."
+    }
+
+    $handoff | Add-Member -NotePropertyName installedRuntimeVersion -NotePropertyValue ([string]$refreshedPlugin.version) -Force
     $handoff | Add-Member -NotePropertyName consumedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "reopening" -Message "Plugin refresh finished; reopening the exact Codex package and thread now."
+    Save-RestartState -State "continuing-task" -Message "Plugin refresh verified; starting the exact same task through the official Codex app-server before selecting the lightweight console."
+
+    $resumeHelper = Join-Path $PSScriptRoot "resume-codex-thread.ps1"
+    if (-not (Test-Path -LiteralPath $resumeHelper -PathType Leaf)) {
+        throw "The Codex app-server continuation helper is missing: $resumeHelper"
+    }
+    $powershellPath = (Get-Command powershell -ErrorAction Stop).Source
+    $resumeOutput = (& $powershellPath -NoProfile -ExecutionPolicy Bypass -File $resumeHelper -HandoffFile $handoffPath -DelaySeconds 0 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Same-task app-server continuation failed: $($resumeOutput.Trim())"
+    }
+    $handoff = Get-Content -Raw -LiteralPath $handoffPath | ConvertFrom-Json
+    if ($handoff.modelSwitchVerified -ne $true -or [string]$handoff.runningRuntimeVersion -ne [string]$handoff.expectedRuntimeVersion) {
+        throw "The same-task continuation did not prove the fresh runtime and post-proof model switch."
+    }
+
+    Save-RestartState -State "reopening" -Message "Same-task continuation completed; reopening only the exact OpenAI.Codex package and task."
     $desktopLaunch = Start-CodexDesktop -Package $codexDesktopPackage -ThreadId ([string]$handoff.threadId)
     $desktopDeadline = [DateTime]::UtcNow.AddSeconds(15)
     $verifiedDesktopProcesses = @()
@@ -255,29 +288,18 @@ try {
     if ($verifiedDesktopProcesses.Count -eq 0) {
         throw "The OpenAI.Codex package launch returned but no package-owned desktop process became visible."
     }
+
     $desktopOpened = $true
+    $handoff = Get-Content -Raw -LiteralPath $handoffPath | ConvertFrom-Json
     $handoff | Add-Member -NotePropertyName desktopPackage -NotePropertyValue $codexDesktopPackage.PackageFullName -Force
     $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopLaunch.LauncherProcessId -Force
-        $handoff | Add-Member -NotePropertyName desktopAppUserModelId -NotePropertyValue $desktopLaunch.AppUserModelId -Force
-        $handoff | Add-Member -NotePropertyName desktopLaunchMethod -NotePropertyValue $desktopLaunch.LaunchMethod -Force
-        $handoff | Add-Member -NotePropertyName desktopThreadDeepLink -NotePropertyValue $desktopLaunch.ThreadDeepLink -Force
+    $handoff | Add-Member -NotePropertyName desktopAppUserModelId -NotePropertyValue $desktopLaunch.AppUserModelId -Force
+    $handoff | Add-Member -NotePropertyName desktopLaunchMethod -NotePropertyValue $desktopLaunch.LaunchMethod -Force
+    $handoff | Add-Member -NotePropertyName desktopThreadDeepLink -NotePropertyValue $desktopLaunch.ThreadDeepLink -Force
     $handoff | Add-Member -NotePropertyName verifiedDesktopProcessIds -NotePropertyValue @($verifiedDesktopProcesses | ForEach-Object { $_.ProcessId }) -Force
     $handoff | Add-Member -NotePropertyName desktopLaunchedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
     $handoff | Add-Member -NotePropertyName requestedResumeModel -NotePropertyValue $resumeModel -Force
-    $handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue $false -Force
-    Save-RestartState -State "reopened" -Message "The exact OpenAI.Codex package was reopened for the target workspace and thread."
-
-    $resumeHelper = Join-Path $PSScriptRoot "resume-codex-thread.ps1"
-    if (-not (Test-Path -LiteralPath $resumeHelper -PathType Leaf)) {
-        throw "The detached Codex resume helper is missing: $resumeHelper"
-    }
-    $powershellPath = (Get-Command powershell -ErrorAction Stop).Source
-    $resumeArgumentLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -HandoffFile "{1}" -DelaySeconds 2' -f `
-        $resumeHelper.Replace('"', '\"'), $handoffPath.Replace('"', '\"')
-    $resumeProcess = Start-Process -FilePath $powershellPath -ArgumentList $resumeArgumentLine -WindowStyle Hidden -PassThru
-    $handoff | Add-Member -NotePropertyName resumeProcessId -NotePropertyValue $resumeProcess.Id -Force
-    $handoff | Add-Member -NotePropertyName resumeStartedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "reopened-awaiting-visible-turn" -Message "Codex desktop is open on the exact task. No hidden CLI continuation will be started; a visible user turn is required on Windows."
+    Save-RestartState -State "completed" -Message "Fresh AI Mobile runtime verified, the same task continued on the requested lightweight model, and the exact OpenAI.Codex task reopened."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message

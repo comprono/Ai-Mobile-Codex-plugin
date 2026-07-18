@@ -30,7 +30,6 @@ try {
   const task = startTask({ workspace, outcome: "Ship the feature", acceptanceEvidence: ["End-to-end fixture passes"] }, resources);
   const round = dispatchRound({
     taskId: task.taskId,
-    currentCodex: { goal: "Implement API behavior", files: ["src/api"] },
     workUnits: [
       { goal: "Review UI accessibility and return exact findings", independenceReason: "UI inspection does not touch API implementation", relevantFiles: ["src/ui"], readOnly: true, complexity: "large", taskKind: "review", estimatedDirectTokens: 12000, integrationAction: "Apply confirmed UI fixes" },
       { goal: "Design independent test cases for user workflows", independenceReason: "Test design is separate from API implementation and UI review", relevantFiles: ["tests"], readOnly: true, complexity: "large", taskKind: "tests", estimatedDirectTokens: 12000, integrationAction: "Add accepted test cases" },
@@ -38,15 +37,17 @@ try {
   }, resources, {}, fakeCreate);
   assert.equal(round.workers.length, 2);
   assert.equal(round.state, "running");
-  assert.match(round.currentCodex.instruction, /do not wait/i);
+  assert.equal(round.currentCodex.role, "project-console");
+  assert.deepEqual(round.currentCodex.files, []);
+  assert.equal(round.execution.status, "workers-running");
 
   const directTask = startTask({ workspace, outcome: "Fix one typo", acceptanceEvidence: ["Typo is corrected"] }, resources);
-  const direct = dispatchRound({ taskId: directTask.taskId, currentCodex: { goal: "Fix README typo", files: ["README.md"] }, workUnits: [{ goal: "Review the same README typo", independenceReason: "Claimed review", relevantFiles: ["README.md"], readOnly: true, complexity: "small", taskKind: "review", estimatedDirectTokens: 500 }] }, resources, {}, fakeCreate);
-  assert.equal(direct.workers.length, 0);
-  assert.equal(direct.state, "direct");
-  assert.ok(direct.rejected.length >= 1);
+  const direct = dispatchRound({ taskId: directTask.taskId, workUnits: [{ goal: "Review the README typo", independenceReason: "The console owns no project files", relevantFiles: ["README.md"], readOnly: true, complexity: "small", taskKind: "review", estimatedDirectTokens: 500 }] }, resources, {}, fakeCreate);
+  assert.equal(direct.workers.length, 1);
+  assert.equal(direct.state, "running");
+  assert.equal(direct.rejected.length, 0);
   assert.equal(fs.existsSync(path.join(workspace, ".ai-mobile")), false);
-  process.stdout.write(`${JSON.stringify({ ok: true, parallelWorkers: round.workers.length, smallTaskWorkers: direct.workers.length, currentCodexActive: true }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, parallelWorkers: round.workers.length, smallTaskWorkers: direct.workers.length, consoleLightweight: true }, null, 2)}\n`);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -17,4 +17,4 @@ keywords:
   - "antigravity 2.0 codex plugin"
   - "codex mcp plugin"
   - "devtools mcp antigravity"
-abstract: "A token-efficient community Codex plugin that coordinates one or more independently verified projects while current Codex advances the highest-value critical path and selectively delegates bounded work to local Codex CLI, Claude Code, Antigravity, and optional Cursor resources on Windows."
+abstract: "A token-efficient community Codex and Claude Code plugin with a lightweight visible project console and a capacity-aware work plane across local Codex CLI, Claude, Antigravity, and optional Cursor workers on Windows."

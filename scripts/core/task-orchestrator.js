@@ -1,9 +1,13 @@
-﻿"use strict";
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
 
 const { boundariesOverlap, goalOverlap } = require("./lane-policy");
 const { route } = require("./router");
 const { cancelTaskJobs, readJob, statusFor, TERMINAL_STATES } = require("./job-store");
 const { resourceLeaseSnapshot } = require("./resource-leases");
+const { integrateJob } = require("./patch-integration");
 const {
   compactProjectContext,
   criticalPath,
@@ -123,7 +127,7 @@ function normalizeBlockers(values) {
       id: String(row.id || `B${index + 1}`).slice(0, 80),
       description: String(row.description || "").trim().slice(0, 1000),
       resolved: row.resolved === true,
-      owner: String(row.owner || "current-codex").trim().slice(0, 120),
+      owner: String(row.owner || "coordinator").trim().slice(0, 120),
       recoveryTrigger: String(row.recoveryTrigger || "New evidence or corrected state is available.").trim().slice(0, 500),
       recoveryAction: String(row.recoveryAction || "Inspect authoritative state and retry only after the blocker changes.").trim().slice(0, 1000),
     };
@@ -146,6 +150,13 @@ function normalizeWorkGraph(values) {
       owner: row.owner || null,
       evidenceRefs: cleanStrings(row.evidenceRefs, 10, 1000),
       acceptanceRequirementId: row.acceptanceRequirementId ? safeContractId(row.acceptanceRequirementId) : null,
+      relevantFiles: cleanStrings(row.relevantFiles, 80, 500),
+      expectedFiles: cleanStrings(row.expectedFiles, 80, 500),
+      acceptanceCriteria: cleanStrings(row.acceptanceCriteria, 12, 1000),
+      verificationCommands: Array.isArray(row.verificationCommands) ? row.verificationCommands.slice(0, 8) : [],
+      taskKind: String(row.taskKind || "").trim().slice(0, 40),
+      complexity: ["small", "medium", "large"].includes(row.complexity) ? row.complexity : "large",
+      readOnly: row.readOnly === true,
     };
   });
 }
@@ -177,20 +188,100 @@ function graphForStart(args, context, requirements) {
   return normalizeWorkGraph(defaultWorkGraph(requirements, context.currentSliceRequirementId));
 }
 
-function codexPlan(args, requirements, workGraph) {
-  const plan = criticalPath(requirements, workGraph);
+function codexPlan(args) {
   return {
-    model: String(args.currentCodexModel || args.currentModel || args.currentCodex?.model || "").trim().slice(0, 160),
+    role: "project-console",
+    model: String(args.consoleModel || args.currentCodexModel || args.currentModel || args.currentCodex?.model || "").trim().slice(0, 160),
+    effort: String(args.consoleEffort || args.currentCodex?.effort || "low").trim().slice(0, 40),
     reservePercent: Math.max(5, Math.min(50, Number(args.codexReservePercent || 15))),
-    goal: plan.goal,
+    goal: "Coordinate the durable task, dispatch work-plane units, and report verified material transitions.",
     files: [],
-    acceptanceCriteria: plan.acceptanceCriteria || [],
-    requirementId: plan.requirementId || null,
-    workGraphNodeId: plan.workGraphNodeId || null,
-    reason: plan.reason,
+    ownsProjectFiles: false,
+    reason: "The visible Codex task is the lightweight user console; project work belongs to separately leased work-plane workers.",
   };
 }
 
+function inferTaskKind(goal) {
+  const value = String(goal || "").toLowerCase();
+  if (/browser|portal|form|selector|captcha|page/.test(value)) return "browser";
+  if (/architect|design|plan|contract/.test(value)) return "architecture";
+  if (/test|verify|evidence|acceptance/.test(value)) return "tests";
+  if (/debug|fix|repair|failure|blocked|integrity/.test(value)) return "debug";
+  if (/research|investigat|discover/.test(value)) return "research";
+  if (/review|audit/.test(value)) return "review";
+  return "code";
+}
+
+function hasTestFiles(root, depth = 2) {
+  const queue = [{ dir: root, depth: 0 }];
+  while (queue.length) {
+    const current = queue.shift();
+    let entries = [];
+    try { entries = fs.readdirSync(current.dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".venv") continue;
+      if (entry.isFile() && ((entry.name.toLowerCase().startsWith("test_") && entry.name.toLowerCase().endsWith(".py")) || entry.name.toLowerCase().endsWith("_test.py"))) return true;
+      if (entry.isDirectory() && current.depth < depth) queue.push({ dir: path.join(current.dir, entry.name), depth: current.depth + 1 });
+    }
+  }
+  return false;
+}
+
+function inferredVerificationCommands(workspace) {
+  const packagePath = path.join(workspace, "package.json");
+  if (fs.existsSync(packagePath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+      const script = String(pkg.scripts?.test || "");
+      if (script && !/no test specified/i.test(script)) return [{ name: "project-tests", command: "npm", args: ["test"], timeoutSeconds: 900 }];
+    } catch { /* use other deterministic probes */ }
+  }
+  if (fs.existsSync(path.join(workspace, "scripts", "self-test.js"))) {
+    return [{ name: "project-self-test", command: "node", args: ["scripts/self-test.js"], timeoutSeconds: 900 }];
+  }
+  if (
+    fs.existsSync(path.join(workspace, "pytest.ini"))
+    || fs.existsSync(path.join(workspace, "pyproject.toml"))
+    || fs.existsSync(path.join(workspace, "tests"))
+    || hasTestFiles(workspace)
+  ) return [{ name: "project-tests", command: "python", args: ["-m", "pytest", "-q"], timeoutSeconds: 900 }];
+  const entries = (() => { try { return fs.readdirSync(workspace); } catch { return []; } })();
+  if (entries.some((name) => name.toLowerCase().endsWith(".sln") || name.toLowerCase().endsWith(".csproj"))) return [{ name: "project-tests", command: "dotnet", args: ["test"], timeoutSeconds: 900 }];
+  if (fs.existsSync(path.join(workspace, "go.mod"))) return [{ name: "project-tests", command: "go", args: ["test", "./..."], timeoutSeconds: 900 }];
+  if (fs.existsSync(path.join(workspace, "Cargo.toml"))) return [{ name: "project-tests", command: "cargo", args: ["test"], timeoutSeconds: 900 }];
+  return [];
+}
+function recommendedWorkUnit(task) {
+  const plan = nextPlanForTask(task);
+  const requirement = (task.requirements || []).find((row) => row.id === plan.requirementId) || null;
+  const blocker = requirement?.status === "blocked" ? (requirement.blocker || null) : null;
+  if (plan.state === "blocked" && /(^|[^a-z])(user|human)([^a-z]|$)/i.test(String(blocker?.owner || ""))) return null;
+  if (!["ready", "awaiting-evidence", "verification", "blocked"].includes(plan.state)) return null;
+  const node = (task.workGraph || []).find((row) => row.id === plan.workGraphNodeId) || {};
+  const declaredVerification = node.verificationCommands || [];
+  const verificationCommands = declaredVerification.length ? declaredVerification : inferredVerificationCommands(task.workspace);
+  const readOnly = node.readOnly === true || verificationCommands.length === 0;
+  const relevantFiles = cleanStrings(node.relevantFiles, 80, 500);
+  const expectedFiles = cleanStrings(node.expectedFiles, 80, 500);
+  const goal = plan.state === "blocked" && String(blocker?.recoveryAction || "").trim()
+    ? String(blocker.recoveryAction).trim().slice(0, 5000)
+    : plan.goal;
+  return {
+    goal: readOnly ? "Inspect the acceptance gap and return exact files plus a deterministic verification command: " + goal : goal,
+    workGraphNodeId: plan.workGraphNodeId || undefined,
+    independenceReason: "The visible project console owns no implementation files; this is the single dependency-ready work-plane unit.",
+    relevantFiles: relevantFiles.length ? relevantFiles : ["."],
+    expectedFiles: readOnly ? [] : (expectedFiles.length ? expectedFiles : ["."]),
+    acceptanceCriteria: node.acceptanceCriteria?.length ? node.acceptanceCriteria : plan.acceptanceCriteria,
+    verificationCommands,
+    taskKind: node.taskKind || (readOnly ? "repository-scan" : inferTaskKind(goal)),
+    complexity: node.complexity || "large",
+    readOnly,
+    estimatedDirectTokens: 12000,
+    maxWorkerOutputTokens: 1600,
+    workPlaneRequired: true,
+  };
+}
 function requirementKey(row) {
   return String(row?.description || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -231,38 +322,38 @@ function classifyRecovery(reason) {
   if (/overlap|ownership|serialize/i.test(value)) {
     return {
       failureClass: "ownership-conflict",
-      owner: "current-codex",
-      recoveryTrigger: "The current Codex lane completes or the worker receives genuinely disjoint file and goal boundaries.",
-      recoveryAction: "Finish the current critical-path unit, then serialize this work or redefine it with disjoint ownership. Do not retry the same overlapping lane.",
+      owner: "coordinator",
+      recoveryTrigger: "The conflicting work-plane lease completes or the unit receives genuinely disjoint file and goal boundaries.",
+      recoveryAction: "Wait for the conflicting work-plane lease, then serialize this work or redefine it with disjoint ownership. Do not retry the same overlapping lane.",
     };
   }
   if (/capacity|quota|reserve|provider|authenticated|unavailable|cooldown|worker limit/i.test(value)) {
     return {
       failureClass: "capacity-unavailable",
-      owner: "current-codex",
+      owner: "coordinator",
       recoveryTrigger: "Fresh capacity evidence changes or another eligible provider becomes available.",
-      recoveryAction: "Keep advancing the acceptance item in current Codex. Re-dispatch only after a fresh capacity transition or a materially different provider choice.",
+      recoveryAction: "Keep the console lightweight. Re-dispatch only after a fresh capacity transition or a materially different eligible provider choice.",
     };
   }
   if (/economic|overhead|saving|small task/i.test(value)) {
     return {
       failureClass: "delegation-not-worthwhile",
-      owner: "current-codex",
+      owner: "coordinator",
       recoveryTrigger: "The remaining unit becomes materially larger and independently verifiable.",
-      recoveryAction: "Complete the unit directly in current Codex; do not spend another worker prompt or review cycle.",
+      recoveryAction: "Do not push project work into the console. Merge it into a larger acceptance-linked work-plane unit or use deterministic tooling.",
     };
   }
   if (/dependencies|blocked|not active|work graph/i.test(value)) {
     return {
       failureClass: "dependency-blocked",
-      owner: "current-codex",
+      owner: "coordinator",
       recoveryTrigger: "The named dependency or blocker has verifiably changed.",
       recoveryAction: "Advance another dependency-ready acceptance item. Retry this unit only after its recorded dependency transition.",
     };
   }
   return {
     failureClass: "contract-invalid",
-    owner: "current-codex",
+    owner: "coordinator",
     recoveryTrigger: "The work contract is corrected using the observed rejection.",
     recoveryAction: "Correct the bounded goal, acceptance, or ownership once. Do not repeat the same rejected contract.",
   };
@@ -284,26 +375,28 @@ function nextPlanForTask(task, failures = [], completed = []) {
       requirementId: node?.acceptanceRequirementId || null,
       action: String(result.integration?.action || result.handoff?.integrationAction || "").slice(0, 1200),
       trustedPrimaryWrite: result.skipModelReview === true,
-      rule: result.skipModelReview === true ? "The exact trusted model already changed the primary workspace and deterministic checks passed. Do not spend another model call reviewing it; record acceptance-linked evidence." : "Inspect this handoff once, run deterministic checks, and record only acceptance-linked evidence.",
+      rule: result.skipModelReview === true
+        ? "The trusted worker already changed the primary workspace and deterministic checks passed; record only acceptance-linked evidence."
+        : "Integrate this isolated handoff once with deterministic checks; do not spend a premium model call re-reviewing it by default.",
     };
   });
   return {
     state: base.state,
-    owner: "current-codex",
+    owner: "work-plane",
     requirementId: base.requirementId || null,
     workGraphNodeId: base.workGraphNodeId || null,
     goal: base.goal,
     acceptanceCriteria: base.acceptanceCriteria || [],
     reason: transitions.length
-      ? "A worker path was rejected or failed; the task remains active on the next unresolved acceptance item."
+      ? "A worker path was rejected or failed; the coordinator must choose a materially changed eligible work-plane path."
       : base.reason,
     transitions,
     integrations,
     instruction: integrations.length
-      ? integrations.every((item) => item.trustedPrimaryWrite) ? "Trusted changes are already in the primary workspace. Do not run another model review; record their deterministic acceptance evidence and continue the returned current Codex goal." : "Integrate each listed handoff exactly once, run deterministic checks, record acceptance evidence, then continue the returned current Codex goal."
+      ? "Integrate each listed handoff exactly once, run deterministic checks, record acceptance evidence, then dispatch the next dependency-ready unit."
       : base.state === "verification"
-        ? "Run final deterministic acceptance checks, record sufficient evidence, then request completion."
-        : "Start or continue this acceptance-linked current Codex unit now. Dispatch again only for a new disjoint unit with positive total economics.",
+        ? "Dispatch or run deterministic final acceptance verification outside the visible console."
+        : "Dispatch this acceptance-linked unit to the best eligible work-plane worker. The visible console must not implement it.",
   };
 }
 
@@ -311,37 +404,44 @@ function executionContract(task, failures = [], completed = []) {
   const plan = nextPlanForTask(task, failures, completed);
   const requirement = (task.requirements || []).find((row) => row.id === plan.requirementId) || null;
   const blocker = requirement?.status === "blocked" ? (requirement.blocker || null) : null;
-  const userActionRequired = plan.state === "blocked" && /\b(user|human)\b/i.test(String(blocker?.owner || ""));
+  const userActionRequired = plan.state === "blocked" && /(^|[^a-z])(user|human)([^a-z]|$)/i.test(String(blocker?.owner || ""));
   const recoveryAction = String(blocker?.recoveryAction || "").trim();
-  const mustStartNow = plan.state !== "blocked" || (!userActionRequired && Boolean(recoveryAction));
-  const action = plan.state === "blocked" && recoveryAction ? recoveryAction : plan.goal;
+  const workPlaneAction = plan.state === "blocked" && recoveryAction ? recoveryAction : plan.goal;
+  const mustDispatchNow = plan.state !== "blocked" || (!userActionRequired && Boolean(recoveryAction));
   return {
-    mode: "same-turn",
-    status: userActionRequired ? "decision-required" : mustStartNow ? "active" : "blocked",
-    owner: userActionRequired ? blocker.owner : "current-codex",
-    action,
+    mode: "console-workplane",
+    status: userActionRequired ? "decision-required" : mustDispatchNow ? "dispatch-required" : "blocked",
+    owner: userActionRequired ? blocker.owner : "coordinator",
+    action: mustDispatchNow ? "Dispatch work-plane unit: " + workPlaneAction : workPlaneAction,
+    workPlaneAction,
     reason: blocker?.reason || plan.reason,
     requirementId: plan.requirementId || null,
     workGraphNodeId: plan.workGraphNodeId || null,
-    mustStartNow,
+    mustDispatchNow,
+    mustStartNow: false,
     userActionRequired,
-    mayEndTurn: !mustStartNow,
+    mayEndTurn: !mustDispatchNow,
     blocker,
+    console: {
+      role: "lightweight-project-console",
+      ownsProjectFiles: false,
+      allowed: ["invoke coordinator tools", "take user direction", "report verified material transitions"],
+      forbidden: ["bulk repository reading", "heavy planning", "project coding", "expensive model review"],
+    },
     reporting: {
       when: ["resource assignment", "accepted evidence", "new blocker", "material recovery transition"],
       format: "Done / Active / Blocked / Resources / Next",
-      nextRule: "Next names the material action already starting; never hand a safe executable action back to the user.",
+      nextRule: "Next names a work-plane action already assigned or the exact decision required; routine activity is omitted.",
     },
     stopConditions: [
       "All required acceptance evidence passes.",
       "An exact user decision or authorization is required and no other dependency-ready work remains.",
-      "A genuine blocker has no safe recovery action and no other dependency-ready work remains.",
+      "No eligible work-plane worker exists after fresh capacity discovery and the typed recovery path is exhausted.",
     ],
   };
 }
-
 function workerProviderLabel(provider) {
-  // "codex" alone is ambiguous with current Codex; every worker-facing entry
+  // "codex" alone is ambiguous with the visible Codex console; every worker-facing entry
   // names the callable CLI explicitly.
   return provider === "codex" ? "codex-cli" : provider;
 }
@@ -383,15 +483,15 @@ function resourceReport(task, workers = [], rejected = []) {
     }
     if (!state.available || !state.authenticated) return { provider: label, status: "unavailable", models: state.models || [], reason: state.reason || "Provider is unavailable or unauthenticated." };
     if (provider === "codex") {
-      const base = `Current Codex is active; no additional Codex CLI lane was accepted, preserving the ${task.currentCodex?.reservePercent || 15}% integration reserve.`;
-      return { provider: "codex-cli", status: "reserved", models: state.models || [], reason: rejectionReasons.codex ? `${base} ${rejectionReasons.codex}` : base };
+      const base = "Codex CLI remains eligible only above the protected " + (task.currentCodex?.reservePercent || 15) + "% shared-pool reserve; no Codex CLI lane was accepted in this round.";
+      return { provider: "codex-cli", status: "idle", models: state.models || [], reason: rejectionReasons.codex ? base + " " + rejectionReasons.codex : base };
     }
     return { provider: label, status: "idle", models: state.models || [], reason: rejectionReasons[provider] || "No independently owned, economically positive lane has been accepted for this provider yet." };
   });
   return {
     observedAt: task.capacitySnapshot?.generatedAt || null,
     selected: [
-      { actor: "current-codex", model: task.currentCodex?.model || "current-task-model", role: task.currentCodex?.goal || "highest-value critical path", reason: `Current Codex owns the critical path while preserving a ${task.currentCodex?.reservePercent || 15}% reserve.` },
+      { actor: "visible-console", model: task.currentCodex?.model || "current-task-model", effort: task.currentCodex?.effort || "low", role: "lightweight project console", reason: "Receives direction, invokes the deterministic coordinator, and reports verified transitions; it owns no project implementation files." },
       ...selectedWorkers,
     ],
     providers: decisions,
@@ -495,8 +595,16 @@ function startPortfolio(args, resources) {
     outcome: portfolio.outcome,
     projects: portfolio.projects.map((project) => ({ projectId: project.projectId, taskId: project.taskId, workspace: project.workspace, outcome: project.outcome, priority: project.priority, blockers: project.blockers, requirements: project.requirements, workGraph: project.workGraph })),
     capacity: portfolio.capacitySnapshot,
+    console: portfolio.currentCodex,
     currentCodex: portfolio.currentCodex,
-    execution: currentTask ? executionContract(currentTask) : { mode: "same-turn", status: "blocked", mustStartNow: false, mayEndTurn: true, reason: "No active portfolio project is ready." },
+    workPlane: {
+      plan: currentTask ? nextPlanForTask(currentTask) : null,
+      recommendedWorkUnits: portfolio.projects.flatMap((project) => {
+        const unit = recommendedWorkUnit(readTask(project.taskId));
+        return unit ? [{ ...unit, projectId: project.projectId }] : [];
+      }),
+    },
+    execution: currentTask ? executionContract(currentTask) : { mode: "console-workplane", status: "blocked", mustDispatchNow: false, mustStartNow: false, mayEndTurn: true, reason: "No active portfolio project is ready." },
     resources: currentTask ? resourceReport(currentTask) : { observedAt: portfolio.capacitySnapshot?.generatedAt || null, selected: [], providers: [] },
     nextAction: currentTask ? executionContract(currentTask).action : "Resolve the recorded portfolio blocker.",
     reportingRule: "Report only assignments, accepted project evidence, a real blocker, or the next material action. Do not create a Goal, manager loop, heartbeat, automation, UI launch, or status feed.",
@@ -515,7 +623,9 @@ function startTask(args, resources) {
     requirements: record.requirements.map(({ id, description, minimumEvidenceLevel, status, blocker }) => ({ id, description, minimumEvidenceLevel, status, blocker: blocker || null })),
     workGraph: record.workGraph,
     capacity: record.capacitySnapshot,
+    console: record.currentCodex,
     currentCodex: record.currentCodex,
+    workPlane: { plan: nextPlanForTask(record), recommendedWorkUnits: [recommendedWorkUnit(record)].filter(Boolean) },
     execution: executionContract(record),
     resources: resourceReport(record),
     nextAction: executionContract(record).action,
@@ -648,7 +758,7 @@ function reconcileSingleTask(args, portfolioReference = null) {
     constraints,
     blockers,
     workGraph,
-    currentCodex: materialChange ? nextCodex : current.currentCodex,
+    currentCodex: materialChange || current.currentCodex?.role !== "project-console" ? nextCodex : current.currentCodex,
   }));
 
   if (portfolioReference) {
@@ -738,20 +848,22 @@ function workerTaskContext(task) {
 }
 function dispatchSingleRound(args, resources, histories, createJob) {
   const task = synchronizeTaskWithProject(readTask(args.taskId));
-  if (task.state !== "active") throw new Error(`Task ${task.taskId} is ${task.state}; it cannot dispatch another round.`);
+  if (task.state !== "active") throw new Error("Task " + task.taskId + " is " + task.state + "; it cannot dispatch another round.");
   const previousRoundRef = (task.rounds || []).at(-1);
   if (previousRoundRef) {
     const previous = readRound(task.taskId, previousRoundRef.roundId);
-    if (previous.state === "running") throw new Error(`Round ${previous.roundId} is still running. Collect it at the integration point instead of creating duplicate work.`);
+    if (previous.state === "running") throw new Error("Round " + previous.roundId + " is still running. Collect it at the integration point instead of creating duplicate work.");
   }
-  const currentCodex = args.currentCodex || {};
-  const currentGoal = String(currentCodex.goal || "").trim().slice(0, 5000);
-  if (!currentGoal) throw new Error("currentCodex.goal is required after project reconnaissance.");
-  const currentFiles = cleanStrings(currentCodex.files, 80, 500);
-  const workUnits = Array.isArray(args.workUnits) ? args.workUnits.slice(0, 2) : [];
+
+  if (args.currentCodex?.files?.length) throw new Error("The lightweight project console cannot own project files.");
+  const supplied = Array.isArray(args.workUnits) ? args.workUnits.slice(0, 2) : [];
+  const automatic = supplied.length ? [] : [recommendedWorkUnit(task)].filter(Boolean);
+  const workUnits = supplied.length ? supplied : automatic;
+  if (!workUnits.length) throw new Error("No dependency-ready work-plane unit exists for this task.");
+
   const round = createRoundRecord(task.taskId, {
     state: "planning",
-    currentCodex: { goal: currentGoal, files: currentFiles, acceptanceCriteria: cleanStrings(currentCodex.acceptanceCriteria, 12, 1000) },
+    currentCodex: task.currentCodex,
     jobs: [],
     rejected: [],
     capacitySnapshot: compactResources(resources),
@@ -759,18 +871,32 @@ function dispatchSingleRound(args, resources, histories, createJob) {
   const jobs = [];
   const rejected = [];
   const workerOwners = [];
-  for (const unit of workUnits) {
+  for (const rawUnit of workUnits) {
+    const unit = { ...rawUnit, workPlaneRequired: true };
     const unitGoal = String(unit.goal || "").trim();
     if (!unitGoal) { rejected.push({ goal: "", reason: "Work unit requires a bounded goal." }); continue; }
     const unitFiles = cleanStrings([...(unit.relevantFiles || []), ...(unit.expectedFiles || [])], 100, 500);
     const workerConflict = workerOwners.find((owner) => boundariesOverlap(unitFiles, owner.files).length || goalOverlap(unitGoal, owner.goal).overlaps);
-    if (workerConflict) { rejected.push({ goal: unitGoal, reason: `This unit overlaps another unit in the same round (${workerConflict.goal}); serialize it in current Codex.` }); continue; }
+    if (workerConflict) { rejected.push({ goal: unitGoal, reason: "This unit overlaps another unit in the same round (" + workerConflict.goal + "); serialize it in the work plane." }); continue; }
     const mandatedUnit = applyUserModelMandate(task, unit);
     let decision;
     try {
-      decision = route({ ...mandatedUnit, workspace: task.workspace, projectGoal: task.outcome, goal: unitGoal, currentCodexGoal: currentGoal, currentCodexFiles: currentFiles, horizonHours: args.horizonHours || 5 }, resources, histories);
+      decision = route({
+        ...mandatedUnit,
+        workspace: task.workspace,
+        projectGoal: task.outcome,
+        goal: unitGoal,
+        currentCodexGoal: task.currentCodex?.goal || "Lightweight project console",
+        currentCodexFiles: [],
+        currentCodexReserved: false,
+        workPlaneRequired: true,
+        horizonHours: args.horizonHours || 5,
+      }, resources, histories);
     } catch (error) { rejected.push({ goal: unitGoal, reason: withMandateNote(error.message, mandatedUnit) }); continue; }
-    if (decision.action !== "delegate") { rejected.push({ goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics || null, considered: decision.considered || [] }); continue; }
+    if (decision.action !== "delegate") {
+      rejected.push({ goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics || null, considered: decision.considered || [] });
+      continue;
+    }
     try {
       const selected = resources.providers[decision.provider];
       const receipt = createJob({
@@ -791,10 +917,10 @@ function dispatchSingleRound(args, resources, histories, createJob) {
       workerOwners.push({ goal: unitGoal, files: unitFiles });
     } catch (error) { rejected.push({ goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
   }
-  const state = jobs.length ? "running" : "direct";
+
+  const state = jobs.length ? "running" : "blocked";
   updateRound(task.taskId, round.roundId, { state, jobs, rejected });
   const updatedTask = updateTask(task.taskId, (current) => {
-    current.currentCodex = { ...current.currentCodex, goal: currentGoal, files: currentFiles, acceptanceCriteria: cleanStrings(currentCodex.acceptanceCriteria, 12, 1000), updatedAt: utcNow() };
     current.capacitySnapshot = compactResources(resources);
     current.workGraph = (current.workGraph || []).map((node) => {
       const job = jobs.find((row) => row.workGraphNodeId === node.id);
@@ -802,21 +928,39 @@ function dispatchSingleRound(args, resources, histories, createJob) {
     });
     return current;
   });
-  const nextPlan = nextPlanForTask(updatedTask, rejected);
+  const recoveryPlan = nextPlanForTask(updatedTask, rejected);
+  const execution = jobs.length
+    ? {
+        ...executionContract(updatedTask),
+        status: "workers-running",
+        action: "Collect this finite round once at its integration point.",
+        workPlaneAction: jobs.map((job) => job.goal).join(" | "),
+        mustDispatchNow: false,
+        mustStartNow: false,
+        mayEndTurn: true,
+      }
+    : {
+        ...executionContract(updatedTask, rejected),
+        status: "blocked",
+        action: recoveryPlan.transitions[0]?.recoveryAction || "Refresh capacity only after a material provider transition.",
+        mustDispatchNow: false,
+        mustStartNow: false,
+        mayEndTurn: true,
+      };
   return {
     taskId: task.taskId,
     roundId: round.roundId,
     state,
-    currentCodex: { goal: currentGoal, files: currentFiles, instruction: "Start or continue this critical-path unit now; do not wait for workers." },
+    console: updatedTask.currentCodex,
+    currentCodex: updatedTask.currentCodex,
     workers: jobs,
     rejected,
-    recoveryPlan: nextPlan,
-    execution: { ...executionContract(updatedTask, rejected), status: "active", action: currentGoal, mustStartNow: true, mayEndTurn: false },
+    recoveryPlan,
+    execution,
     resources: resourceReport(updatedTask, jobs, rejected),
-    nextAction: currentGoal,
+    nextAction: execution.action,
   };
 }
-
 function graphNodeReady(project, nodeId) {
   if (!nodeId) return true;
   const node = (project.workGraph || []).find((row) => row.id === nodeId);
@@ -863,20 +1007,21 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     if (previous.state === "running") throw new Error(`Portfolio round ${previous.roundId} is still running. Collect it once at the integration point.`);
   }
   const recommended = highestValueReadyProject(portfolio);
-  if (!recommended) throw new Error("No unblocked active portfolio project is ready for current Codex.");
-  const currentCodex = args.currentCodex || {};
-  const currentProjectId = String(currentCodex.projectId || recommended.projectId);
-  if (currentProjectId !== recommended.projectId && !String(currentCodex.priorityOverrideReason || "").trim()) {
-    throw new Error(`Current Codex must advance highest-value ready project ${recommended.projectId}; provide a concrete priorityOverrideReason only when new evidence changes that choice.`);
+  if (!recommended) throw new Error("No unblocked active portfolio project is ready for the work plane.");
+  const consoleInput = args.currentCodex || {};
+  if (consoleInput.files?.length) throw new Error("The lightweight project console cannot own project files.");
+  const currentProjectId = String(consoleInput.projectId || recommended.projectId);
+  if (currentProjectId !== recommended.projectId && !String(consoleInput.priorityOverrideReason || "").trim()) {
+    throw new Error("The work plane must start with highest-value ready project " + recommended.projectId + "; provide a priorityOverrideReason only when new evidence changes that choice.");
   }
   const currentProject = portfolio.projects.find((project) => project.projectId === currentProjectId);
-  if (!currentProject || currentProject.state !== "active" || projectBlocked(currentProject)) throw new Error(`Current Codex project is not ready: ${currentProjectId}.`);
-  const currentGoal = String(currentCodex.goal || "").trim().slice(0, 5000);
-  if (!currentGoal) throw new Error("currentCodex.goal is required after reconnaissance of the selected portfolio project.");
-  const currentFiles = cleanStrings(currentCodex.files, 80, 500);
+  if (!currentProject || currentProject.state !== "active" || projectBlocked(currentProject)) throw new Error("Selected portfolio project is not ready: " + currentProjectId + ".");
+  const console = { ...readTask(currentProject.taskId).currentCodex, projectId: currentProjectId, taskId: currentProject.taskId };
+  const currentGoal = console.goal || "Lightweight portfolio console";
+  const currentFiles = [];
   const round = createPortfolioRoundRecord(portfolio.portfolioId, {
     state: "planning",
-    currentCodex: { projectId: currentProjectId, taskId: currentProject.taskId, goal: currentGoal, files: currentFiles, acceptanceCriteria: cleanStrings(currentCodex.acceptanceCriteria, 12, 1000) },
+    currentCodex: console,
     jobs: [],
     rejected: [],
     capacitySnapshot: compactResources(resources),
@@ -884,13 +1029,18 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
   const leaseState = resourceLeaseSnapshot();
   const profile = readProfile();
   const availableSlots = Math.max(0, profile.maxGlobalWorkers - leaseState.active.length);
-  const requested = Array.isArray(args.workUnits) ? args.workUnits.slice(0, 40) : [];
+  const supplied = Array.isArray(args.workUnits) ? args.workUnits.slice(0, 40) : [];
+  const requested = supplied.length ? supplied : portfolio.projects.flatMap((project) => {
+    if (project.state !== "active" || projectBlocked(project)) return [];
+    const unit = recommendedWorkUnit(readTask(project.taskId));
+    return unit ? [{ ...unit, projectId: project.projectId }] : [];
+  });
   const ordered = portfolioCandidateOrder(requested, portfolio, leaseState.fairness);
   const jobs = [];
   const rejected = [];
   const workerOwners = [];
   for (const candidate of ordered) {
-    const unit = candidate.unit;
+    const unit = { ...candidate.unit, workPlaneRequired: true };
     const project = candidate.project;
     const unitGoal = String(unit.goal || "").trim();
     if (jobs.length >= availableSlots) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: "Held for a later finite round by the machine-wide worker limit and portfolio fairness policy." }); continue; }
@@ -909,7 +1059,9 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
         projectGoal: project.outcome,
         goal: unitGoal,
         currentCodexGoal: currentGoal,
-        currentCodexFiles: project.projectId === currentProjectId ? currentFiles : [],
+        currentCodexFiles: [],
+        currentCodexReserved: false,
+        workPlaneRequired: true,
         currentCodexReserved: unit.currentCodexReserved === true,
         horizonHours: args.horizonHours || portfolio.allocationPolicy.horizonHours || 5,
         projectId: project.projectId,
@@ -939,10 +1091,10 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
       workerOwners.push({ projectId: project.projectId, workspace: project.workspace, goal: unitGoal, files: unitFiles });
     } catch (error) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
   }
-  const state = jobs.length ? "running" : "direct";
+  const state = jobs.length ? "running" : "blocked";
   updatePortfolioRound(portfolio.portfolioId, round.roundId, { state, jobs, rejected });
   updatePortfolio(portfolio.portfolioId, (current) => {
-    current.currentCodex = { projectId: currentProjectId, taskId: currentProject.taskId, goal: currentGoal, files: currentFiles, acceptanceCriteria: cleanStrings(currentCodex.acceptanceCriteria, 12, 1000), updatedAt: utcNow() };
+    current.currentCodex = { ...console, updatedAt: utcNow() };
     current.projects = current.projects.map((project) => {
       const owned = jobs.filter((job) => job.projectId === project.projectId);
       if (!owned.length) return project;
@@ -966,27 +1118,44 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     });
   }
   updateTask(currentProject.taskId, (task) => {
-    task.currentCodex = { ...task.currentCodex, goal: currentGoal, files: currentFiles, updatedAt: utcNow() };
+    task.currentCodex = { ...task.currentCodex, updatedAt: utcNow() };
     return task;
   });
   const recoveryPlans = Object.fromEntries(portfolio.projects.map((project) => [
     project.projectId, nextPlanForTask(readTask(project.taskId), rejected.filter((row) => row.projectId === project.projectId)),
   ]));
   const currentTaskAfterDispatch = readTask(currentProject.taskId);
+  const execution = jobs.length
+    ? {
+        ...executionContract(currentTaskAfterDispatch),
+        status: "workers-running",
+        action: "Collect this finite portfolio round once at its integration point.",
+        workPlaneAction: jobs.map((job) => job.projectId + ": " + job.goal).join(" | "),
+        mustDispatchNow: false,
+        mustStartNow: false,
+        mayEndTurn: true,
+      }
+    : {
+        ...executionContract(currentTaskAfterDispatch, rejected.filter((row) => !row.projectId || row.projectId === currentProjectId)),
+        status: "blocked",
+        mustDispatchNow: false,
+        mustStartNow: false,
+        mayEndTurn: true,
+      };
   return {
     portfolioId: portfolio.portfolioId,
     roundId: round.roundId,
     state,
-    currentCodex: { projectId: currentProjectId, taskId: currentProject.taskId, goal: currentGoal, files: currentFiles, instruction: "Advance this highest-value critical path now; do not wait for workers." },
+    console,
+    currentCodex: console,
     workers: jobs,
     rejected,
     recoveryPlans,
-    execution: { ...executionContract(currentTaskAfterDispatch, rejected.filter((row) => !row.projectId || row.projectId === currentProjectId)), status: "active", action: currentGoal, mustStartNow: true, mayEndTurn: false },
+    execution,
     resources: resourceReport(currentTaskAfterDispatch, jobs, rejected),
-    nextAction: currentGoal,
+    nextAction: execution.action,
   };
 }
-
 function dispatchRound(args, resources, histories, createJob) {
   return args.portfolioId ? dispatchPortfolioRound(args, resources, histories, createJob) : dispatchSingleRound(args, resources, histories, createJob);
 }
@@ -1068,6 +1237,110 @@ function collectRound(args) {
   return args.portfolioId ? collectPortfolioRound(args) : collectSingleRound(args);
 }
 
+function integrationEvidenceFor(task, job, result) {
+  if (result.integrated !== true || result.verification?.passed !== true) return null;
+  const node = (task.workGraph || []).find((row) => row.id === job.workGraphNodeId);
+  const requirement = (task.requirements || []).find((row) => row.id === node?.acceptanceRequirementId);
+  if (!node || !requirement || EVIDENCE_RANK.integration < EVIDENCE_RANK[requirement.minimumEvidenceLevel]) return null;
+  return {
+    requirementId: requirement.id,
+    workGraphNodeId: node.id,
+    level: "integration",
+    ref: "ai-mobile-integration:" + result.jobId,
+    summary: "Worker patch was boundary-checked, applied once, and passed deterministic primary-workspace verification.",
+    passed: true,
+  };
+}
+
+function integrateSingleRound(args) {
+  const task = readTask(args.taskId);
+  const round = readRound(task.taskId, args.roundId);
+  if (round.state === "running" || round.state === "planning") throw new Error("Collect the finite round before integration.");
+  if (round.state === "invalidated") throw new Error("An invalidated round cannot be integrated.");
+  const integrations = (round.jobs || []).map((job) => ({ job, result: integrateJob(task.taskId, job.jobId) }));
+  const evidence = integrations.map(({ job, result }) => integrationEvidenceFor(readTask(task.taskId), job, result)).filter(Boolean);
+  if (evidence.length) recordTaskEvidence(task.taskId, evidence);
+  const failures = integrations.filter(({ result }) => result.integrated !== true && !String(result.blocker || "").startsWith("read-only-worker")).map(({ job, result }) => ({ goal: job.goal, blocker: result.blocker }));
+  updateRound(task.taskId, round.roundId, {
+    state: failures.length ? "needs-correction" : "integrated",
+    integratedAt: failures.length ? null : utcNow(),
+    integrationResults: integrations.map(({ job, result }) => ({ jobId: job.jobId, integrated: result.integrated, blocker: result.blocker || "" })),
+  });
+  const updated = updateTask(task.taskId, (current) => {
+    current.workGraph = (current.workGraph || []).map((node) => {
+      const row = integrations.find(({ job }) => job.workGraphNodeId === node.id);
+      if (!row) return node;
+      if (evidence.some((item) => item.workGraphNodeId === node.id)) return { ...node, state: "completed", owner: null };
+      if (row.result.integrated === true || String(row.result.blocker || "").startsWith("read-only-worker")) return { ...node, state: "awaiting-evidence", owner: null };
+      return { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "integration-failed").slice(0, 1000) };
+    });
+    return current;
+  });
+  const execution = executionContract(updated, failures);
+  return {
+    taskId: task.taskId,
+    roundId: round.roundId,
+    state: failures.length ? "needs-correction" : "integrated",
+    integrations: integrations.map(({ result }) => result),
+    acceptedEvidence: evidence,
+    summary: singleTaskSummary(readTask(task.taskId)),
+    execution,
+    nextAction: execution.action,
+  };
+}
+
+function integratePortfolioRound(args) {
+  const portfolio = readPortfolio(args.portfolioId);
+  const round = readPortfolioRound(portfolio.portfolioId, args.roundId);
+  if (round.state === "running" || round.state === "planning") throw new Error("Collect the finite portfolio round before integration.");
+  if (round.state === "invalidated") throw new Error("An invalidated portfolio round cannot be integrated.");
+  const integrations = (round.jobs || []).map((job) => ({ job, result: integrateJob(job.taskId, job.jobId) }));
+  const acceptedEvidence = [];
+  for (const project of portfolio.projects) {
+    const task = readTask(project.taskId);
+    const owned = integrations.filter(({ job }) => job.taskId === project.taskId);
+    const evidence = owned.map(({ job, result }) => integrationEvidenceFor(task, job, result)).filter(Boolean);
+    if (evidence.length) {
+      recordTaskEvidence(task.taskId, evidence);
+      acceptedEvidence.push(...evidence.map((item) => ({ ...item, projectId: project.projectId })));
+    }
+    updateTask(task.taskId, (current) => {
+      current.workGraph = (current.workGraph || []).map((node) => {
+        const row = owned.find(({ job }) => job.workGraphNodeId === node.id);
+        if (!row) return node;
+        if (evidence.some((item) => item.workGraphNodeId === node.id)) return { ...node, state: "completed", owner: null };
+        if (row.result.integrated === true || String(row.result.blocker || "").startsWith("read-only-worker")) return { ...node, state: "awaiting-evidence", owner: null };
+        return { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "integration-failed").slice(0, 1000) };
+      });
+      return current;
+    });
+  }
+  const failures = integrations.filter(({ result }) => result.integrated !== true && !String(result.blocker || "").startsWith("read-only-worker"));
+  updatePortfolioRound(portfolio.portfolioId, round.roundId, {
+    state: failures.length ? "needs-correction" : "integrated",
+    integratedAt: failures.length ? null : utcNow(),
+    integrationResults: integrations.map(({ job, result }) => ({ projectId: job.projectId, jobId: job.jobId, integrated: result.integrated, blocker: result.blocker || "" })),
+  });
+  updatePortfolio(portfolio.portfolioId, (current) => {
+    current.projects = current.projects.map((project) => {
+      const task = readTask(project.taskId);
+      return { ...project, requirements: task.requirements, workGraph: task.workGraph };
+    });
+    return current;
+  });
+  return {
+    portfolioId: portfolio.portfolioId,
+    roundId: round.roundId,
+    state: failures.length ? "needs-correction" : "integrated",
+    integrations: integrations.map(({ job, result }) => ({ projectId: job.projectId, ...result })),
+    acceptedEvidence,
+    summary: taskSummary({ portfolioId: portfolio.portfolioId }),
+  };
+}
+
+function integrateRound(args) {
+  return args.portfolioId ? integratePortfolioRound(args) : integrateSingleRound(args);
+}
 function recordTaskEvidence(taskId, entries) {
   return updateTask(taskId, (task) => {
     for (const entry of entries) {
@@ -1200,7 +1473,7 @@ function singleTaskSummary(task) {
     : lastRound?.state === "running"
       ? "workers-running"
       : execution.mustStartNow
-        ? "ready-for-current-codex"
+        ? "ready-for-dispatch"
         : execution.status || "blocked";
   return {
     taskId: task.taskId,
@@ -1215,7 +1488,9 @@ function singleTaskSummary(task) {
     workGraph: task.workGraph || [],
     progress: { passing: requirements.filter((item) => item.status === "passing").length, required: requirements.filter((item) => item.required).length },
     requirements,
+    console: task.currentCodex,
     currentCodex: task.currentCodex,
+    workPlane: { plan: nextPlanForTask(task), recommendedWorkUnits: [recommendedWorkUnit(task)].filter(Boolean) },
     nextPlan: nextPlanForTask(task),
     execution,
     resources: resourceReport(task, lastRound?.jobs || [], lastRound?.rejected || []),
@@ -1292,6 +1567,7 @@ module.exports = {
   EVIDENCE_RANK,
   cancelTask,
   collectRound,
+  integrateRound,
   compactCapacity,
   compactResources,
   completeTask,

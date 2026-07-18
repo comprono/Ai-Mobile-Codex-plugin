@@ -1,106 +1,72 @@
-# AI Mobile v1 Implementation Report
+# AI Mobile 1.2 Implementation Report
 
 ## Outcome
 
-AI Mobile v1 makes current Codex and authenticated local AI CLIs operate as one finite team across one or more projects. Current Codex remains responsible for intent, critical-path work, integration, risky actions, and final verification. External workers are temporary resources, not managers.
+AI Mobile coordinates local AI subscriptions so one measurable project outcome advances without turning the visible Codex conversation into an expensive implementation worker.
 
-## Why The Runtime Was Replaced
+The visible task is a lightweight project console. A deterministic coordinator assigns actual project work to separate Codex CLI, Claude, Antigravity, or Cursor workers. Every assignment is finite, acceptance-linked, capacity-aware, isolated, and independently verifiable.
 
-Earlier versions accumulated manager terminology, continuous status behavior, workspace-local state, stale capacity decisions, and worker activity reports. In real project use this created four failures:
+## Why 1.2 Exists
 
-1. orchestration consumed more time and tokens than it saved;
-2. current Codex became a reporter instead of a working agent;
-3. stale provider evidence and duplicate rounds caused false blocks or repeated work;
-4. process health was mistaken for project progress.
+The earlier design made current Codex both manager and critical-path implementer. When the visible task was moved to Luna for cheap reporting, Luna inherited coding, architecture, and integration. That defeated the model split and caused stale-runtime diagnosis, duplicated review, high token use, and weak visible progress.
 
-Version 1 removes those mechanisms instead of layering another manager over them.
+Version 1.2 separates three concerns:
 
-## Runtime Architecture
+1. Console: user direction, decisions, compact verified reports.
+2. Coordinator: deterministic outcome recovery, dependency selection, capacity routing, leases, economics, and evidence state.
+3. Work plane: separate models and no-model tools that read, reason, edit, test, and integrate.
 
-```text
-Codex task
-  -> start-task
-       -> central outcome or portfolio state
-       -> one passive machine/provider inventory
-  -> current Codex reconnaissance and critical-path work
-  -> dispatch-round
-       -> dependency, ownership, economics, capacity, and safety routing
-       -> machine-wide resource lease
-       -> read-only shared repository OR detached editing worktree
-  -> collect-round
-       -> compact handoff, patch, usage, deterministic verification
-       -> immediate editing-worktree cleanup
-  -> record-evidence
-       -> project-local acceptance requirement
-  -> complete-task
-       -> fail closed until every required project passes
-```
+## Finite Flow
 
-Runtime state is stored under `%LOCALAPPDATA%\AI Mobile\v1` with atomic JSON writes and task-scoped locks. It survives Git branch changes and never adds orchestration files to managed repositories.
+1. start-task imports the project North Star and acceptance requirements.
+2. The coordinator identifies one dependency-ready critical-path unit.
+3. dispatch-round selects an eligible work-plane provider from fresh evidence.
+4. A read-only worker shares the workspace; an editor receives an isolated Git worktree unless an exact trusted-primary exception applies.
+5. collect-round stores one compact handoff and cleans the worktree.
+6. integrate-round verifies boundaries, checks for concurrent primary changes, applies the patch once, runs declared primary-workspace tests, and rolls back a failure.
+7. record-evidence advances only the named acceptance item.
+8. complete-task succeeds only when every required item passes.
 
-## Single And Multi-Project Contracts
+No recurring manager, Goal, heartbeat, automation, hidden Codex run, repeated poll, or provider UI is created.
 
-The same nine tools serve both modes.
+## Resource Selection
 
-Single-project mode stores one task with outcome, requirements, current-Codex ownership, rounds, jobs, and evidence.
+The router observes provider availability, authentication, models, quota pools, remaining capacity when knowable, reset time, billing mode, recent reliability, free RAM, worktree storage, project priority, dependencies, output budget, and total integration cost.
 
-Portfolio mode adds one portfolio record and one independent child task per project. It stores priorities, blockers, dependency work graphs, allocation decisions, and evidence references without merging project state. Each worker job belongs to exactly one child task and one optional work-graph node.
+Model names are not permanent roles. The console uses the cheapest capable low-effort model. Bulk context uses deterministic or economical workers. Consequential planning uses the strongest suitable available model. Implementation uses the best eligible bounded worker. Verification uses no-model evidence first.
 
-## Allocation Invariants
+Codex CLI is a normal work-plane candidate when shared Codex capacity remains above the configured reserve.
 
-- Current Codex receives the highest-value ready critical path and starts immediately.
-- External work must be dependency-ready, disjoint, bounded, independently verifiable, and economically positive unless the user explicitly mandates a provider/model.
-- A user mandate can override the economic warning, but never authentication, billing, quota, ownership, storage, or safety gates.
-- Machine-wide leases enforce global and per-provider limits and quota-pool exclusion.
-- Priority-first round-robin allocation provides portfolio fairness.
-- The Codex reserve is enforced before an additional Codex CLI worker is eligible.
-- Unknown shared Codex capacity cannot justify an extra Codex worker.
-- UI-required work returns a typed blocker and never launches a desktop app automatically.
+## Safety
 
-## Evidence Invariants
+- The console owns no project files.
+- Machine-wide leases prevent provider and quota oversubscription.
+- One worker owns each file boundary.
+- Whole-repository writer ownership is allowed only inside an isolated worktree.
+- Unverified patches never enter the primary workspace.
+- Concurrent primary changes block integration instead of being overwritten.
+- Failed primary verification triggers a reverse-patch rollback.
+- Exact trusted Fable 5 and Sonnet 5 primary writers require clean bounded paths, exact model identity, and deterministic checks.
+- External actions remain behind project authorization, truthfulness, duplicate, login, CAPTCHA, document, and receipt gates.
 
-Evidence levels are ordered:
+## Restart Invariant
 
-```text
-activity < process-health < focused-test < integration < end-to-end < user-visible
-```
+A source install is not active in an already loaded task. The release gate enforces:
 
-A lower level cannot satisfy a higher requirement. Worker completion, process health, elapsed time, token use, and a passing unit test cannot prove an end-to-end outcome unless the acceptance contract explicitly requires that evidence level.
+validate and install -> close only OpenAI.Codex -> app-server resumes the exact task -> capable-model tool call proves the fresh runtime -> same-task Luna-low console turn reconciles and dispatches -> reopen the exact desktop task.
 
-Portfolio evidence must include `projectId`; the runtime writes it only to that child task. Completing one project never completes another. Portfolio completion requires every required project task to be complete.
+Luna never repairs a stale plugin runtime.
 
-## Storage Invariants
+## Falsifiable Acceptance
 
-- Read-only workers create no worktree.
-- Editing workers require an exact Git repository root.
-- Editing worktrees are detached and share Git history.
-- The primary worktree is never the worker execution directory.
-- Disk quota, minimum free space, and maximum age are configurable in the private local profile.
-- Dependencies, caches, logs, virtual environments, coverage, and build outputs are removed before patch capture.
-- Collection, cancellation, worker loss, startup, and age expiry all have cleanup transitions.
+The release fails if any of these occur:
 
-## Token-Efficiency Invariants
-
-- No delegation for trivial or tightly coupled work.
-- No parent transcript in worker prompts.
-- No repeated polling or status feed.
-- No premium-on-premium review chain.
-- Deterministic checks precede model review.
-- Worker outputs are bounded, and full diagnostics are read only for a focused blocker.
-- Current Codex integrates a useful result once; it does not redo the worker's question.
-- A same-outcome failure is retried only after failure classification and changed evidence.
-
-## Release Gates
-
-Version 1 is releasable only when all gates in `.codex/ACCEPTANCE.json` pass:
-
-1. central state and stale-negative capacity recovery;
-2. finite current-Codex-led orchestration;
-3. no automatic UI, loops, Goals, heartbeats, automations, or repeated polls;
-4. economically positive delegation;
-5. two-project portfolio concurrency and independent completion;
-6. global provider, quota, worker, fairness, reserve, RAM, and ownership guards;
-7. worktree quota, free-space, age, collection, cancellation, and crash cleanup;
-8. local installation, scanner/privacy checks, and a disposable real-provider canary.
-
-Tests are executable under `scripts/` and are listed in the repository README.
+- the visible console receives project file ownership;
+- dispatch rejection tells the console to code;
+- Codex CLI is ignored despite measured capacity above reserve and best task fit;
+- a worker patch needs Luna or another model merely to apply it;
+- an unverified or conflicting patch changes the primary workspace;
+- a portfolio oversubscribes a provider or shares evidence across projects;
+- a desktop application opens during normal startup or dispatch;
+- a stale runtime permits a model switch before restart verification;
+- activity is reported as outcome progress.

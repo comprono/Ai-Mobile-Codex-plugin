@@ -51,12 +51,18 @@ function collectDiff(workspace, files = []) {
   return result.status === 0 ? redact(result.stdout).slice(0, 50000) : "";
 }
 
-function boundaryAllows(file, boundaries = []) {
-  const normalized = file.replace(/\\/g, "/").replace(/^\.\//, "");
-  return boundaries.some((boundary) => {
-    const candidate = String(boundary || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
-    return candidate && (normalized === candidate || normalized.startsWith(`${candidate}/`));
-  });
+function cleanBoundary(value) {
+  let normalized = String(value || "").split(String.fromCharCode(92)).join("/");
+  if (normalized.startsWith("./")) normalized = normalized.slice(2);
+  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+  return normalized;
 }
 
+function boundaryAllows(file, boundaries = []) {
+  const normalized = cleanBoundary(file);
+  return boundaries.some((boundary) => {
+    const candidate = cleanBoundary(boundary);
+    return candidate === "." || (candidate && (normalized === candidate || normalized.startsWith(candidate + "/")));
+  });
+}
 module.exports = { boundaryAllows, changedFingerprints, collectDiff, fingerprint, statusPaths };

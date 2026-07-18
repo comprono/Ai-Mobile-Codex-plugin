@@ -80,7 +80,7 @@ function normalizeBlocker(value) {
   const recoveryAction = String(value.recovery_action || value.recoveryAction || "").trim().slice(0, 1200);
   if (!reason && !recoveryAction) return null;
   return {
-    owner: String(value.owner || "current-codex").trim().slice(0, 160),
+    owner: String(value.owner || "coordinator").trim().slice(0, 160),
     reason,
     recoveryTrigger: String(value.recovery_trigger || value.recoveryTrigger || "New authoritative evidence changes the blocker.").trim().slice(0, 800),
     recoveryAction: recoveryAction || "Inspect the authoritative blocker and continue with the smallest safe recovery action.",

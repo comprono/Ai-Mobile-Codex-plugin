@@ -1,18 +1,18 @@
 # Context Capsules
 
-Send a worker only the minimum immutable contract:
+Send each worker only:
 
-- complete `rootOutcome` / `projectGoal` in one concise statement;
-- portfolio and project identifiers when the unit belongs to a multi-project request;
-- end-to-end `completionEvidence` that worker completion cannot satisfy by itself;
-- the exact `currentCodexGoal` and `currentCodexFiles` that remain owned by Codex;
-- one bounded `goal` independent of current Codex work;
-- one concrete `independenceReason` plus `relevantFiles` for overlap detection;
-- relevant acceptance criteria;
-- workspace and explicit writer boundaries;
+- the concise project outcome;
+- project and portfolio identifiers;
+- unresolved acceptance requirements and blockers;
+- one bounded dependency-ready work-plane goal;
+- an explicit statement that the visible console owns no project files;
+- relevant read paths and exact write boundaries;
+- unit acceptance criteria;
 - deterministic verification commands;
-- one useful next integration step.
+- one integration action;
+- safety constraints and output budget.
 
-Never send the parent transcript, repeated status history, unrelated files, private credentials, cookies, quota screenshots, or speculative project narrative. The worker must not start another agent or broaden its own scope.
+Never send the full parent transcript, repeated status history, unrelated files, credentials, cookies, quota screenshots, or speculative narrative.
 
-The runtime rejects semantic overlap, path overlap, global lease conflicts, and duplicate active ownership before dispatch. The result should contain only the achieved outcome, changed files, checks, and one concrete blocker. Read `detail=compact` once at integration, using a bounded `waitSeconds` only when useful, and use the result before taking over the worker lane. Use `detail=full` only to integrate a patch or diagnose a real failure.
+The runtime rejects console file ownership, worker overlap, global lease conflicts, and duplicate ownership before dispatch. Results contain only the achieved unit outcome, changed files, checks, usage, and one typed blocker. collect-round is called once at the integration point. integrate-round applies a verified patch once without a model review.

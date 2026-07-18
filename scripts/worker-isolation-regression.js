@@ -54,7 +54,6 @@ try {
   const task = startTask({ workspace: workspaceRoot, outcome: "Update UI fixture", acceptanceEvidence: [{ description: "Patch is isolated and ready for integration", minimumEvidenceLevel: "integration" }] }, resources);
   const round = dispatchRound({
     taskId: task.taskId,
-    currentCodex: { goal: "Inspect API contract", files: ["src/api.txt"] },
     workUnits: [{
       goal: "Implement the independent UI fixture change",
       independenceReason: "The UI file is disjoint from the API file owned by current Codex",

@@ -1,5 +1,5 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','reconcile-task','dispatch-round','collect-round','integrate-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
   [string]$ContractFile = '',
   [string]$TaskId = '',
   [string]$PortfolioId = '',
@@ -35,7 +35,7 @@ switch ($Command) {
       PluginRoot = $Root
       StartupBehavior = 'passive; no provider desktop application is opened'
       StateRoot = '%LOCALAPPDATA%\AI Mobile\v1'
-      Tools = @('start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile','prepare-restart-handoff')
+      Tools = @('start-task','reconcile-task','dispatch-round','collect-round','integrate-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile','prepare-restart-handoff')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
@@ -47,6 +47,7 @@ switch ($Command) {
   'reconcile-task' { Invoke-Node @('reconcile-task-cli','--json-file',(Require-Contract)) }
   'dispatch-round' { Invoke-Node @('dispatch-round-cli','--json-file',(Require-Contract)) }
   'collect-round' { Invoke-Node @('collect-round-cli','--json-file',(Require-Contract)) }
+  'integrate-round' { Invoke-Node @('integrate-round-cli','--json-file',(Require-Contract)) }
   'record-evidence' { Invoke-Node @('record-evidence-cli','--json-file',(Require-Contract)) }
   'task-summary' { Invoke-Node (@('task-summary-cli') + (Get-StateArguments)) }
   'complete-task' { Invoke-Node (@('complete-task-cli') + (Get-StateArguments)) }

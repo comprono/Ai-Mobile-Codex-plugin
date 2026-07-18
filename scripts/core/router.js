@@ -94,6 +94,7 @@ function normalizeRequest(input = {}) {
     // An active Codex lane may be intentionally reserved for different work. This is
     // never a blanket bypass: only disjoint, read-only external evidence lanes qualify.
     currentCodexReserved: input.currentCodexReserved === true,
+    workPlaneRequired: input.workPlaneRequired === true,
     expectedFiles,
     verificationCommands: Array.isArray(input.verificationCommands) ? input.verificationCommands : [],
     timeoutSeconds: clamp(input.timeoutSeconds, 30, 3600, 900),
@@ -292,7 +293,7 @@ function providerEligibility(id, request, inventory, profile, history) {
     return { eligible: false, reason: id === "codex" ? `shared Codex reserve (${profile.codexReservePercent}%) is protected` : "reported capacity is exhausted" };
   }
   if (id === "codex" && remaining === null && request.preferredProvider === "auto") {
-    return { eligible: false, reason: "shared Codex capacity is unknown; keep current Codex productive and do not risk its protected integration reserve with an extra Codex worker" };
+    return { eligible: false, reason: "shared Codex capacity is unknown; protect the shared Codex reserve until capacity becomes measurable" };
   }
   if (history?.cooledDown && request.preferredProvider !== id) return { eligible: false, reason: `provider cooldown: ${history.cooldownReason || `${history.consecutiveFailures} consecutive failures`}` };
   return { eligible: true, reason: "eligible", model, effort, ...capacity, authMode: state.authMode || "unknown" };
@@ -324,8 +325,12 @@ function applyProfileAuthorization(request, profile) {
 }
 
 function coordinationGate(request) {
-  if (!request.currentCodexGoal) return "Delegation requires the concrete current-Codex lane; otherwise independence cannot be proven.";
   if (!request.independenceReason) return "Delegation requires a concise independence reason.";
+  if (request.workPlaneRequired) {
+    if (request.currentCodexFiles.length) return "The lightweight project console cannot own project files.";
+    return "";
+  }
+  if (!request.currentCodexGoal) return "Delegation requires the concrete current-Codex lane; otherwise independence cannot be proven.";
   const overlap = goalOverlap(request.goal, request.currentCodexGoal);
   const evidenceLane = request.currentCodexReserved
     && request.readOnly
@@ -341,10 +346,10 @@ function coordinationGate(request) {
   // active implementation lane. It cannot mutate files, and file ownership
   // overlap below remains a hard stop. This avoids rejecting useful reviews
   // merely because both lanes mention the same project or feature.
-  if (overlap.overlaps && !evidenceLane && !userMandatedDisjointLane) return `Worker and current Codex goals overlap (${overlap.shared.join(", ")}); keep this lane in current Codex.`;
+  if (overlap.overlaps && !evidenceLane && !userMandatedDisjointLane) return `Worker goals overlap (${overlap.shared.join(", ")}); serialize this lane.`;
   const workerFiles = [...request.relevantFiles, ...request.expectedFiles];
   const fileOverlap = boundariesOverlap(workerFiles, request.currentCodexFiles);
-  if (fileOverlap.length) return `Worker and current Codex file ownership overlaps (${fileOverlap.map((pair) => pair.join(" <-> ")).join(", ")}); serialize the work.`;
+  if (fileOverlap.length) return `Worker file ownership overlaps (${fileOverlap.map((pair) => pair.join(" <-> ")).join(", ")}); serialize the work.`;
   return "";
 }
 
@@ -366,25 +371,25 @@ function route(input, inventory, histories = {}) {
   const externalReadOnlyLane = request.currentCodexReserved
     && request.readOnly
     && request.preferredProvider !== "codex";
-  if (request.complexity === "small" && !userMandated && !externalReadOnlyLane) {
+  if (request.complexity === "small" && !userMandated && !externalReadOnlyLane && !request.workPlaneRequired) {
     return { action: "direct", reason: "Dispatch overhead exceeds the likely savings for this small task.", request, considered: [] };
   }
   const economics = economicEstimate(request);
   request.economics = economics;
   if (!economics.positive || request.complexity === "small") {
-    if (!userMandated && !externalReadOnlyLane) {
+    if (!userMandated && !externalReadOnlyLane && !request.workPlaneRequired) {
       return { action: "direct", reason: `Delegation is not economically positive (${economics.savingsPercent}% estimated token-equivalent saving).`, request, considered: [] };
     }
     const exception = userMandated
       ? `dispatching anyway because the user explicitly mandated ${request.preferredProvider}${request.model ? `/${request.model}` : ""}`
-      : "dispatching a disjoint read-only lane because current Codex is reserved for an active different lane";
+      : "dispatching a disjoint read-only lane under an explicit reserved-lane contract";
     warnings.push(`Economic warning: ${request.complexity === "small"
-      ? "small-task dispatch overhead normally keeps this lane in current Codex"
+      ? "small-task dispatch overhead normally keeps this lane direct"
       : `the estimated token-equivalent saving is ${economics.savingsPercent}%, below the ${request.minimumSavingsPercent}% threshold`}; ${exception}.`);
   }
 
   const ids = request.preferredProvider === "auto"
-    ? (request.currentCodexReserved ? ["claude", "antigravity", "cursor"] : ["codex", "claude", "antigravity", "cursor"])
+    ? (request.currentCodexReserved && !request.workPlaneRequired ? ["claude", "antigravity", "cursor"] : ["codex", "claude", "antigravity", "cursor"])
     : [request.preferredProvider];
   const considered = ids.map((id) => {
     const gate = providerEligibility(id, request, inventory, profile, histories[id]);
@@ -411,7 +416,7 @@ function route(input, inventory, histories = {}) {
     reason: userMandated
       ? `User-mandated ${selected.provider}${selected.model ? `/${selected.model}` : ""} passed the hard authentication, capacity, billing, ownership, and safety gates${warnings.length ? "; economic and correction warnings were recorded without blocking" : ""}.`
       : externalReadOnlyLane
-        ? `Disjoint read-only ${selected.provider} lane dispatched while current Codex remains reserved for its active different lane.`
+        ? `Disjoint read-only ${selected.provider} lane dispatched under the explicit reserved-lane contract.`
       : request.preferredProvider === "auto"
         ? `${selected.provider} has the best fit-adjusted score (${selected.score}) for this independent ${request.taskKind} lane.`
         : `Explicit ${selected.provider} selection passed independence, capacity, billing, and economic gates.`,

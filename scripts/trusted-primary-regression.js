@@ -56,7 +56,7 @@ git(["commit", "-qm", "fixture"]);
 
 const { normalizeRequestedModel, trustedPrimaryDecision } = require("./core/trusted-models");
 const { cleanupIsolatedWorkspace, prepareWorkspaceForContract, rollbackPrimaryWorkspace } = require("./core/workspace-isolation");
-const { createRestartHandoff, safeResumeModel, safeThreadId } = require("./core/restart-handoff");
+const { createRestartHandoff, safeReasoningEffort, safeResumeModel, safeThreadId } = require("./core/restart-handoff");
 const { jobDirectory } = require("./core/state-store");
 const { readJson, writeJson } = require("./core/utils");
 const { executeWorker } = require("./core/worker");
@@ -177,21 +177,32 @@ assert.equal(safeThreadId(threadId), threadId);
 assert.throws(() => safeThreadId("bad"), /valid Codex thread id/);
 assert.equal(safeResumeModel("gpt-5.6-luna"), "gpt-5.6-luna");
 assert.throws(() => safeResumeModel("gpt-5.6-luna --danger"), /exact safe model id/);
+assert.equal(safeReasoningEffort("ultra"), "ultra");
+assert.throws(() => safeReasoningEffort("reckless"), /effort is invalid/);
 const handoff = createRestartHandoff({
   userAuthorized: true,
   threadId,
   workspace,
+  verificationModel: "gpt-5.6-sol",
+  verificationEffort: "ultra",
   resumeModel: "gpt-5.6-luna",
+  resumeEffort: "low",
   outcome: "Ship the verified fixture",
   latestUserRequest: "Continue without asking me to restate context",
   priorities: ["finish acceptance evidence", "preserve the current task"],
   nextAction: "Run the trusted writer verification",
   cleanupPluginIds: ["ai-mobile@personal"],
 });
+assert.equal(handoff.schemaVersion, 2);
 assert.equal(handoff.oneShot, true);
 assert.equal(handoff.restartState, "prepared");
+assert.equal(handoff.expectedRuntimeVersion, "1.2.0");
+assert.equal(handoff.verificationModel, "gpt-5.6-sol");
+assert.equal(handoff.verificationEffort, "ultra");
 assert.equal(handoff.resumeModel, "gpt-5.6-luna");
-assert.match(handoff.resumePrompt, /Resume model: gpt-5\.6-luna/);
+assert.equal(handoff.resumeEffort, "low");
+assert.match(handoff.resumePrompt, /Visible console model: gpt-5\.6-luna at low effort/);
+assert.match(handoff.resumePrompt, /dispatch the returned dependency-ready work-plane unit/i);
 assert.equal(handoff.restartLog.length, 1);
 assert.deepEqual(handoff.refreshPluginIds, ["ai-mobile@ai-mobile"]);
 assert.equal(fs.existsSync(handoff.file), true);
@@ -201,41 +212,30 @@ const dry = JSON.parse(dryRun.stdout);
 assert.equal(dry.OneShot, true);
 assert.equal(dry.Recurring, false);
 assert.equal(dry.OpensProviderUi, false);
-assert.equal(dry.ResumeSurface, "OpenAI.Codex desktop deep link (visible task only)");
+assert.match(dry.ResumeSurface, /app-server same-task continuation/i);
+assert.equal(dry.ExpectedRuntimeVersion, "1.2.0");
+assert.equal(dry.VerificationModel, "gpt-5.6-sol");
+assert.equal(dry.VerificationEffort, "ultra");
 assert.equal(dry.RequestedResumeModel, "gpt-5.6-luna");
+assert.equal(dry.RequestedResumeEffort, "low");
 assert.equal(dry.ModelSwitchVerified, false);
-assert.equal(dry.DesktopLaunchBeforeResume, true);
+assert.equal(dry.DesktopLaunchBeforeResume, false);
 assert.equal(dry.ResumeDetached, false);
 assert.equal(dry.DesktopLaunchMethod, "shell:AppsFolder activation plus codex protocol deep link");
 assert.match(dry.DesktopAppUserModelId, /!App$/);
 assert.match(dry.DesktopAppsFolderTarget, /^shell:AppsFolder\\/i);
-assert.equal(dry.ThreadDeepLink, `codex://threads/${threadId}`);
+assert.equal(dry.ThreadDeepLink, "codex://threads/" + threadId);
 assert.match(dry.ResumeHelper, /resume-codex-thread\.ps1$/i);
-assert.deepEqual(dry.ResumeArguments, []);
+assert.deepEqual(dry.ResumeArguments, ["--handoff-file", handoff.file]);
 assert.equal(dry.PackageName, "OpenAI.Codex");
-assert.deepEqual(dry.DesktopArguments, ["--open-project", workspace, `codex://threads/${threadId}`]);
+assert.deepEqual(dry.DesktopArguments, ["--open-project", workspace, "codex://threads/" + threadId]);
 if (dry.DesktopResolved) {
   assert.match(dry.DesktopExecutable, /OpenAI\.Codex_/i);
   assert.doesNotMatch(dry.DesktopExecutable, /ChatGPT-Desktop/i);
 }
 assert.deepEqual(dry.CleanupPluginIds, ["ai-mobile@personal"]);
 assert.deepEqual(dry.RefreshPluginIds, ["ai-mobile@ai-mobile"]);
-const fakeCodexBin = path.join(root, "fake-codex-bin");
-fs.mkdirSync(fakeCodexBin, { recursive: true });
-fs.writeFileSync(path.join(fakeCodexBin, "codex.cmd"), "@echo off\r\nexit /b 0\r\n", "utf8");
-const consumedHandoff = JSON.parse(fs.readFileSync(handoff.file, "utf8"));
-consumedHandoff.consumedAt = new Date().toISOString();
-consumedHandoff.restartState = "reopened-awaiting-visible-turn";
-fs.writeFileSync(handoff.file, JSON.stringify(consumedHandoff, null, 2) + "\n", "utf8");
-const resumeRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "resume-codex-thread.ps1"), "-HandoffFile", handoff.file, "-DelaySeconds", "0"], {
-  encoding: "utf8",
-  env: { ...process.env, PATH: fakeCodexBin + path.delimiter + process.env.PATH },
-});
-assert.equal(resumeRun.status, 0, resumeRun.stderr);
-const completedHandoff = JSON.parse(fs.readFileSync(handoff.file, "utf8"));
-assert.equal(completedHandoff.restartState, "resume-awaiting-visible-turn");
-assert.equal(completedHandoff.modelSwitchVerified, false);
-assert.equal(completedHandoff.resumeModel, "gpt-5.6-luna");
+
 const restartSource = fs.readFileSync(path.join(__dirname, "restart-codex-handoff.ps1"), "utf8");
 assert.equal(restartSource.includes("The restart handoff was already consumed"), true);
 assert.equal(restartSource.includes("$childArgumentLine"), true);
@@ -245,25 +245,33 @@ assert.equal(restartSource.includes("Start-CodexDesktop"), true);
 assert.equal(restartSource.includes("Start-Process -FilePath $codexDesktopPackage.Executable"), false);
 assert.equal(restartSource.includes('app "{0}"'), false);
 assert.equal(restartSource.includes("Save-RestartState -State \"failed\""), true);
-assert.equal(restartSource.includes("continuing with refresh and reopen"), true);
 assert.equal(restartSource.includes("codex plugin remove"), true);
 assert.equal(restartSource.includes("codex plugin add"), true);
+assert.equal(restartSource.includes("installedRuntimeVersion"), true);
+assert.equal(restartSource.includes("runningRuntimeVersion"), true);
 assert.equal(restartSource.includes("codex-already-stopped"), true);
 assert.equal(restartSource.includes("verifiedDesktopProcessIds"), true);
 assert.equal(restartSource.includes("resume-codex-thread.ps1"), true);
+assert.equal(restartSource.includes("$resumeProcess"), false);
 assert.equal(restartSource.includes("& codex @codexArgs"), false);
-const resumeSource = fs.readFileSync(path.join(__dirname, "resume-codex-thread.ps1"), "utf8");
-assert.equal(resumeSource.includes("& codex @codexArgs"), false);
-assert.equal(resumeSource.includes("resume-awaiting-visible-turn"), true);
-assert.equal(resumeSource.includes("separate CLI run"), true);
-const skillSource = fs.readFileSync(path.join(__dirname, "..", "skills", "ai-mobile", "SKILL.md"), "utf8");
-assert.equal(skillSource.includes("send_message_to_thread"), true);
-assert.equal(skillSource.includes("`gpt-5.6-luna` with `low` effort (Luna Lite)"), true);
-assert.equal(skillSource.includes("resume the same thread through `codex exec resume"), false);
-const mcpServerSource = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
-assert.equal(mcpServerSource.includes("resumes the same task through Codex CLI"), false);
-assert.equal(mcpServerSource.includes("does not inject a visible turn"), true);
 
+const resumeSource = fs.readFileSync(path.join(__dirname, "resume-codex-thread.ps1"), "utf8");
+assert.equal(resumeSource.includes("codex-app-server-resume.js"), true);
+assert.equal(resumeSource.includes("resume-complete"), true);
+assert.equal(resumeSource.includes("runningRuntimeVersion"), true);
+assert.equal(resumeSource.includes("codex exec resume"), false);
+const appServerSource = fs.readFileSync(path.join(__dirname, "codex-app-server-resume.js"), "utf8");
+assert.equal(appServerSource.includes('["app-server", "--stdio"]'), true);
+assert.equal(appServerSource.includes('"thread/resume"'), true);
+assert.equal((appServerSource.match(/"turn\/start"/g) || []).length >= 1, true);
+assert.equal(appServerSource.includes("Fresh AI Mobile runtime proof was not observed"), true);
+
+const skillSource = fs.readFileSync(path.join(__dirname, "..", "skills", "ai-mobile", "SKILL.md"), "utf8");
+assert.equal(skillSource.includes("The visible Codex task is a lightweight project console"), true);
+assert.equal(skillSource.includes("gpt-5.6-luna at low effort"), true);
+assert.equal(skillSource.includes("resume the same thread through " + String.fromCharCode(96) + "codex exec resume"), false);
+const mcpServerSource = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
+assert.equal(mcpServerSource.includes("official local Codex app-server"), true);
 fs.rmSync(root, { recursive: true, force: true });
 process.stdout.write(JSON.stringify({
   ok: true,

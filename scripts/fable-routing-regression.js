@@ -44,7 +44,6 @@ try {
   const fableTask = startTask({ workspace, userRequest: "Use Claude Fable to improve the plugin routing", currentCodexModel: "gpt-5.6-sol" }, resources);
   const fableRound = dispatchRound({
     taskId: fableTask.taskId,
-    currentCodex: { goal: "Implement the orchestrator status transitions", files: ["src"] },
     workUnits: [{
       goal: "Review provider routing documentation for truthfulness gaps",
       independenceReason: "Read-only documentation review is disjoint from the orchestrator implementation",
@@ -65,14 +64,13 @@ try {
   assert.equal(fableClaude.model, "fable");
   assert.equal(fableClaude.jobId, fableRound.workers[0].jobId);
   assert.match(fableClaude.reason, /callable CLI worker job/i);
-  assert.equal(fableRound.resources.providers.find((row) => row.provider === "codex-cli").status, "reserved");
+  assert.equal(fableRound.resources.providers.find((row) => row.provider === "codex-cli").status, "idle");
 
   // 2. A premium model the user never asked for stays gated, and the resource
   //    report must state the concrete gate instead of a generic idle reason.
   const gatedTask = startTask({ workspace, userRequest: "Harden the routing status output", currentCodexModel: "gpt-5.6-sol" }, resources);
   const gatedRound = dispatchRound({
     taskId: gatedTask.taskId,
-    currentCodex: { goal: "Implement the orchestrator status transitions", files: ["src"] },
     workUnits: [{
       goal: "Review provider routing documentation for truthfulness gaps",
       independenceReason: "Read-only documentation review is disjoint from the orchestrator implementation",
@@ -97,7 +95,6 @@ try {
   const codexTask = startTask({ workspace, userRequest: "Use a Codex CLI worker on gpt-5.6-sol for the disjoint scan", currentCodexModel: "gpt-5.6-sol" }, resources);
   const codexRound = dispatchRound({
     taskId: codexTask.taskId,
-    currentCodex: { goal: "Implement the orchestrator status transitions", files: ["src"] },
     workUnits: [{
       goal: "Scan repository tooling for stale provider assumptions",
       independenceReason: "Read-only tooling scan is disjoint from the orchestrator implementation",
@@ -118,7 +115,7 @@ try {
   assert.match(codexEntry.reason, /callable CLI worker job/i);
   assert.equal(codexRound.resources.providers.some((row) => row.provider === "codex"), false);
   assert.equal(codexRound.resources.selected.find((row) => row.actor === "external-worker").provider, "codex-cli");
-  assert.equal(codexRound.resources.selected.find((row) => row.actor === "current-codex").model, "gpt-5.6-sol");
+  assert.equal(codexRound.resources.selected.find((row) => row.actor === "visible-console").model, "gpt-5.6-sol");
 
   process.stdout.write(JSON.stringify({ ok: true, explicitFableDispatched: true, unrequestedPremiumStillGatedWithConcreteReason: true, codexCliUnambiguous: true }, null, 2) + "\n");
 } finally {

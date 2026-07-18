@@ -1,31 +1,29 @@
 # Provider Adapters
 
-## Codex
+## Codex CLI
 
-- Require native CLI plus confirmed ChatGPT login.
-- Separate workers use ephemeral `codex exec` sessions, JSONL output, an explicit model/effort, and read-only or workspace-write sandboxing.
-- A Codex worker consumes the shared plan. Current Codex remains the default executor and integrator.
+- Require the native CLI and confirmed ChatGPT login.
+- Use a separate finite codex exec worker with explicit model, effort, sandbox, ownership, and output limits.
+- Protect the shared Codex reserve; unknown shared capacity is not assumed available.
+- Codex CLI is never confused with the visible Codex console.
 
 ## Claude Code
 
-- Resolve the native executable on Windows, including the npm-installed executable behind `claude.cmd`.
-- Use noninteractive print mode and structured JSON when supported.
-- Existing subscription authentication is the default. An explicit `ANTHROPIC_API_KEY` changes billing mode and must be reported.
-- Subscription-only policy rejects API/PAYG dispatch unless the lane explicitly permits it.
-- Read-only lanes use safe mode, no Chrome, no session persistence, only Read/Glob/Grep tools, structured compact output, and a finite token/lease guard. Claude subscriptions use `/usage` windows; `--max-budget-usd` is reserved for explicitly authorized API/PAYG lanes.
-- Do not use `--bare` as the subscription default because it bypasses normal account state.
+- Resolve the native Windows executable, including the npm executable behind claude.cmd.
+- Use noninteractive structured output and the existing subscription by default.
+- Report API-key billing and reject it unless the lane explicitly permits PAYG.
+- Read-only lanes disable Chrome and session persistence and use bounded local file tools.
+- Exact privately trusted Fable 5 and Sonnet 5 may write clean bounded primary paths only with deterministic verification.
 
 ## Antigravity
 
-- Use `agy --print` with `default-cli-project`, `--add-dir <workspace>`, and sandboxing for ordinary bounded CLI work.
-- Use a named project id or conversation only when the caller supplies verified identifiers.
-- `allowAntigravity=true` is required because the CLI may request local authorization.
-- A private `antigravityReadOnlyConsent=true` preference is honored only for sandboxed read-only CLI lanes. It does not apply to writers, UI automation, authentication, or external effects.
-- `needsUi=true` returns a typed blocker; the runtime never opens the desktop automatically.
+- Use CLI-first sandboxed work with the declared workspace.
+- Require explicit lane authorization or saved read-only consent.
+- A UI-required request returns a typed blocker; the runtime never opens Antigravity automatically.
 
 ## Cursor
 
-- Use only a real `cursor-agent` executable.
-- Cursor desktop presence alone is not a headless worker.
+- Use only a real authenticated cursor-agent.
+- Cursor desktop presence alone is not a worker.
 
-Every adapter returns bounded text, available usage evidence, exit state, and a typed blocker. Provider prose cannot override boundary or deterministic verification failures.
+Every adapter returns bounded output, model identity, available usage evidence, exit state, and a typed blocker. Provider prose cannot override ownership or deterministic verification.

@@ -151,7 +151,7 @@ function prepareIsolatedWorkspace(workspaceValue, taskId, jobId, readOnly, profi
   assertStorageAvailable(profile);
 
   const rootProbe = commandResult("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { timeout: 5000 });
-  if (rootProbe.status !== 0) throw new Error("Writer delegation requires a Git repository; use a read-only worker or keep the edit in current Codex.");
+  if (rootProbe.status !== 0) throw new Error("Writer delegation requires a Git repository; use a read-only worker or define a testable isolated writer boundary.");
   const prefixProbe = commandResult("git", ["-C", workspace, "rev-parse", "--show-prefix"], { timeout: 5000 });
   if (prefixProbe.status !== 0 || String(prefixProbe.stdout || "").trim()) {
     throw new Error("Writer delegation requires the task workspace to be the Git repository root.");

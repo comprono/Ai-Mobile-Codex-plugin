@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 - 2026-07-18
+
+- Separates the visible Codex task into a lightweight zero-file project console and routes all project reading, reasoning, editing, and expensive verification to a separate work plane.
+- Makes Codex CLI a normal capacity-aware worker above the configured shared Codex reserve.
+- Adds coordinator-generated dependency-ready work units so Luna does not inspect repositories or invent worker contracts.
+- Adds deterministic integrate-round patch application with boundary checks, concurrent-change protection, primary-workspace verification, rollback, idempotency, and acceptance-linked evidence.
+- Adds standard project-test inference and read-only fallback when deterministic verification cannot be established.
+- Adds a one-shot official Codex app-server continuation: Sol verifies the freshly loaded runtime first, then the same task switches to Luna-low, dispatches real work, and reopens only OpenAI.Codex.
+- Adds console/work-plane, deterministic integration, unavailable-provider, restart-order, portfolio, lease, isolation, and token-economics regressions.
 ## 1.1.10 - 2026-07-18
 
 - Uses Codex's app-native same-task follow-up surface for ordinary continuation instead of treating desktop restart or `codex exec resume` as orchestration.

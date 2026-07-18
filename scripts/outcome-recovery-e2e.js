@@ -113,8 +113,8 @@ try {
   assert.deepEqual(recovered.requirements.map((row) => row.id), ["RUNTIME", "THROUGHPUT"]);
   assert.deepEqual(recovered.workGraph.map((row) => row.id), ["R-RUNTIME", "R-THROUGHPUT"]);
   assert.equal(recovered.workGraph.find((row) => row.id === "R-THROUGHPUT").priority, 100);
-  assert.equal(recovered.currentCodex.requirementId, "THROUGHPUT");
-  assert.equal(recovered.currentCodex.workGraphNodeId, "R-THROUGHPUT");
+  assert.equal(recovered.workPlane.plan.requirementId, "THROUGHPUT");
+  assert.equal(recovered.workPlane.plan.workGraphNodeId, "R-THROUGHPUT");
 
   const explicitReview = startTask({
     workspace,
@@ -194,7 +194,6 @@ try {
   }, resources);
   const staleRound = dispatchRound({
     taskId: stale.taskId,
-    currentCodex: { goal: "Inspect runtime source", files: ["src"] },
     workUnits: [{
       goal: "Review project documentation for independent evidence",
       independenceReason: "Documentation evidence is disjoint from runtime source inspection.",
@@ -274,7 +273,7 @@ try {
   }, resources);
   const portfolioRound = dispatchRound({
     portfolioId: portfolio.portfolioId,
-    currentCodex: { projectId: "primary", goal: "Advance the primary current slice", files: ["src"] },
+    currentCodex: { projectId: "primary" },
     workUnits: [{
       projectId: "secondary",
       goal: "Gather secondary cadence evidence",
@@ -305,7 +304,6 @@ try {
 
   const rejected = dispatchRound({
     taskId: recovered.taskId,
-    currentCodex: { goal: "Implement runtime recovery", files: ["src"] },
     workUnits: [{
       goal: "Review and implement runtime recovery",
       independenceReason: "Claimed parallel work.",
@@ -314,17 +312,24 @@ try {
       complexity: "large",
       taskKind: "review",
       estimatedDirectTokens: 12000,
+    }, {
+      goal: "Review overlapping runtime recovery evidence",
+      independenceReason: "Fixture attempts conflicting ownership.",
+      relevantFiles: ["src"],
+      readOnly: true,
+      complexity: "large",
+      taskKind: "review",
+      estimatedDirectTokens: 12000,
     }],
   }, resources, {}, completedJob);
-  assert.equal(rejected.state, "direct");
+  assert.equal(rejected.state, "running");
   assert.equal(rejected.recoveryPlan.transitions[0].failureClass, "ownership-conflict");
-  assert.equal(rejected.recoveryPlan.transitions[0].owner, "current-codex");
+  assert.equal(rejected.recoveryPlan.transitions[0].owner, "coordinator");
   assert.match(rejected.recoveryPlan.transitions[0].recoveryAction, /Do not retry/i);
 
   const roundTask = startTask({ workspace, userRequest: "Restore the project outcome." }, resources);
   const round = dispatchRound({
     taskId: roundTask.taskId,
-    currentCodex: { goal: "Implement runtime recovery", files: ["src"] },
     workUnits: [{
       goal: "Gather cadence evidence from project documentation",
       workGraphNodeId: "R-THROUGHPUT",
@@ -339,7 +344,7 @@ try {
   assert.equal(round.workers.length, 1);
   const collected = collectRound({ taskId: roundTask.taskId, roundId: round.roundId, waitSeconds: 0 });
   assert.equal(collected.state, "ready-for-integration");
-  assert.equal(collected.recoveryPlan.owner, "current-codex");
+  assert.equal(collected.recoveryPlan.owner, "work-plane");
   assert.equal(collected.recoveryPlan.state, "awaiting-evidence");
   assert.equal(collected.recoveryPlan.requirementId, "THROUGHPUT");
   assert.equal(collected.recoveryPlan.workGraphNodeId, "R-THROUGHPUT");

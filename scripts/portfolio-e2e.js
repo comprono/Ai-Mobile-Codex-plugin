@@ -86,7 +86,7 @@ try {
 
   const round = dispatchRound({
     portfolioId: portfolio.portfolioId,
-    currentCodex: { projectId: "alpha", goal: "Implement alpha critical-path API behavior", files: ["src/codex.txt"] },
+    currentCodex: { projectId: "alpha" },
     workUnits: [
       { projectId: "alpha", workGraphNodeId: "alpha-worker", goal: "Implement independent alpha worker file", independenceReason: "Worker file is disjoint from current Codex API file", relevantFiles: ["src/worker.txt"], expectedFiles: ["src/worker.txt"], readOnly: false, complexity: "medium", taskKind: "code", estimatedDirectTokens: 8000, preferredProvider: "cursor", selectionAuthority: "user" },
       { projectId: "beta", workGraphNodeId: "beta-worker", goal: "Implement independent beta worker file", independenceReason: "Beta is a separate Git project from alpha", relevantFiles: ["src/worker.txt"], expectedFiles: ["src/worker.txt"], readOnly: false, complexity: "medium", taskKind: "code", estimatedDirectTokens: 8000, preferredProvider: "antigravity", model: "Gemini Flash", selectionAuthority: "user", allowAntigravity: true },
