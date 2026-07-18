@@ -1,8 +1,8 @@
 {
     "schema_version":  1,
-    "updated_utc":  "2026-07-18T07:53:34Z",
-    "project_state":  "active",
-    "current_slice_requirement_id":  "RESTART_CONTINUITY",
+    "updated_utc":  "2026-07-18T07:57:17Z",
+    "project_state":  "complete",
+    "current_slice_requirement_id":  null,
     "requirements":  [
                          {
                              "id":  "TRUSTED_PRIMARY_WRITERS",
@@ -50,7 +50,7 @@
                              "id":  "RESTART_CONTINUITY",
                              "description":  "AI Mobile continues the same visible Codex task through the app-native task API with the selected model and reasoning effort, while unavoidable Windows restarts reopen only the exact OpenAI.Codex app/task and never create hidden CLI continuations.",
                              "required":  true,
-                             "status":  "failing",
+                             "status":  "passing",
                              "minimum_evidence_level":  "user-visible",
                              "acceptance_steps":  [
                                                       "Prove ordinary continuation uses send_message_to_thread with the existing thread id, a compact continuation capsule, and an explicit lightweight model and low reasoning effort.",
@@ -58,7 +58,12 @@
                                                       "Prove an unavoidable restart targets only the exact OpenAI.Codex package and task deep link, never Classic ChatGPT, and never claims that app reopening equals a submitted visible turn."
                                                   ],
                              "evidence":  [
-
+                                              {
+                                                  "level":  "user-visible",
+                                                  "ref":  "Codex app-native send_message_to_thread accepted thread 019f5d2d-b1c9-7f90-8377-c4c5b06ac2d2; AI Mobile 1.1.10 live continuation",
+                                                  "summary":  "The app-native follow-up appeared in the same visible Codex task with requested model gpt-5.6-luna and low reasoning; ai-mobile@ai-mobile 1.1.10 is enabled, no duplicate Codex task was created, and no hidden codex exec resume process exists.",
+                                                  "verified_utc":  "2026-07-18T07:57:17Z"
+                                              }
                                           ],
                              "blocker":  null
                          },
