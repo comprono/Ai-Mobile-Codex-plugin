@@ -33,7 +33,8 @@ function Save-RestartState {
         $script:handoff | Add-Member -NotePropertyName restartError -NotePropertyValue $ErrorText -Force
     }
     $temporaryPath = "$script:handoffPath.tmp.$PID"
-    $script:handoff | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
+    $serialized = $script:handoff | ConvertTo-Json -Depth 12
+    [IO.File]::WriteAllText($temporaryPath, $serialized, [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $temporaryPath -Destination $script:handoffPath -Force
 }
 
@@ -116,6 +117,10 @@ if ($isDryRun) {
         ResumeSurface = "OpenAI.Codex desktop deep link"
         RequestedResumeModel = $resumeModel
         ModelSwitchVerified = $false
+        ResumeHelper = (Join-Path $PSScriptRoot "resume-codex-thread.ps1")
+        ResumeArguments = @("-C", $workspace, "exec", "resume") + $(if ($resumeModel) { @("-m", $resumeModel) } else { @() }) + @([string]$handoff.threadId, [string]$handoff.resumePrompt)
+        DesktopLaunchBeforeResume = $true
+        ResumeDetached = $true
         PackageName = $codexDesktopPackage.PackageName
         PackageFullName = $codexDesktopPackage.PackageFullName
         DesktopResolved = $codexDesktopPackage.Resolved
@@ -138,7 +143,8 @@ if ($Schedule) {
     $child = Start-Process -FilePath $powershellPath -ArgumentList $childArgumentLine -WindowStyle Hidden -PassThru
     $handoff = Get-Content -Raw -LiteralPath $handoffPath | ConvertFrom-Json
     $handoff | Add-Member -NotePropertyName restartProcessId -NotePropertyValue $child.Id -Force
-    $handoff | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $handoffPath -Encoding UTF8
+    $serialized = $handoff | ConvertTo-Json -Depth 12
+    [IO.File]::WriteAllText($handoffPath, $serialized, [Text.UTF8Encoding]::new($false))
     [pscustomobject]@{
         Scheduled = $true
         OneShot = $true
@@ -159,18 +165,18 @@ $codexProcesses = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -ieq "ChatGPT.exe" -or $_.Name -ieq "codex-code-mode-host.exe")
 }
 if (@($codexProcesses).Count -eq 0) {
-    Save-RestartState -State "failed" -Message "No running Codex desktop package process was found; no application was stopped." -ErrorText "Codex process identity was not found."
-    throw "No running OpenAI.Codex desktop process was found."
+    Save-RestartState -State "codex-already-stopped" -Message "No running OpenAI.Codex package process was found; continuing with refresh and reopen."
+} else {
+    $stoppedProcessIds = @($codexProcesses | ForEach-Object { $_.ProcessId })
+    foreach ($process in $codexProcesses) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 3
+    Save-RestartState -State "codex-stopped" -Message "Stopped Codex process ids: $($stoppedProcessIds -join ', ')."
 }
-$stoppedProcessIds = @($codexProcesses | ForEach-Object { $_.ProcessId })
-foreach ($process in $codexProcesses) {
-    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
-}
-Start-Sleep -Seconds 3
-Save-RestartState -State "codex-stopped" -Message "Stopped Codex process ids: $($stoppedProcessIds -join ', ')."
 
-$resumeExitCode = 1
 $caughtError = $null
+$desktopOpened = $false
 try {
     Save-RestartState -State "cleanup" -Message "Inspecting obsolete plugin registrations before resume."
     $pluginListText = (& codex plugin list --json 2>&1 | Out-String)
@@ -205,17 +211,45 @@ try {
     $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
     $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
     $desktopProcess = Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine -PassThru
+    $desktopDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    $verifiedDesktopProcesses = @()
+    do {
+        Start-Sleep -Milliseconds 500
+        $verifiedDesktopProcesses = @(Get-CimInstance Win32_Process | Where-Object {
+            $processPath = [string]$_.ExecutablePath
+            $processPath -and
+            $processPath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+            ($_.Name -ieq "ChatGPT.exe" -or $_.Name -ieq "codex-code-mode-host.exe")
+        })
+    } while ($verifiedDesktopProcesses.Count -eq 0 -and [DateTime]::UtcNow -lt $desktopDeadline)
+    if ($verifiedDesktopProcesses.Count -eq 0) {
+        throw "The OpenAI.Codex package launch returned but no package-owned desktop process became visible."
+    }
+    $desktopOpened = $true
     $handoff | Add-Member -NotePropertyName desktopPackage -NotePropertyValue $codexDesktopPackage.PackageFullName -Force
     $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopProcess.Id -Force
+    $handoff | Add-Member -NotePropertyName verifiedDesktopProcessIds -NotePropertyValue @($verifiedDesktopProcesses | ForEach-Object { $_.ProcessId }) -Force
     $handoff | Add-Member -NotePropertyName desktopLaunchedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
     $handoff | Add-Member -NotePropertyName requestedResumeModel -NotePropertyValue $resumeModel -Force
     $handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue $false -Force
     Save-RestartState -State "reopened" -Message "The exact OpenAI.Codex package was reopened for the target workspace and thread."
+
+    $resumeHelper = Join-Path $PSScriptRoot "resume-codex-thread.ps1"
+    if (-not (Test-Path -LiteralPath $resumeHelper -PathType Leaf)) {
+        throw "The detached Codex resume helper is missing: $resumeHelper"
+    }
+    $powershellPath = (Get-Command powershell -ErrorAction Stop).Source
+    $resumeArgumentLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -HandoffFile "{1}" -DelaySeconds 2' -f `
+        $resumeHelper.Replace('"', '\"'), $handoffPath.Replace('"', '\"')
+    $resumeProcess = Start-Process -FilePath $powershellPath -ArgumentList $resumeArgumentLine -WindowStyle Hidden -PassThru
+    $handoff | Add-Member -NotePropertyName resumeProcessId -NotePropertyValue $resumeProcess.Id -Force
+    $handoff | Add-Member -NotePropertyName resumeStartedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
+    Save-RestartState -State "reopened-resuming" -Message "Codex desktop is open; the exact Luna thread continuation is running independently."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message
 } finally {
-    if ($caughtError) {
+    if ($caughtError -and -not $desktopOpened) {
         $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
         $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
         $desktopProcess = Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine -PassThru

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7 - 2026-07-18
+
+- Reopens and verifies the exact `OpenAI.Codex` desktop package before starting the same-thread model continuation.
+- Runs the model-bound continuation in a detached helper so a long Codex turn cannot block desktop reopening.
+- Continues safely when Codex is already closed, records exact desktop and resume process evidence, and keeps Classic ChatGPT excluded.
+- Writes restart state atomically as BOM-free JSON and adds a deterministic detached-resume integration test.
 ## 1.1.6 - 2026-07-18
 
 - Replaced installer-capable `codex app` reopening with the exact installed `OpenAI.Codex` AppX executable and exact workspace/thread deep link.

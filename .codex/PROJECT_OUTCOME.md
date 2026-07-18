@@ -1,7 +1,7 @@
 # Project Outcome
 
-State: complete
-Updated: 2026-07-18T04:02:00Z
+State: active
+Updated: 2026-07-18T05:12:17Z
 
 ## North Star
 
@@ -59,7 +59,6 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 ## Verified State
 
-- Repository is clean at v0.6.0 on `main` before the rebuild.
 - Central v1 task state now remains independent across same-workspace tasks and Git branch changes.
 - Capacity dispatch now re-probes cached negative provider evidence while retaining fresh positive evidence for five minutes.
 - Finite task start, observed round dispatch, one-time collection, evidence recording, and completion refusal now pass integration tests.
@@ -83,7 +82,7 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - AI Mobile 1.1.6 now targets only the exact `OpenAI.Codex` package, carries an exact resume model, and reopens the requested workspace and thread deep link without using `codex app` or Classic ChatGPT.
 - Acceptance fingerprints now refresh stale matching tasks only when the project contract changes, preserving newer task evidence when the project file is unchanged and isolating explicit unrelated outcomes.
 - All 14 release suites pass; Scanner 2.0.1114 default, public, strict, and full scan gates score 100 with zero findings. Standalone verify has only its documented local-stdio safety skip, covered by the 46-assertion runtime self-test.
-- The authorized one-shot restart consumed for the installed OpenAI.Codex package, resumed the exact thread on gpt-5.6-luna, and loaded ai-mobile@ai-mobile 1.1.6 without selecting Classic ChatGPT. Evidence is recorded in `.codex/ACCEPTANCE.json`, verified 2026-07-18.
+- The authorized restart stopped the exact Codex package and resumed the thread through CLI, but synchronous CLI execution prevented the desktop reopen step; the user had to reopen Codex manually. RESTART_CONTINUITY is invalidated until a desktop-first detached-resume restart passes.
 
 ## Context Pointers
 
@@ -123,10 +122,10 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 ## Current Slice
 
-- Acceptance ID: none
-- Goal: Maintain the complete AI Mobile 1.1.6 release contract.
-- Evidence: all 16 required acceptance requirements pass, including exact-package restart continuity and authoritative task-state synchronization.
+- Acceptance ID: RESTART_CONTINUITY
+- Goal: Reopen the exact Codex desktop package before a detached same-thread Luna continuation starts.
+- Evidence: requires one real user-visible restart; dry-run and process health alone are insufficient.
 
 ## Next
 
-Maintain the finite AI Mobile 1.1.6 release. Future changes must reopen the affected acceptance requirement before publication.
+Run deterministic restart tests, publish the corrected helper, then perform one authorized real restart and verify the exact app, thread, and Luna continuation.

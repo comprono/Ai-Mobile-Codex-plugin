@@ -201,9 +201,14 @@ const dry = JSON.parse(dryRun.stdout);
 assert.equal(dry.OneShot, true);
 assert.equal(dry.Recurring, false);
 assert.equal(dry.OpensProviderUi, false);
-assert.deepEqual(dry.Arguments.slice(0, 6), ["-C", workspace, "exec", "resume", "-m", "gpt-5.6-luna"]);
-assert.equal(dry.Arguments[6], threadId);
-assert.equal(dry.ResumeModel, "gpt-5.6-luna");
+assert.equal(dry.ResumeSurface, "OpenAI.Codex desktop deep link");
+assert.equal(dry.RequestedResumeModel, "gpt-5.6-luna");
+assert.equal(dry.ModelSwitchVerified, false);
+assert.equal(dry.DesktopLaunchBeforeResume, true);
+assert.equal(dry.ResumeDetached, true);
+assert.match(dry.ResumeHelper, /resume-codex-thread\.ps1$/i);
+assert.deepEqual(dry.ResumeArguments.slice(0, 6), ["-C", workspace, "exec", "resume", "-m", "gpt-5.6-luna"]);
+assert.equal(dry.ResumeArguments[6], threadId);
 assert.equal(dry.PackageName, "OpenAI.Codex");
 assert.deepEqual(dry.DesktopArguments, ["--open-project", workspace, `codex://threads/${threadId}`]);
 if (dry.DesktopResolved) {
@@ -212,6 +217,22 @@ if (dry.DesktopResolved) {
 }
 assert.deepEqual(dry.CleanupPluginIds, ["ai-mobile@personal"]);
 assert.deepEqual(dry.RefreshPluginIds, ["ai-mobile@ai-mobile"]);
+const fakeCodexBin = path.join(root, "fake-codex-bin");
+fs.mkdirSync(fakeCodexBin, { recursive: true });
+fs.writeFileSync(path.join(fakeCodexBin, "codex.cmd"), "@echo off\r\nexit /b 0\r\n", "utf8");
+const consumedHandoff = JSON.parse(fs.readFileSync(handoff.file, "utf8"));
+consumedHandoff.consumedAt = new Date().toISOString();
+consumedHandoff.restartState = "reopened-resuming";
+fs.writeFileSync(handoff.file, JSON.stringify(consumedHandoff, null, 2) + "\n", "utf8");
+const resumeRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "resume-codex-thread.ps1"), "-HandoffFile", handoff.file, "-DelaySeconds", "0"], {
+  encoding: "utf8",
+  env: { ...process.env, PATH: fakeCodexBin + path.delimiter + process.env.PATH },
+});
+assert.equal(resumeRun.status, 0, resumeRun.stderr);
+const completedHandoff = JSON.parse(fs.readFileSync(handoff.file, "utf8"));
+assert.equal(completedHandoff.restartState, "resume-complete");
+assert.equal(completedHandoff.modelSwitchVerified, true);
+assert.equal(completedHandoff.resumeModel, "gpt-5.6-luna");
 const restartSource = fs.readFileSync(path.join(__dirname, "restart-codex-handoff.ps1"), "utf8");
 assert.equal(restartSource.includes("The restart handoff was already consumed"), true);
 assert.equal(restartSource.includes("$childArgumentLine"), true);
@@ -220,9 +241,17 @@ assert.equal(restartSource.includes('Get-AppxPackage -Name "OpenAI.Codex"'), tru
 assert.equal(restartSource.includes('--open-project "{0}" "{1}"'), true);
 assert.equal(restartSource.includes('app "{0}"'), false);
 assert.equal(restartSource.includes("Save-RestartState -State \"failed\""), true);
-assert.equal(restartSource.includes("No running OpenAI.Codex desktop process was found"), true);
+assert.equal(restartSource.includes("continuing with refresh and reopen"), true);
 assert.equal(restartSource.includes("codex plugin remove"), true);
 assert.equal(restartSource.includes("codex plugin add"), true);
+assert.equal(restartSource.includes("codex-already-stopped"), true);
+assert.equal(restartSource.includes("verifiedDesktopProcessIds"), true);
+assert.equal(restartSource.includes("resume-codex-thread.ps1"), true);
+assert.equal(restartSource.includes("& codex @codexArgs"), false);
+const resumeSource = fs.readFileSync(path.join(__dirname, "resume-codex-thread.ps1"), "utf8");
+assert.equal(resumeSource.includes("& codex @codexArgs"), true);
+assert.equal(resumeSource.includes("resume-running"), true);
+assert.equal(resumeSource.includes("resume-complete"), true);
 
 fs.rmSync(root, { recursive: true, force: true });
 process.stdout.write(JSON.stringify({
