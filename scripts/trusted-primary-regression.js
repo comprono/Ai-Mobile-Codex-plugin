@@ -43,11 +43,16 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 assert.equal(fs.readFileSync("src/trusted.txt", "utf8"), "trusted model changed primary\\n");
 `);
-spawnSync("git", ["init", "-q", workspace]);
-spawnSync("git", ["-C", workspace, "config", "user.email", "test@example.invalid"]);
-spawnSync("git", ["-C", workspace, "config", "user.name", "AI Mobile Test"]);
-spawnSync("git", ["-C", workspace, "add", "."]);
-spawnSync("git", ["-C", workspace, "commit", "-qm", "fixture"]);
+function git(args) {
+  const result = spawnSync("git", args, { cwd: workspace, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
+  return result;
+}
+git(["init", "-q"]);
+git(["config", "user.email", "test@example.invalid"]);
+git(["config", "user.name", "AI Mobile Test"]);
+git(["add", "."]);
+git(["commit", "-qm", "fixture"]);
 
 const { normalizeRequestedModel, trustedPrimaryDecision } = require("./core/trusted-models");
 const { cleanupIsolatedWorkspace, prepareWorkspaceForContract, rollbackPrimaryWorkspace } = require("./core/workspace-isolation");
