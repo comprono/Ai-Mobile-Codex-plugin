@@ -18,12 +18,13 @@ Contributions must preserve these invariants:
 - cached negative provider evidence is refreshed before dispatch rejection;
 - completion requires acceptance evidence;
 - startup and discovery never open desktop applications;
-- no manager loop, Goal, heartbeat, automation, repeated poll, or premium review chain is added.
+- no LLM manager loop, Goal, heartbeat, automation, repeated model-turn poll, or premium review chain is added; one bounded deterministic cycle may wait locally and advance only on evidence.
 
 ## Development Checks
 
 ```powershell
 node .\scripts\self-test.js
+node .\scripts\task-cycle-regression.js
 node .\scripts\outcome-recovery-e2e.js
 node .\scripts\continuation-regression.js
 node .\scripts\state-capacity-regression.js

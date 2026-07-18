@@ -9,6 +9,7 @@ const { providerHistory } = require("./core/provider-history");
 const { cleanupStaleLeases, resourceLeaseSnapshot } = require("./core/resource-leases");
 const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, integrateRound, reconcileTask, recordEvidence, startTask, taskSummary } = require("./core/task-orchestrator");
 const { cleanupAbandonedWorktrees, storageStatus } = require("./core/workspace-isolation");
+const { runTaskCycle } = require("./core/task-cycle");
 const { createRestartHandoff } = require("./core/restart-handoff");
 const { executeWorker } = require("./core/worker");
 const { readProfile, writeProfile } = require("./lib/orchestrator-profile");
@@ -45,6 +46,7 @@ async function main() {
     const input = jsonInput();
     return output(dispatchRound(input, await inventory({ forDispatch: true }), providerHistory(), (contract) => createJob(contract, entrypoint)));
   }
+  if (action === "run-task-cycle-cli") return output(await runTaskCycle(jsonInput(), entrypoint));
   if (action === "collect-round-cli") return output(collectRound(jsonInput()));
   if (action === "integrate-round-cli") return output(integrateRound(jsonInput()));
   if (action === "record-evidence-cli") return output(recordEvidence(jsonInput()));

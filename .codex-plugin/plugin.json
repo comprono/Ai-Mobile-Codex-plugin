@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A finite local AI work orchestrator with a lightweight Codex console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -28,7 +28,7 @@
   "interface": {
     "displayName": "AI Mobile",
     "shortDescription": "Coordinate local AI workers without turning the Codex chat into the worker.",
-    "longDescription": "AI Mobile installs one shared MCP runtime into Codex and Claude Code. The visible Codex task is a lightweight zero-file project console, while a deterministic coordinator assigns acceptance-linked work to authenticated Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers using fresh capacity, quota, reset, reliability, RAM, storage, and cost evidence. Isolated patches are integrated exactly once with boundary and deterministic verification gates. Normal startup opens no desktop UI and creates no manager loop, Goal, heartbeat, automation, hidden continuation, or repeated poll.",
+    "longDescription": "AI Mobile installs one shared MCP runtime into Codex and Claude Code. The visible Codex task is a lightweight zero-file project console, while a deterministic coordinator assigns acceptance-linked work to authenticated Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers using fresh capacity, quota, reset, reliability, RAM, storage, and cost evidence. Isolated patches are integrated exactly once with boundary and deterministic verification gates. Normal startup opens no desktop UI and creates no LLM manager loop, Goal, heartbeat, automation, hidden continuation, or repeated poll. One bounded deterministic cycle waits locally, collects once, and advances only on evidence.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -46,6 +46,7 @@
       "Fresh model and quota-pool capacity evidence",
       "Protected shared Codex reserve",
       "Dependency-aware finite worker rounds",
+      "Bounded deterministic dispatch, collect, integrate, and advance cycle",
       "Multi-project portfolio orchestration",
       "Machine-wide provider and quota leases",
       "Priority and fairness allocation",

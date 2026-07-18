@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-18T09:28:20Z
+Updated: 2026-07-18T20:25:44.8151500Z
 
 ## North Star
 
@@ -18,9 +18,9 @@ AI Mobile must finish measurable project outcomes by coordinating available Code
 - Editing workers use isolated Git worktrees unless an exact privately trusted Fable 5 or Sonnet 5 worker is explicitly eligible for a clean bounded primary write.
 - Collected patches are boundary checked, conflict checked, applied once, deterministically verified, rolled back on failure, and recorded only against their own acceptance requirement.
 - Completion requires project-specific acceptance evidence. Worker activity, healthy processes, elapsed time, and token use are not progress.
-- No manager loop, Goal, automation, heartbeat, repeated poll, hidden CLI continuation, provider desktop UI, or Classic ChatGPT launch occurs automatically.
+- No LLM manager loop, Goal, automation, heartbeat, repeated chat poll, provider desktop UI, or Classic ChatGPT launch occurs automatically. A bounded deterministic execution cycle may wait for finite workers, collect terminal results, integrate verified patches once, and advance only while acceptance evidence or a materially changed recovery path exists.
 - A plugin upgrade is validated and installed by a capable setup model before OpenAI.Codex closes. The official local app-server resumes the exact task, proves the fresh runtime on the capable model, and only then starts the lightweight console turn before reopening the desktop.
-- After that proof, the same visible task switches to GPT-5.6 Luna at low effort under the current private preference, reconciles the existing durable task once, and dispatches actual work to a separate worker.
+- After that proof, the same visible task switches to GPT-5.6 Luna at low effort under the current private preference, reconciles the existing durable task once, and invokes one bounded deterministic cycle that produces a terminal worker result before the desktop reopens.
 
 ## User Intent
 
@@ -34,7 +34,7 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 2. Pass all local lifecycle, routing, portfolio, isolation, restart-order, scanner, and privacy gates.
 3. Publish and install one exact version from this repository for Codex and Claude Code.
 4. Close only OpenAI.Codex, resume this exact persisted task through the official local app-server, and prove the running MCP reports that version on the capable setup model.
-5. Only after proof, start the same task on Luna-low, reconcile and dispatch the next Job Vibhu work-plane unit, then reopen the exact desktop task.
+5. Only after proof, start the same task on Luna-low, reconcile the existing Job Vibhu task, and run one bounded deterministic work cycle through real worker completion, collection, integration, and the next acceptance-linked transition before reopening the exact desktop task.
 
 ### Add-ons
 
@@ -93,9 +93,9 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 ## Current Slice
 
 - Acceptance ID: RESTART_CONTINUITY
-- Goal: complete the exact validate/install/close/app-server-verify/same-task-Luna-dispatch/reopen sequence without a duplicate task, hidden CLI run, Classic ChatGPT launch, or Luna-side plugin repair.
-- Required proof: AI Mobile 1.2.0 is installed; a Sol verification turn in this exact persisted task observes runtimeVersion 1.2.0; only then a GPT-5.6 Luna-low turn reconciles and assigns a Job Vibhu unit to a separate worker; finally OpenAI.Codex reopens this exact task.
+- Goal: complete the exact validate/install/close/app-server-verify/same-task-Luna-execution/reopen sequence without a duplicate task, Classic ChatGPT launch, stale terminal state, or Luna-side plugin repair.
+- Required proof: the corrected version is installed; a Sol verification turn in this exact persisted task observes that runtime; only then a GPT-5.6 Luna-low turn reconciles Job Vibhu and invokes a bounded deterministic cycle in which a real provider starts, terminates, is collected, and either integrates verified work or returns a correctly classified actionable blocker before OpenAI.Codex reopens this exact task.
 
 ## Next
 
-Finish local release gates while the capable setup model remains active.
+Run the complete 1.2.1 release matrix, publish and install the exact package, then perform the exact restart and Job Vibhu execution sequence.

@@ -165,6 +165,7 @@ function readJob(taskIdValue, jobIdValue, detail = "compact", waitSeconds = 0) {
     goal: contract.goal || "",
     isolation: contract.isolation?.mode || "",
     skipModelReview: contract.skipModelReview === true,
+    readOnly: contract.readOnly === true,
     workGraphNodeId: contract.workGraphNodeId || null,
     blocker: status.blocker || "",
     alreadyCollected,

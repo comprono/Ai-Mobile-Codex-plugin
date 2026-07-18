@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1 - 2026-07-19
+
+- Adds run-task-cycle as the default bounded execution path: dispatch, local wait, terminal collection, deterministic integration, evidence completion, and next-gap advance without repeated model turns.
+- Fixes Windows Claude launch by preferring the native claude.exe over the npm command shim, preserving valid JSON schema arguments.
+- Reconciles terminal worker state during task summaries so dead workers cannot remain falsely running until another user message.
+- Prevents unchanged failed-provider retries within one cycle while allowing an automatic lane to fail over to another eligible provider.
+- Captures safe Git patches for newly created files from isolated workers without staging or modifying the primary worktree.
+- Adds real subscription canary proof and end-to-end cycle coverage through accepted project completion.
+- Returns successful read-only artifacts once instead of misclassifying them as integration failures or repeating the same inspection.
 ## 1.2.0 - 2026-07-18
 
 - Separates the visible Codex task into a lightweight zero-file project console and routes all project reading, reasoning, editing, and expensive verification to a separate work plane.

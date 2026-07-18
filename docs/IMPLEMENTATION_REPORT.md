@@ -20,14 +20,15 @@ Version 1.2 separates three concerns:
 
 1. start-task imports the project North Star and acceptance requirements.
 2. The coordinator identifies one dependency-ready critical-path unit.
-3. dispatch-round selects an eligible work-plane provider from fresh evidence.
+3. run-task-cycle opens one bounded execution window and dispatch-round selects an eligible work-plane provider from fresh evidence.
 4. A read-only worker shares the workspace; an editor receives an isolated Git worktree unless an exact trusted-primary exception applies.
-5. collect-round stores one compact handoff and cleans the worktree.
+5. The cycle waits locally without repeated model turns, collects one terminal handoff, and cleans the worktree.
 6. integrate-round verifies boundaries, checks for concurrent primary changes, applies the patch once, runs declared primary-workspace tests, and rolls back a failure.
-7. record-evidence advances only the named acceptance item.
-8. complete-task succeeds only when every required item passes.
+7. An unchanged failed provider is not retried in the same cycle; an automatic lane may fail over to another eligible provider.
+8. record-evidence advances only the named acceptance item.
+9. complete-task succeeds only when every required item passes.
 
-No recurring manager, Goal, heartbeat, automation, hidden Codex run, repeated poll, or provider UI is created.
+No recurring LLM manager, Goal, heartbeat, automation, hidden Codex run, repeated model-turn poll, or provider UI is created.
 
 ## Resource Selection
 
@@ -53,7 +54,7 @@ Codex CLI is a normal work-plane candidate when shared Codex capacity remains ab
 
 A source install is not active in an already loaded task. The release gate enforces:
 
-validate and install -> close only OpenAI.Codex -> app-server resumes the exact task -> capable-model tool call proves the fresh runtime -> same-task Luna-low console turn reconciles and dispatches -> reopen the exact desktop task.
+validate and install -> close only OpenAI.Codex -> app-server resumes the exact task -> capable-model tool call proves the fresh runtime -> same-task Luna-low console turn reconciles and runs one bounded execution cycle through a terminal result -> reopen the exact desktop task.
 
 Luna never repairs a stale plugin runtime.
 

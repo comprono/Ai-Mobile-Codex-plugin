@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-18T09:28:20Z",
+  "updated_utc": "2026-07-18T20:29:41.9696347Z",
   "project_state": "active",
   "current_slice_requirement_id": "RESTART_CONTINUITY",
   "requirements": [
@@ -48,16 +48,16 @@
     },
     {
       "id": "RESTART_CONTINUITY",
-      "description": "A schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, proves the fresh running runtime in the exact persisted task through the official local app-server, and only afterward starts that same task on Luna-low, dispatches real work, and reopens the desktop.",
+      "description": "A schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, proves the fresh running runtime in the exact persisted task, and only afterward uses Luna-low as a lightweight console while a bounded deterministic cycle completes real work before the desktop reopens.",
       "required": true,
       "status": "failing",
       "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
         "Prove a deterministic app-server regression performs initialize, thread/resume, a capable-model verification turn, and only after exact runtimeVersion evidence a Luna-low turn in the same thread; stale evidence must stop before Luna.",
-        "Commit, push, and install AI Mobile 1.2.0, then prove codex plugin list reports ai-mobile@ai-mobile 1.2.0.",
+        "Commit, push, and install AI Mobile 1.2.1, then prove codex plugin list reports ai-mobile@ai-mobile 1.2.1.",
         "Close only OpenAI.Codex and run the one-shot handoff against this exact task with Sol Ultra verification and GPT-5.6 Luna low continuation; never launch Classic ChatGPT, codex exec resume, a duplicate task, Goal, automation, manager loop, or UI automation.",
-        "On the fresh Luna turn, reconcile the existing Job Vibhu durable task once and prove its dependency-ready unit is assigned to a separate work-plane worker; Luna must not inspect or patch the plugin or project.",
-        "Reopen the exact OpenAI.Codex package and task only after the continuation is persisted, and record the installed version, running runtime version, verification turn, continuation turn, model switch, and desktop process evidence."
+        "On the fresh Luna turn, reconcile the existing Job Vibhu durable task once and invoke one bounded deterministic cycle; Luna must not inspect or patch the plugin or project.",
+        "Prove a real installed provider accepts its structured schema, reaches a terminal state without another user message, is collected once, and either integrates deterministic evidence or emits the correct failure class and recovery transition."
       ],
       "evidence": [
         {
@@ -279,14 +279,14 @@
     },
     {
       "id": "PUBLIC_RELEASE",
-      "description": "Version 1.2.0 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
+      "description": "Version 1.2.1 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
       "required": true,
-      "status": "passing",
+      "status": "failing",
       "minimum_evidence_level": "end-to-end",
       "acceptance_steps": [
         "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
-        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.2.0 runtime.",
-        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.2.0."
+        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.2.1 runtime.",
+        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.2.1."
       ],
       "evidence": [
         {
@@ -296,7 +296,12 @@
           "verified_utc": "2026-07-18T09:37:39Z"
         }
       ],
-      "blocker": null
+      "blocker": {
+        "owner": "AI Mobile release",
+        "reason": "Version 1.2.1 has focused proof but has not yet passed the full release, shared-host installation, and exact-task restart gates.",
+        "recoveryTrigger": "The complete regression and scanner matrix passes, both hosts report 1.2.1, and the exact Codex task observes runtimeVersion 1.2.1.",
+        "recoveryAction": "Finish validation, commit and push 1.2.1, install it in Codex and Claude, then complete the authorized exact-task restart sequence."
+      }
     },
     {
       "id": "EXECUTION_CONTINUITY",

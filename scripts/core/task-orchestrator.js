@@ -319,6 +319,14 @@ function mergeRequirements(existing, proposed, options = {}) {
 
 function classifyRecovery(reason) {
   const value = String(reason || "");
+  if (/provider-process-failed|worker-runtime-failed|invalid json|json parse|invalid .*argument|schema/i.test(value)) {
+    return {
+      failureClass: "provider-adapter-failure",
+      owner: "AI Mobile provider adapter",
+      recoveryTrigger: "The provider command or structured argument construction changes and passes a real installed-provider canary.",
+      recoveryAction: "Do not retry the unchanged provider invocation. Repair and verify the adapter, then re-dispatch this acceptance-linked unit once.",
+    };
+  }
   if (/overlap|ownership|serialize/i.test(value)) {
     return {
       failureClass: "ownership-conflict",
@@ -327,7 +335,7 @@ function classifyRecovery(reason) {
       recoveryAction: "Wait for the conflicting work-plane lease, then serialize this work or redefine it with disjoint ownership. Do not retry the same overlapping lane.",
     };
   }
-  if (/capacity|quota|reserve|provider|authenticated|unavailable|cooldown|worker limit/i.test(value)) {
+  if (/capacity|quota|reserve|provider-unavailable|not authenticated|authentication-required|unavailable|cooldown|worker limit/i.test(value)) {
     return {
       failureClass: "capacity-unavailable",
       owner: "coordinator",
@@ -417,6 +425,7 @@ function executionContract(task, failures = [], completed = []) {
     reason: blocker?.reason || plan.reason,
     requirementId: plan.requirementId || null,
     workGraphNodeId: plan.workGraphNodeId || null,
+    recovery: plan.transitions || [],
     mustDispatchNow,
     mustStartNow: false,
     userActionRequired,
@@ -1463,11 +1472,53 @@ function synchronizeTaskWithProject(task) {
   }));
 }
 
-function singleTaskSummary(task) {
+function reconcileLatestRoundState(task) {
   const lastRoundRef = (task.rounds || []).at(-1);
-  const lastRound = lastRoundRef ? readRound(task.taskId, lastRoundRef.roundId) : null;
+  if (!lastRoundRef) return { task, round: null };
+  let round = readRound(task.taskId, lastRoundRef.roundId);
+  if (round.state !== "running") return { task, round };
+  const statuses = (round.jobs || []).map((job) => {
+    try {
+      return { job, status: statusFor(task.taskId, job.jobId) };
+    } catch {
+      return { job, status: { state: "failed", blocker: "worker-record-missing: " + job.jobId } };
+    }
+  });
+  if (!statuses.length || statuses.some((row) => !TERMINAL_STATES.has(row.status.state))) return { task, round };
+  const state = terminalRoundState(statuses.map((row) => row.status));
+  round = updateRound(task.taskId, round.roundId, { state, terminalObservedAt: utcNow() });
+  task = updateTask(task.taskId, (current) => {
+    current.workGraph = (current.workGraph || []).map((node) => {
+      const row = statuses.find(({ job }) => job.workGraphNodeId === node.id);
+      if (!row) return node;
+      return row.status.state === "completed"
+        ? { ...node, state: "awaiting-evidence", owner: null }
+        : { ...node, state: "pending", owner: null, lastFailure: String(row.status.blocker || "Worker failed.").slice(0, 1000) };
+    });
+    return current;
+  });
+  return { task, round };
+}
+
+function singleTaskSummary(task) {
+  const reconciled = reconcileLatestRoundState(task);
+  task = reconciled.task;
+  const lastRound = reconciled.round;
+  const latestFailures = lastRound?.state === "needs-correction"
+    ? (lastRound.integrationResults || []).filter((row) => row.integrated !== true).map((row) => ({
+        goal: (lastRound.jobs || []).find((job) => job.jobId === row.jobId)?.goal || "",
+        blocker: row.blocker || "integration-failed",
+      })).concat((lastRound.jobs || []).flatMap((job) => {
+        try {
+          const status = statusFor(task.taskId, job.jobId);
+          return status.state === "completed" ? [] : [{ goal: job.goal || "", blocker: status.blocker || "worker-failed" }];
+        } catch {
+          return [{ goal: job.goal || "", blocker: "worker-record-missing: " + job.jobId }];
+        }
+      }))
+    : [];
   const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, required: item.required !== false, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length, blocker: item.blocker || null }));
-  const execution = executionContract(task);
+  const execution = executionContract(task, latestFailures);
   const workState = task.state === "completed"
     ? "completed"
     : lastRound?.state === "running"

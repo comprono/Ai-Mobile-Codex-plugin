@@ -72,7 +72,7 @@ function discoverClaude() {
   const cli = resolveCommand("claude", [
     process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe") : "",
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "Claude", "claude.exe") : "",
-  ]);
+  ], { preferFallbacks: process.platform === "win32" });
   if (!cli.found) return provider("claude", false, { reason: "Claude Code CLI not found." });
   const authResult = commandResult(cli.command, ["auth", "status"], { timeout: 7000 });
   const auth = parseClaudeAuth(authResult.stdout);

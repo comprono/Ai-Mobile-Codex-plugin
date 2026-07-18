@@ -11,13 +11,14 @@ The objective is practical: finish more verified work without spending more toke
 1. start-task reads the bounded project outcome and acceptance gap and captures one fresh capacity snapshot.
 2. The visible Codex task becomes a lightweight project console. It owns no project files and performs no bulk reading, planning, coding, or expensive review.
 3. The deterministic coordinator returns the highest-value dependency-ready work-plane unit.
-4. dispatch-round selects an actual Codex CLI, Claude, Antigravity, or Cursor worker from task fit, quota pools, reset horizon, reliability, RAM, storage, cost, and user priority.
-5. Machine-wide leases protect provider slots, shared quota, the Codex reserve, file ownership, and worktree storage across projects.
-6. collect-round receives one finite result and cleans its editing worktree.
-7. integrate-round applies an isolated patch exactly once only after boundary checks and declared deterministic primary-workspace verification. Concurrent user changes and unverified patches are refused.
-8. record-evidence advances only the named project requirement. complete-task refuses completion until every required acceptance item has sufficient evidence.
+4. run-task-cycle starts one bounded execution window for the dependency-ready gap.
+5. dispatch-round selects an actual Codex CLI, Claude, Antigravity, or Cursor worker from task fit, quota pools, reset horizon, reliability, RAM, storage, cost, and user priority.
+6. Machine-wide leases protect provider slots, shared quota, the Codex reserve, file ownership, and worktree storage across projects.
+7. The cycle waits locally without repeated model turns, collects each finite worker once, and refuses an unchanged failed-provider retry.
+8. integrate-round applies an isolated patch exactly once only after boundary checks and declared deterministic primary-workspace verification. Concurrent user changes and unverified patches are refused.
+9. record-evidence advances only the named project requirement. complete-task refuses completion until every required acceptance item has sufficient evidence.
 
-AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, hidden Codex continuation, or recurring status loop.
+AI Mobile starts no desktop application, Goal, automation, heartbeat, LLM manager process, schedule, hidden Codex continuation, or recurring status loop. Its bounded deterministic cycle uses no repeated model-turn polling.
 
 The console reports only accepted evidence, real assignments, typed blockers, resource choices, and the next action already assigned. Activity is not progress.
 
@@ -89,6 +90,7 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 | start-task | Recover bounded intent, create one durable project or portfolio task, capture capacity, and return console plus work-plane plans. |
 | reconcile-task | Apply the latest correction to the same task, migrate legacy state, invalidate stale work, and preserve matching evidence. |
 | dispatch-round | Allocate dependency-ready units to real work-plane workers; omitted units use the coordinator recommendation. |
+| run-task-cycle | Default bounded path: dispatch, wait locally, collect once, integrate verified work, and advance only on evidence or changed recovery state. |
 | collect-round | Collect one bounded round and clean editing worktrees. |
 | integrate-round | Apply verified isolated patches once without a model review; protect concurrent changes and roll back failed verification. |
 | record-evidence | Attach verified evidence to one task or named portfolio project. |
@@ -109,6 +111,7 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 - Verified trusted Fable 5 and Sonnet 5 changes receive no second model review.
 - Isolated patches are integrated deterministically, not reimplemented by Luna.
 - A failed worker is retried only after a classified transient failure and changed evidence.
+- A successful read-only artifact is returned once; the same inspection is not repeated or sent through a redundant premium review.
 - Worker activity, process health, elapsed time, and token usage are never reported as outcome progress.
 
 The default communication mode is smart-compact: answer first, preserve exact evidence and caveats, and remove low-value narration without reducing reasoning quality.
@@ -136,10 +139,11 @@ Existing host sessions keep the schema they loaded at startup. A schema or runti
 2. Do not switch the visible task to the lightweight console before restart.
 3. prepare-restart-handoff closes only OpenAI.Codex and refreshes the canonical AI Mobile plugin. Classic ChatGPT is never a fallback.
 4. The official local Codex app-server resumes the exact persisted task while the desktop is closed. A bounded capable-model turn calls AI Mobile resource-inventory once and must observe the expected runtimeVersion.
-5. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and dispatches its next separate work-plane worker.
-6. The launcher then reopens the exact OpenAI.Codex task so the completed continuation is visible.
+5. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and invokes one bounded run-task-cycle call.
+6. The cycle waits without repeated model turns, collects terminal workers once, integrates verified work, and advances only on accepted evidence or a materially changed recovery path.
+7. The launcher then reopens the exact OpenAI.Codex task so the material execution result is visible.
 
-This path never uses codex exec resume, a duplicate task, a Goal, an automation, a manager loop, or UI automation. Normal continuation does not restart the app. Today the private console preference is GPT-5.6 Luna at low effort; future models are selected by role and live evidence rather than a permanent product name.
+This path never uses codex exec resume, a duplicate task, a Goal, an automation, an LLM manager loop, or UI automation. Normal continuation does not restart the app. Today the private console preference is GPT-5.6 Luna at low effort; future models are selected by role and live evidence rather than a permanent product name.
 
 For a durable task whose outcome matches the project North Star, summary, dispatch, integration, evidence, and completion refresh authoritative .codex state. Execution states distinguish dispatch-required, workers-running, integration-required, blocked, and completed.
 
@@ -154,6 +158,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" start-task -ContractFile ".\start.json"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" reconcile-task -ContractFile ".\correction.json"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" dispatch-round -ContractFile ".\round.json"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" run-task-cycle -ContractFile ".\cycle.json"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" collect-round -ContractFile ".\collect.json"
 
 # One explicit evidence summary
@@ -173,6 +178,7 @@ Run all release gates before publishing:
 
 ```powershell
 node .\scripts\self-test.js
+node .\scripts\task-cycle-regression.js
 node .\scripts\outcome-recovery-e2e.js
 node .\scripts\continuation-regression.js
 node .\scripts\state-capacity-regression.js

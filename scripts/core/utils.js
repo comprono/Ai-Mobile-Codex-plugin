@@ -129,8 +129,9 @@ function where(command) {
     : [];
 }
 
-function resolveCommand(command, fallbacks = []) {
-  const candidates = [...where(command), ...fallbacks].filter(Boolean);
+function resolveCommand(command, fallbacks = [], options = {}) {
+  const discovered = where(command);
+  const candidates = (options.preferFallbacks ? [...fallbacks, ...discovered] : [...discovered, ...fallbacks]).filter(Boolean);
   for (const candidate of candidates) {
     if (path.isAbsolute(candidate) && !fs.existsSync(candidate)) continue;
     const probe = commandResult(candidate, ["--version"], { timeout: 5000 });

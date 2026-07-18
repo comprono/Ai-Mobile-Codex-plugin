@@ -47,8 +47,26 @@ function changedFingerprints(before = {}, after = {}) {
 function collectDiff(workspace, files = []) {
   const boundedFiles = [...new Set(files)].slice(0, 100);
   if (!boundedFiles.length) return "";
-  const result = commandResult("git", ["-C", workspace, "diff", "--no-ext-diff", "HEAD", "--", ...boundedFiles], { timeout: 30000, maxBuffer: 3 * 1024 * 1024 });
-  return result.status === 0 ? redact(result.stdout).slice(0, 50000) : "";
+  const tracked = [];
+  const untracked = [];
+  for (const file of boundedFiles) {
+    const absolute = path.resolve(workspace, file);
+    if (!isInside(workspace, absolute)) continue;
+    const probe = commandResult("git", ["-C", workspace, "ls-files", "--error-unmatch", "--", file], { timeout: 5000, maxBuffer: 1024 * 1024 });
+    if (probe.status === 0) tracked.push(file);
+    else if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) untracked.push(file);
+  }
+
+  const patches = [];
+  if (tracked.length) {
+    const result = commandResult("git", ["-C", workspace, "diff", "--binary", "--no-ext-diff", "HEAD", "--", ...tracked], { timeout: 30000, maxBuffer: 3 * 1024 * 1024 });
+    if (result.status === 0 && result.stdout) patches.push(result.stdout);
+  }
+  for (const file of untracked) {
+    const result = commandResult("git", ["-C", workspace, "diff", "--binary", "--no-ext-diff", "--no-index", "--", "/dev/null", file], { timeout: 30000, maxBuffer: 3 * 1024 * 1024 });
+    if ((result.status === 0 || result.status === 1) && result.stdout) patches.push(result.stdout);
+  }
+  return redact(patches.join("")).slice(0, 50000);
 }
 
 function cleanBoundary(value) {

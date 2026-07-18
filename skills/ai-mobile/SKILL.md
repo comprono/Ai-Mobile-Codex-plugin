@@ -14,7 +14,7 @@ AI Mobile exists to finish the user's measurable outcome with the best total use
 3. Actual reading, planning, implementation, debugging, and expensive verification run in separate work-plane workers. Codex CLI is a real worker and may consume shared Codex capacity above the private reserve.
 4. The deterministic coordinator selects workers from fresh capability, dependency, quota-pool, reset-horizon, reliability, cost, RAM, storage, and user-priority evidence.
 5. Activity is not progress. Only accepted outcome evidence reduces the gap.
-6. No manager loop, heartbeat, Goal, automation, repeated polling, hidden CLI continuation, or automatic desktop launch is created.
+6. No LLM manager loop, heartbeat, Goal, automation, repeated chat polling, hidden CLI continuation, or automatic desktop launch is created. One bounded deterministic execution cycle may wait for finite workers, collect once, integrate verified evidence, and advance only while acceptance progress or a materially changed recovery path exists.
 
 If a method succeeds but the user-visible outcome is unchanged, that method is not completion.
 
@@ -31,13 +31,13 @@ Set consoleModel and consoleEffort from the visible task when known. Under the c
 After start-task or reconcile-task:
 
 1. Read the returned workPlane.recommendedWorkUnits; do not inspect the repository to reinvent them.
-2. If execution.mustDispatchNow is true, call dispatch-round in the same turn. Omit workUnits to use the coordinator's dependency-ready unit, or pass only finite disjoint units supported by observed boundaries.
-3. The visible console must not take project ownership when dispatch is rejected. Report the typed blocker and recovery trigger; retry only after capacity or contract evidence materially changes.
-4. While a finite round runs, end with one compact assignment report. Do not poll repeatedly or narrate elapsed time.
-5. At the natural integration point, call collect-round once with a bounded local wait.
+2. If execution.mustDispatchNow is true, call run-task-cycle once in the same turn. Use maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5 unless a stricter project contract applies.
+3. The deterministic cycle dispatches the dependency-ready recommendation, waits locally without model-turn polling, collects terminal workers once, integrates verified patches, and advances only after accepted evidence or a materially changed recovery path.
+4. A successful read-only worker returns one compact artifact and ends that cycle. Do not repeat the same inspection or send it through a redundant premium review.
+5. The visible console must not take project ownership when dispatch or execution fails. Report the typed blocker, owner, recovery trigger, and already-owned recovery action.
 6. Accept trusted-primary work only when exact model identity, clean ownership boundaries, and deterministic checks pass. For isolated work, integrate the stored patch once and verify it deterministically; do not ask Luna or another premium model to re-read it by default.
-8. Call record-evidence only for evidence tied to the named requirement and project. Call complete-task only when every required acceptance item mechanically passes.
-9. Dispatch another finite round only for the next dependency-ready acceptance gap.
+7. Call record-evidence only for evidence tied to the named requirement and project. Call complete-task only when every required acceptance item mechanically passes.
+8. Use dispatch-round, collect-round, and integrate-round directly only for diagnosis or a deliberately manual finite round; they are not the normal user flow.
 
 Next is an action already assigned to a worker, a deterministic integration step already starting, or the exact user decision required. It is not homework for the user.
 
@@ -73,8 +73,8 @@ For a schema or runtime upgrade, follow this order exactly:
 2. Do not switch the visible task to the lightweight console yet.
 3. Use prepare-restart-handoff only with explicit restart authorization and exact verification and resume models. The one-shot launcher closes only OpenAI.Codex and refreshes AI Mobile. It never launches Classic ChatGPT.
 4. While the desktop is closed, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once; the launcher requires its runtimeVersion to equal the installed version.
-5. Only after that tool evidence, the same app-server starts one turn in the same task on the requested lightweight model and low effort. That turn reconciles the existing durable task once, dispatches its dependency-ready work-plane unit, reports the assignment, and ends without polling.
-6. After the continuation is persisted, the launcher reopens the exact OpenAI.Codex task so the user sees it. No codex exec resume, duplicate task, Goal, automation, manager loop, or hidden continuation is used.
+5. Only after that tool evidence, the same app-server starts one turn in the same task on the requested lightweight model and low effort. That turn reconciles the existing durable task once and invokes one bounded run-task-cycle call. The deterministic cycle waits for finite workers without repeated model turns, collects and integrates once, and returns a material result.
+6. After that execution result is persisted, the launcher reopens the exact OpenAI.Codex task so the user sees it. No codex exec resume, duplicate task, Goal, automation, LLM manager loop, or hidden continuation is used.
 
 If fresh runtime proof is missing or stale, the launcher fails closed before selecting Luna. A lightweight console must never diagnose or patch the plugin.
 ## Reporting
@@ -94,6 +94,7 @@ Do not present worker count, healthy processes, token use, elapsed time, or repe
 - start-task: create one durable project or portfolio contract and return console plus work-plane plans.
 - reconcile-task: apply the latest correction to that same task and migrate stale contracts.
 - dispatch-round: allocate finite work-plane units; omitted units use the coordinator recommendation.
+- run-task-cycle: bounded default execution path that dispatches, waits locally, collects, integrates, and advances only on evidence or changed recovery state.
 - collect-round: collect one finite round and clean editing worktrees.
 - integrate-round: apply verified isolated patches once without a model review.
 - record-evidence: attach requirement-specific proof.

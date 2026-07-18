@@ -33,9 +33,9 @@ async function run() {
       cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
     } };
 
-    assert.equal(TOOLS.length, 12);
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "collect-round", "integrate-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile", "prepare-restart-handoff"]);
-    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 12);
+    assert.equal(TOOLS.length, 13);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "run-task-cycle", "collect-round", "integrate-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile", "prepare-restart-handoff"]);
+    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 13);
 
     const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
@@ -85,6 +85,7 @@ async function run() {
     assert.equal(antigravityArgs.includes("--sandbox"), true);
     const claudeArgs = buildClaudeArgs({ readOnly: true, maxWorkerOutputTokens: 800 }, "inspect");
     assert.equal(claudeArgs.includes("--no-chrome"), true);
+    assert.doesNotThrow(() => JSON.parse(claudeArgs[claudeArgs.indexOf("--json-schema") + 1]));
     assert.equal(classifyFailure("Transport closed", 1), "transport-unavailable");
     assert.equal(classifyFailure("rate limit", 1), "capacity-unavailable");
 
@@ -96,11 +97,13 @@ async function run() {
 
     const serverSource = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
     const skillSource = fs.readFileSync(path.join(__dirname, "..", "skills", "ai-mobile", "SKILL.md"), "utf8");
+    const projectAcceptance = JSON.parse(fs.readFileSync(path.join(__dirname, "..", ".codex", "ACCEPTANCE.json"), "utf8"));
+    assert.equal(Array.isArray(projectAcceptance.requirements), true);
     for (const forbidden of ["run-project-manager", "project-manager-status", "continuous-cycle"]) {
       assert.equal(serverSource.includes(forbidden), false);
       assert.equal(skillSource.includes(forbidden), false);
     }
-    return { ok: true, assertions: 46, durationMs: Date.now() - started, tools: TOOLS.length };
+    return { ok: true, assertions: 48, durationMs: Date.now() - started, tools: TOOLS.length };
   } finally {
     if (savedDataRoot === undefined) delete process.env.AI_MOBILE_DATA_ROOT; else process.env.AI_MOBILE_DATA_ROOT = savedDataRoot;
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocalAppData;

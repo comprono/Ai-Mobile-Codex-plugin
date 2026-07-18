@@ -89,7 +89,7 @@ function createRestartHandoff(args = {}) {
       task?.outcome ? "Outcome: " + task.outcome : "",
       priorities.length ? "Priorities: " + priorities.join(" | ") : "",
       "Start now: " + nextAction,
-      "Immediately dispatch the returned dependency-ready work-plane unit to the best eligible separate worker. End this turn after one compact Done / Active / Blocked / Resources / Next assignment report; do not poll.",
+      "Invoke run-task-cycle exactly once for this task with maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5. Let that deterministic tool wait for finite workers, collect terminal results once, integrate verified patches, and advance only on accepted evidence or a materially changed recovery path. End only after it returns one compact Done / Active / Blocked / Resources / Next material-result report.",
     ].filter(Boolean).join("\n"),
   };
   const root = path.join(stateRoot(), "restart-handoffs");
