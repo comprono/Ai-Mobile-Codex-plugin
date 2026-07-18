@@ -281,14 +281,21 @@
       "id": "PUBLIC_RELEASE",
       "description": "Version 1.2.0 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
       "required": true,
-      "status": "failing",
+      "status": "passing",
       "minimum_evidence_level": "end-to-end",
       "acceptance_steps": [
         "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
         "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.2.0 runtime.",
         "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.2.0."
       ],
-      "evidence": [],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "commit c64ced2; git push origin main; powershell -ExecutionPolicy Bypass -File scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list",
+          "summary": "The complete AI Mobile 1.2.0 regression, manifest, scanner, and privacy matrix passed; commit c64ced2 was pushed to origin/main; the installer upgraded both Codex and Claude Code from 1.1.10 to 1.2.0; both hosts independently reported ai-mobile@ai-mobile 1.2.0 enabled.",
+          "verified_utc": "2026-07-18T09:37:39Z"
+        }
+      ],
       "blocker": null
     },
     {
