@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.8 - 2026-07-18
+
+- Replaced direct WindowsApps executable launch with supported shell:AppsFolder package activation followed by the exact Codex thread deep link.
+- Keeps the exact OpenAI.Codex package, detached model-bound resume, and Classic ChatGPT exclusion; records the activation method and AppUserModelID in the handoff.
+- Added regression coverage for the packaged-app activation path.
+
 ## 1.1.7 - 2026-07-18
 
 - Reopens and verifies the exact `OpenAI.Codex` desktop package before starting the same-thread model continuation.

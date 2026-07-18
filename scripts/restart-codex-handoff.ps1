@@ -84,6 +84,34 @@ function Resolve-CodexDesktopPackage {
         Executable = $executable
     }
 }
+function Start-CodexDesktop {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [Parameter(Mandatory = $true)][string]$ThreadId
+    )
+
+    if (-not $Package.Resolved) {
+        throw "The exact OpenAI.Codex package could not be resolved for activation."
+    }
+    $appUserModelId = "{0}!{1}" -f $Package.PackageFamilyName, $Package.ApplicationId
+    $appsFolderTarget = "shell:AppsFolder\$appUserModelId"
+    $threadDeepLink = "codex://threads/$ThreadId"
+    $explorerPath = (Get-Command explorer.exe -ErrorAction Stop).Source
+
+    # Packaged Windows apps cannot be launched reliably by executing a binary
+    # under WindowsApps. Activate the app identity through Explorer instead,
+    # then let its registered codex URI open the requested thread.
+    $launcher = Start-Process -FilePath $explorerPath -ArgumentList $appsFolderTarget -PassThru
+    Start-Sleep -Milliseconds 250
+    Start-Process -FilePath $explorerPath -ArgumentList $threadDeepLink | Out-Null
+    return [pscustomobject]@{
+        LauncherProcessId = $launcher.Id
+        AppUserModelId = $appUserModelId
+        AppsFolderTarget = $appsFolderTarget
+        ThreadDeepLink = $threadDeepLink
+        LaunchMethod = "shell:AppsFolder activation plus codex protocol deep link"
+    }
+}
 if ($handoff.oneShot -ne $true -or $handoff.userAuthorized -ne $true) {
     throw "The restart handoff is not an authorized one-shot contract."
 }
@@ -125,6 +153,10 @@ if ($isDryRun) {
         PackageFullName = $codexDesktopPackage.PackageFullName
         DesktopResolved = $codexDesktopPackage.Resolved
         DesktopExecutable = $codexDesktopPackage.Executable
+        DesktopLaunchMethod = "shell:AppsFolder activation plus codex protocol deep link"
+        DesktopAppUserModelId = "{0}!{1}" -f $codexDesktopPackage.PackageFamilyName, $codexDesktopPackage.ApplicationId
+        DesktopAppsFolderTarget = "shell:AppsFolder\{0}!{1}" -f $codexDesktopPackage.PackageFamilyName, $codexDesktopPackage.ApplicationId
+        ThreadDeepLink = "codex://threads/$([string]$handoff.threadId)"
         DesktopArguments = $desktopArguments
         OpensProviderUi = $false
         DryRunOpensUi = $false
@@ -208,9 +240,7 @@ try {
 
     $handoff | Add-Member -NotePropertyName consumedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
     Save-RestartState -State "reopening" -Message "Plugin refresh finished; reopening the exact Codex package and thread now."
-    $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
-    $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
-    $desktopProcess = Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine -PassThru
+    $desktopLaunch = Start-CodexDesktop -Package $codexDesktopPackage -ThreadId ([string]$handoff.threadId)
     $desktopDeadline = [DateTime]::UtcNow.AddSeconds(15)
     $verifiedDesktopProcesses = @()
     do {
@@ -227,7 +257,10 @@ try {
     }
     $desktopOpened = $true
     $handoff | Add-Member -NotePropertyName desktopPackage -NotePropertyValue $codexDesktopPackage.PackageFullName -Force
-    $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopProcess.Id -Force
+    $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopLaunch.LauncherProcessId -Force
+        $handoff | Add-Member -NotePropertyName desktopAppUserModelId -NotePropertyValue $desktopLaunch.AppUserModelId -Force
+        $handoff | Add-Member -NotePropertyName desktopLaunchMethod -NotePropertyValue $desktopLaunch.LaunchMethod -Force
+        $handoff | Add-Member -NotePropertyName desktopThreadDeepLink -NotePropertyValue $desktopLaunch.ThreadDeepLink -Force
     $handoff | Add-Member -NotePropertyName verifiedDesktopProcessIds -NotePropertyValue @($verifiedDesktopProcesses | ForEach-Object { $_.ProcessId }) -Force
     $handoff | Add-Member -NotePropertyName desktopLaunchedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
     $handoff | Add-Member -NotePropertyName requestedResumeModel -NotePropertyValue $resumeModel -Force
@@ -250,11 +283,12 @@ try {
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message
 } finally {
     if ($caughtError -and -not $desktopOpened) {
-        $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
-        $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
-        $desktopProcess = Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine -PassThru
+        $desktopLaunch = Start-CodexDesktop -Package $codexDesktopPackage -ThreadId ([string]$handoff.threadId)
         $handoff | Add-Member -NotePropertyName desktopPackage -NotePropertyValue $codexDesktopPackage.PackageFullName -Force
-        $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopProcess.Id -Force
+        $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopLaunch.LauncherProcessId -Force
+        $handoff | Add-Member -NotePropertyName desktopAppUserModelId -NotePropertyValue $desktopLaunch.AppUserModelId -Force
+        $handoff | Add-Member -NotePropertyName desktopLaunchMethod -NotePropertyValue $desktopLaunch.LaunchMethod -Force
+        $handoff | Add-Member -NotePropertyName desktopThreadDeepLink -NotePropertyValue $desktopLaunch.ThreadDeepLink -Force
         $handoff | Add-Member -NotePropertyName desktopLaunchedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
         Save-RestartState -State "reopened-after-failure" -Message "The exact OpenAI.Codex package was reopened after the refresh failure."
     }
