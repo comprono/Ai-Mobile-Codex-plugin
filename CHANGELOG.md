@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.3 - 2026-07-18
+
+- Added exact Fable 5 and Sonnet 5 trusted-primary writing through a private standing policy, with clean Git ownership and mandatory deterministic verification.
+- Removed redundant lower-tier model review for successfully verified trusted-primary work while preserving acceptance evidence gates.
+- Made the repository a native local marketplace for both Codex and Claude Code, sharing one skill and MCP runtime.
+- Added one-shot Codex restart-resume handoffs that preserve the exact thread, task, evidence, priorities, and next action without adding a manager loop.
+- Added trusted-primary, shared-host installation, and restart dry-run regressions.
+- Added owned-path rollback for failed trusted-primary changes without reverting unrelated concurrent edits.
+- Made restart handoffs consumable only once and reopen the exact Codex workspace after headless resume.
+
 ## 1.1.2 - 2026-07-18
 
 - Honored explicitly named user models such as Claude Fable during dispatch, reported callable worker job IDs, and exposed concrete provider rejection reasons.

@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_PROFILE = Object.freeze({
-  schemaVersion: 8,
+  schemaVersion: 9,
   communicationStyle: "professional",
   communicationMode: "smart-compact",
   address: "",
@@ -36,6 +36,8 @@ const DEFAULT_PROFILE = Object.freeze({
   worktreeMaxAgeHours: 6,
   minimumDelegationSavingsPercent: 20,
   useExpiringPremiumCapacity: false,
+  trustedPrimaryWriteModels: [],
+  allowCodexRestartHandoff: false,
 });
 
 function profilePath() {
@@ -56,12 +58,20 @@ function safePattern(value, fallback = DEFAULT_PROFILE.codexModelAllowPattern) {
   }
 }
 
+function cleanModelList(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => cleanText(item, 120).toLowerCase().replace(/[_ ]+/g, "-").replace(/-+/g, "-"))
+    .filter(Boolean))]
+    .slice(0, 12);
+}
+
 function normalizeProfile(value = {}) {
   const style = ["professional", "royal"].includes(String(value.communicationStyle || "").toLowerCase())
     ? String(value.communicationStyle).toLowerCase()
     : DEFAULT_PROFILE.communicationStyle;
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     communicationStyle: style,
     communicationMode: ["smart-compact", "standard", "detailed"].includes(String(value.communicationMode || "").toLowerCase())
       ? String(value.communicationMode).toLowerCase()
@@ -96,6 +106,8 @@ function normalizeProfile(value = {}) {
     worktreeMaxAgeHours: Math.max(0.25, Math.min(168, Number(value.worktreeMaxAgeHours ?? DEFAULT_PROFILE.worktreeMaxAgeHours))),
     minimumDelegationSavingsPercent: Math.max(10, Math.min(70, Number(value.minimumDelegationSavingsPercent ?? DEFAULT_PROFILE.minimumDelegationSavingsPercent))),
     useExpiringPremiumCapacity: value.useExpiringPremiumCapacity === true,
+    trustedPrimaryWriteModels: cleanModelList(value.trustedPrimaryWriteModels),
+    allowCodexRestartHandoff: value.allowCodexRestartHandoff === true,
   };
 }
 

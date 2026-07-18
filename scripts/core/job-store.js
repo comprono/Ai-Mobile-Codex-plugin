@@ -7,7 +7,7 @@ const { appendJsonl, bounded, processAlive, readJson, readText, terminateTree, u
 const { boundariesOverlap, goalOverlap } = require("./lane-policy");
 const { jobDirectory, listJobIds, listTaskIds, newId, readTask, safeId } = require("./state-store");
 const { acquireResourceLease, bindLeasePid, releaseResourceLease } = require("./resource-leases");
-const { cleanupIsolatedWorkspace, prepareIsolatedWorkspace } = require("./workspace-isolation");
+const { cleanupIsolatedWorkspace, prepareWorkspaceForContract } = require("./workspace-isolation");
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "rejected"]);
 
@@ -93,7 +93,7 @@ function createJob(contract, entrypoint) {
   let isolation;
   try {
     lease = acquireResourceLease({ ...contract, taskId }, jobId);
-    isolation = prepareIsolatedWorkspace(contract.workspace, taskId, jobId, contract.readOnly === true);
+    isolation = prepareWorkspaceForContract(contract, taskId, jobId);
   } catch (error) {
     if (lease) releaseResourceLease(jobId);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -106,6 +106,7 @@ function createJob(contract, entrypoint) {
     jobId,
     executionWorkspace: isolation.executionWorkspace,
     isolation,
+    skipModelReview: isolation.skipModelReview === true,
     lease,
     createdAt: utcNow(),
   };
@@ -131,7 +132,7 @@ function createJob(contract, entrypoint) {
     throw error;
   }
   setStatus(taskId, jobId, { state: "running", pid: child.pid, startedAt: utcNow() });
-  return { taskId, jobId, state: "running", provider: stored.provider, model: stored.model || "", isolation: isolation.mode };
+  return { taskId, jobId, state: "running", provider: stored.provider, model: stored.model || "", isolation: isolation.mode, skipModelReview: stored.skipModelReview };
 }
 
 function waitForTerminal(taskId, jobId, waitSeconds) {
@@ -162,6 +163,8 @@ function readJob(taskIdValue, jobIdValue, detail = "compact", waitSeconds = 0) {
     provider: contract.provider || status.provider || "",
     model: contract.model || status.model || "",
     goal: contract.goal || "",
+    isolation: contract.isolation?.mode || "",
+    skipModelReview: contract.skipModelReview === true,
     workGraphNodeId: contract.workGraphNodeId || null,
     blocker: status.blocker || "",
     alreadyCollected,
@@ -171,7 +174,9 @@ function readJob(taskIdValue, jobIdValue, detail = "compact", waitSeconds = 0) {
       ? readJson(path.join(dir, "handoff.json"), null)
       : null,
     integration: terminal
-      ? { required: status.state === "completed" && !alreadyCollected, action: contract.integrationAction || "", instruction: status.state === "completed" ? "Inspect the stored patch/evidence once, integrate only accepted work, then record acceptance evidence." : "Use this typed blocker once; do not retry without changed evidence." }
+      ? contract.skipModelReview === true && status.state === "completed"
+        ? { required: false, alreadyInPrimaryWorkspace: true, action: contract.integrationAction || "", instruction: "Changes are already in the primary workspace and deterministic verification passed. Do not ask another model to re-review them; record acceptance-linked evidence or continue the next dependency." }
+        : { required: status.state === "completed" && !alreadyCollected, action: contract.integrationAction || "", instruction: status.state === "completed" ? "Inspect the stored patch/evidence once, integrate only accepted work, then record acceptance evidence." : "Use this typed blocker once; do not retry without changed evidence." }
       : { required: false, instruction: "Continue current Codex work. Collect again only at the integration point or after a material provider transition." },
   };
   if (detail === "full") {

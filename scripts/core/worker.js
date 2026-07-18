@@ -9,8 +9,9 @@ const { clearInventoryCache } = require("./capacity");
 const { bounded, readJson, redact, safeWorkspace, utcNow, writeJson } = require("./utils");
 const { jobDirectory } = require("./state-store");
 const { releaseResourceLease } = require("./resource-leases");
-const { cleanTransientOutputs } = require("./workspace-isolation");
+const { cleanTransientOutputs, rollbackPrimaryWorkspace } = require("./workspace-isolation");
 const { runProvider } = require("../providers");
+const { normalizeModelId } = require("./trusted-models");
 
 function communicationContract(mode = "smart-compact") {
   if (mode === "detailed") return "Explain the result and material reasoning clearly, without greetings, task repetition, tool narration, waiting commentary, or offers for more work.";
@@ -22,17 +23,21 @@ function promptFor(contract) {
   const maxWords = Math.max(220, Math.min(1400, Math.floor((contract.maxWorkerOutputTokens || 1000) * 0.7)));
   return [
     "You are one bounded worker in a finite project round. Complete only the assigned unit.",
+    contract.taskContext?.latestUserRequest ? `Latest user request: ${contract.taskContext.latestUserRequest}` : "",
+    contract.taskContext?.constraints?.length ? `Project constraints:\n- ${contract.taskContext.constraints.join("\n- ")}` : "",
+    contract.taskContext?.unresolvedAcceptance?.length ? `Unresolved project acceptance:\n${contract.taskContext.unresolvedAcceptance.map((item) => `- ${item.id}: ${item.description}${item.blocker ? ` (blocker: ${JSON.stringify(item.blocker)})` : ""}`).join("\n")}` : "",
     `Project outcome: ${contract.projectGoal}`,
     `Your unit: ${contract.goal}`,
     `Current Codex owns and is actively doing: ${contract.currentCodexGoal}`,
     `Why this is independent: ${contract.independenceReason}`,
     `Execution workspace: ${contract.executionWorkspace}`,
-    `Mode: ${contract.readOnly ? "read-only" : "isolated writer"}`,
+    `Mode: ${contract.readOnly ? "read-only" : contract.skipModelReview ? "trusted primary writer" : "isolated writer"}`,
     contract.relevantFiles?.length ? `Read scope: ${contract.relevantFiles.join(", ")}` : "",
     contract.expectedFiles?.length ? `Only allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
     contract.acceptanceCriteria?.length ? `Unit acceptance:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
     contract.expectedContribution ? `Required contribution: ${contract.expectedContribution}` : "",
     contract.integrationAction ? `Current Codex integration action: ${contract.integrationAction}` : "",
+    contract.skipModelReview ? "You are trusted to edit the bounded primary workspace directly. Finish the unit and run its deterministic checks; do not request another model review." : "",
     "Do not delegate, start another agent, create recurring work, inspect the current-Codex unit, or broaden scope.",
     "Do not claim the project outcome is complete. Return only your unit result, evidence, checks, changed files, and one blocker if present.",
     communicationContract(contract.communicationMode),
@@ -79,6 +84,11 @@ function executeWorker(payload) {
     writeJson(path.join(dir, "usage.json"), usage);
 
     let blocker = response.typedBlocker ? `${response.typedBlocker}: ${bounded(response.text, 500)}` : "";
+    const expectedTrustedModel = contract.isolation?.trustedModel || "";
+    const actualModel = normalizeModelId(usage.model);
+    if (expectedTrustedModel && actualModel !== normalizeModelId(expectedTrustedModel)) {
+      blocker = `model-identity-mismatch: trusted primary writing required ${expectedTrustedModel}, but the provider receipt reported ${usage.model || "unknown"}.`;
+    }
     if (outside.length) blocker = `Writer boundary violation: ${outside.join(", ")}`;
     if (mutationViolation) blocker = `Read-only worker modified files: ${changed.join(", ")}`;
     let verification = null;
@@ -87,6 +97,11 @@ function executeWorker(payload) {
       if (verification.required && !verification.passed) blocker = verification.blocker;
     }
 
+    let rollback = null;
+    if (contract.skipModelReview === true && (!response.ok || blocker)) {
+      rollback = rollbackPrimaryWorkspace(contract.isolation || {}, changed);
+      if (!rollback.rolledBack) blocker = `${blocker || "trusted-primary-worker-failed"}; rollback-incomplete: ${JSON.stringify(rollback.failures || rollback.reason)}`;
+    }
     const state = !response.ok || blocker ? "failed" : "completed";
     const summary = bounded(response.text, resultLimit);
     fs.writeFileSync(path.join(dir, "result.md"), `${summary}\n`, "utf8");
@@ -100,6 +115,9 @@ function executeWorker(payload) {
       verification,
       blocker,
       integrationAction: contract.integrationAction || "",
+      skipModelReview: contract.skipModelReview === true,
+      alreadyInPrimaryWorkspace: contract.skipModelReview === true,
+      rollback,
       projectCompleteAllowed: false,
     });
     setStatus(taskId, jobId, {

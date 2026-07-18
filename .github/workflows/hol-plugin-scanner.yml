@@ -26,6 +26,12 @@ jobs:
       - name: Fable routing regression
         run: node scripts/fable-routing-regression.js
 
+      - name: Trusted primary writer and restart handoff
+        run: node scripts/trusted-primary-regression.js
+
+      - name: Shared Codex and Claude installation
+        run: node scripts/shared-host-install-regression.js
+
       - name: Outcome recovery and reconciliation
         run: node scripts/outcome-recovery-e2e.js
 

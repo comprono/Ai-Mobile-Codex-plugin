@@ -9,6 +9,7 @@ const { providerHistory } = require("./core/provider-history");
 const { cleanupStaleLeases, resourceLeaseSnapshot } = require("./core/resource-leases");
 const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, reconcileTask, recordEvidence, startTask, taskSummary } = require("./core/task-orchestrator");
 const { cleanupAbandonedWorktrees, storageStatus } = require("./core/workspace-isolation");
+const { createRestartHandoff } = require("./core/restart-handoff");
 const { executeWorker } = require("./core/worker");
 const { readProfile, writeProfile } = require("./lib/orchestrator-profile");
 const { serve } = require("./mcp/server");
@@ -48,6 +49,7 @@ async function main() {
   if (action === "record-evidence-cli") return output(recordEvidence(jsonInput()));
   if (action === "task-summary-cli") return output(taskSummary(taskOrPortfolioArgs()));
   if (action === "complete-task-cli") return output(completeTask(taskOrPortfolioArgs()));
+  if (action === "prepare-restart-handoff-cli") return output(createRestartHandoff(jsonInput()));
   if (action === "cancel-task-cli") return output(cancelTask(taskOrPortfolioArgs()));
   if (action === "orchestrator-profile-cli") return output(arg("--patch") ? writeProfile(JSON.parse(arg("--patch"))) : readProfile());
   if (action === "worker") { process.exitCode = executeWorker(jsonInput()); return; }

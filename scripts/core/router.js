@@ -3,6 +3,7 @@
 const { boundedList, safeRelativePath } = require("./utils");
 const { boundariesOverlap, economicEstimate, goalOverlap, laneKey } = require("./lane-policy");
 const { readProfile } = require("../lib/orchestrator-profile");
+const { normalizeRequestedModel } = require("./trusted-models");
 
 const PROVIDERS = new Set(["auto", "codex", "claude", "antigravity", "cursor"]);
 const TASK_KINDS = new Set(["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"]);
@@ -54,7 +55,7 @@ function normalizeRequest(input = {}) {
   if (!SELECTION_AUTHORITIES.has(selectionAuthority)) {
     throw new Error(`Unsupported selectionAuthority: ${selectionAuthority}. Use "user" only for a provider/model the user explicitly mandated; omit it for automatic routing.`);
   }
-  const model = String(input.model || "").trim();
+  const model = normalizeRequestedModel(input.model);
   const canonicalProvider = canonicalModelProvider(model);
   let selectionCorrection = "";
   if (model && canonicalProvider && preferredProvider !== "auto" && preferredProvider !== canonicalProvider) {

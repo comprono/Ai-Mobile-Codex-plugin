@@ -1,5 +1,5 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','self-test','privacy')][string]$Command = 'setup',
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
   [string]$ContractFile = '',
   [string]$TaskId = '',
   [string]$PortfolioId = '',
@@ -35,7 +35,7 @@ switch ($Command) {
       PluginRoot = $Root
       StartupBehavior = 'passive; no provider desktop application is opened'
       StateRoot = '%LOCALAPPDATA%\AI Mobile\v1'
-      Tools = @('start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile')
+      Tools = @('start-task','reconcile-task','dispatch-round','collect-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile','prepare-restart-handoff')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
@@ -52,6 +52,7 @@ switch ($Command) {
   'complete-task' { Invoke-Node (@('complete-task-cli') + (Get-StateArguments)) }
   'cancel-task' { Invoke-Node (@('cancel-task-cli') + (Get-StateArguments)) }
   'orchestrator-profile' { Invoke-Node @('orchestrator-profile-cli') }
+  'prepare-restart-handoff' { Invoke-Node @('prepare-restart-handoff-cli','--json-file',(Require-Contract)) }
   'self-test' { Invoke-Node @('self-test') }
   'privacy' {
     [ordered]@{
@@ -59,7 +60,7 @@ switch ($Command) {
       LocalState = '%LOCALAPPDATA%\AI Mobile\v1'
       ProjectRuntimeFiles = 'none'
       DesktopStartup = 'never automatic'
-      WriterIsolation = 'detached Git worktree with patch handoff'
+      WriterIsolation = 'detached Git worktree by default; exact privately trusted Fable 5 and Sonnet 5 may write clean bounded primary paths with deterministic checks'
       PortfolioMode = 'one finite request can coordinate multiple independently verified projects'
       GlobalGuards = 'provider, quota pool, worker, RAM, file ownership, and worktree storage'
       WorktreeLifecycle = 'disk quota, free-space gate, maximum age, collection cleanup, cancellation cleanup, and startup crash cleanup'

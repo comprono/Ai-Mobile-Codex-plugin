@@ -33,9 +33,9 @@ async function run() {
       cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
     } };
 
-    assert.equal(TOOLS.length, 10);
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "collect-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile"]);
-    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 10);
+    assert.equal(TOOLS.length, 11);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "collect-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile", "prepare-restart-handoff"]);
+    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 11);
 
     const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
@@ -64,7 +64,7 @@ async function run() {
     assert.equal(route({ ...normalized, relevantFiles: ["src/api"] }, resources, {}).action, "direct");
 
     const profile = normalizeProfile({});
-    assert.equal(profile.schemaVersion, 8);
+    assert.equal(profile.schemaVersion, 9);
     assert.equal(profile.role, "AI resource orchestrator");
     assert.equal(profile.codexReservePercent, 15);
     assert.equal(profile.maxExternalWorkers, 2);
@@ -73,6 +73,8 @@ async function run() {
     assert.equal(profile.worktreeDiskQuotaMb, 2048);
     assert.equal(profile.subscriptionOnlyClaude, true);
     assert.equal(profile.antigravityReadOnlyConsent, false);
+    assert.deepEqual(profile.trustedPrimaryWriteModels, []);
+    assert.equal(profile.allowCodexRestartHandoff, false);
 
     const antigravityArgs = buildAntigravityArgs({ workspace, readOnly: true, timeoutSeconds: 60 }, "inspect");
     assert.equal(antigravityArgs.includes("--dangerously-skip-permissions"), false);

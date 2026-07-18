@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: complete
-Updated: 2026-07-17T15:23:00Z
+Updated: 2026-07-18T00:21:17Z
 
 ## North Star
 
@@ -16,13 +16,16 @@ AI Mobile must make current Codex and available local AI CLIs work as one effici
 - Current Codex keeps working while at most two disjoint external workers run, and integrates each result once.
 - One request can coordinate multiple independently verifiable projects from one capacity snapshot and one bounded portfolio plan.
 - Machine-wide provider, quota, worker, RAM, and worktree-storage limits prevent cross-project oversubscription while preserving useful concurrency and fairness.
-- Every editing worker uses a temporary Git worktree; read-only workers use the shared repository; abandoned worktrees are cleaned after collection, cancellation, crash recovery, and age or disk-limit enforcement.
+- Editing workers use temporary Git worktrees except exact Fable 5 and Sonnet 5 lanes enabled by the user's trusted-primary policy; read-only workers use the shared repository, and abandoned worktrees are cleaned after collection, cancellation, crash recovery, and age or disk-limit enforcement.
 - No provider desktop UI, heartbeat, Goal, automation, manager loop, or repeated status poll starts automatically.
 - Completion and progress claims require acceptance evidence, not process health or worker activity.
 - A project request cannot silently narrow an existing operational outcome into a method such as review, inspection, planning, or monitoring.
 - The latest user correction can revise an active task without preserving stale outcome, acceptance, worker, or plan assumptions.
 - A rejected or completed worker round returns the next acceptance-linked recovery transition instead of leaving Codex at a dead end.
 - An invocation never ends at passive diagnosis while an authorized, dependency-ready recovery action remains: current Codex starts it in the same turn, and model use plus material progress are reported with reasons.
+- Exact Claude Fable 5 and Sonnet 5 workers may edit a clean, explicitly bounded primary workspace under the user's saved trust policy; other writers remain isolated, and trusted work is mechanically verified without a second model review.
+- Codex and Claude Code install AI Mobile from the same repository and execute the same versioned MCP runtime instead of separate copied implementations.
+- A required Codex upgrade can cross the restart boundary through one explicit, durable, one-shot resume handoff without asking the user to restate the project.
 
 ## User Intent
 
@@ -63,15 +66,16 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - A two-project disposable portfolio now runs independent editing workers concurrently, keeps current Codex on the highest-priority project, allows a ready project to advance past a blocked sibling, and refuses cross-project evidence reuse.
 - Machine-wide tests now prevent provider, quota-pool, global-worker, and file-ownership conflicts while preserving priority fairness and Codex reserve policy.
 - Worktree tests now enforce disk and free-space limits and prove collection, cancellation, lost-worker, startup, and maximum-age cleanup with no primary-worktree edits or read-only worktrees.
-- Plugin Scanner 2.0.1109 public and strict lint pass at 100; its full scan passes at 100/100 with zero findings; standalone verify passes every static check and skips only local stdio execution by scanner policy.
-- Codex has `ai-mobile@personal` v1.1.0 in the personal source and cache; the installed cache passes self-test, outcome recovery, portable MCP, and privacy checks.
+- Plugin Scanner 2.0.1114 default, public-marketplace, and strict-security lint pass at 100; the full repository scan passes at 100/100 with zero findings. Standalone verify passes every static check and marks local stdio execution as a safety-skip by scanner policy.
+- Codex and Claude Code both resolve `ai-mobile@ai-mobile` v1.1.3 from this repository and share the same root MCP runtime; strict Claude plugin validation passes.
 - A method-only review contract now recovers the bounded project north star and acceptance gap while an explicit review deliverable remains authoritative.
 - `reconcile-task` now revises the same task, invalidates stale rounds, preserves matching evidence, removes changed evidence, and reopens completed work when the contract changes.
 - Rejected or completed worker lanes now return typed recovery or exact integration and acceptance identifiers rather than an unowned generic instruction.
 - A real installed Antigravity CLI canary used Gemini 3.5 Flash Medium, returned the exact disposable marker, recorded integration evidence, completed successfully, and opened no desktop UI.
-- All ten deterministic release suites pass, including portfolio isolation, global resource leases, storage lifecycle cleanup, and no automatic desktop launch.
+- All thirteen deterministic release suites plus the MCP self-test pass, including trusted direct-write rollback, shared-host installation, portfolio isolation, global resource leases, storage lifecycle cleanup, and no automatic desktop launch.
 - A production-project field test exposed that imported blocked requirements lose their owner, recovery trigger, and recovery action; start-task also reports provider availability without an explicit use/non-use decision, allowing Codex to stop after diagnosis.
 - AI Mobile 1.1.1 now preserves executable blockers, emits same-turn execution and reasoned resource reports, passes 11 deterministic suites and both scanner profiles at 100, and passes an installed production-project field test.
+- AI Mobile 1.1.3 adds exact Fable 5 and Sonnet 5 trusted-primary execution, mechanical verification without lower-tier model review, private policy controls, shared Codex/Claude installation, and authorized one-shot Codex restart continuity.
 
 ## Context Pointers
 
@@ -92,6 +96,7 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 ## Decisions
 
 - Current Codex is an active integrator, not a passive manager.
+- A higher-tier trusted writer is not reviewed again by a lower-tier model. Scope, Git state, deterministic tests, and acceptance evidence remain mandatory.
 - Use finite hybrid rounds with at most two external workers and a default 15 percent Codex reserve.
 - Store runtime state under `%LOCALAPPDATA%\AI Mobile\v1`, never in the managed workspace.
 - CLI is automatic; UI fallback is explicit and user initiated.
@@ -107,10 +112,10 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 ## Current Slice
 
-- Acceptance ID: none
-- Goal: AI Mobile 1.1.1 same-turn execution and transparent resource routing are complete.
-- Evidence target: all required entries in `.codex/ACCEPTANCE.json` pass.
+- Acceptance ID: complete
+- Goal: All required v1.1.3 acceptance requirements pass.
+- Evidence: `.codex/ACCEPTANCE.json` plus the full release, installation, and scanner gates.
 
 ## Next
 
-Restart Codex so new tasks load AI Mobile 1.1.1, then continue the target project from the returned same-turn execution contract.
+Commit and publish v1.1.3, then use the one-shot handoff when a live Codex task actually requires the new runtime to continue across restart.

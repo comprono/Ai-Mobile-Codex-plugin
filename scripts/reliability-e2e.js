@@ -57,7 +57,7 @@ function toolValue(message) { return JSON.parse(message.result.content[0].text);
   const initialized = await call("initialize", { protocolVersion: "2025-03-26" });
   assert.equal(initialized.result.serverInfo.name, "ai-mobile-local");
   const listed = await call("tools/list");
-  assert.equal(listed.result.tools.length, 10);
+  assert.equal(listed.result.tools.length, 11);
   const started = toolValue(await call("tools/call", { name: "start-task", arguments: { workspace, outcome: "Perform a bounded architecture review.", userRequest: "Fix and ship the verified portable MCP outcome." } }));
   assert.match(started.taskId, /^task-/);
   assert.equal(started.outcome, "Ship the verified portable MCP outcome.");
@@ -74,7 +74,7 @@ function toolValue(message) { return JSON.parse(message.result.content[0].text);
   assert.equal(evidenced.progress.passing, 1);
   const completed = toolValue(await call("tools/call", { name: "complete-task", arguments: { taskId: started.taskId } }));
   assert.equal(completed.completionAllowed, true);
-  process.stdout.write(`${JSON.stringify({ ok: true, tools: 10, taskId: started.taskId, outcomeRecoveredThroughMcp: true, noProviderProcessRequired: true }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, tools: 11, taskId: started.taskId, outcomeRecoveredThroughMcp: true, noProviderProcessRequired: true }, null, 2)}\n`);
 })().catch((error) => { process.stderr.write(`${error.stack || error.message}\n`); process.exitCode = 1; }).finally(() => {
   try { child.kill(); } catch { /* no-op */ }
   fs.rmSync(root, { recursive: true, force: true });

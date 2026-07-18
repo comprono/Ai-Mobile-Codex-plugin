@@ -1,0 +1,209 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-trusted-"));
+const workspace = path.join(root, "repo");
+process.env.AI_MOBILE_DATA_ROOT = path.join(root, "state");
+process.env.LOCALAPPDATA = path.join(root, "local");
+fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
+fs.writeFileSync(path.join(workspace, "src", "trusted.txt"), "base\n");
+const fakeBin = path.join(workspace, ".test-bin");
+fs.mkdirSync(fakeBin, { recursive: true });
+fs.writeFileSync(path.join(fakeBin, "fake-claude.js"), `"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+fs.writeFileSync(path.join(process.cwd(), "src", "trusted.txt"), "trusted model changed primary\\n");
+process.stdout.write(JSON.stringify({
+  is_error: false,
+  structured_output: { outcome: "Changed the bounded primary file.", evidence: ["src/trusted.txt"], checks: ["verification delegated to deterministic runner"], blocker: "" },
+  usage: { input_tokens: 40, output_tokens: 20 },
+  modelUsage: { "claude-fable-5": { inputTokens: 40, outputTokens: 20, costUSD: 0 } }
+}));
+`);
+fs.writeFileSync(path.join(fakeBin, "fake-claude.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-claude.js" %*\r\n`);
+fs.writeFileSync(path.join(fakeBin, "fake-claude-fail.js"), `"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+fs.writeFileSync(path.join(process.cwd(), "src", "trusted.txt"), "invalid direct edit\\n");
+process.stdout.write(JSON.stringify({
+  is_error: false,
+  structured_output: { outcome: "Changed the bounded primary file.", evidence: ["src/trusted.txt"], checks: [], blocker: "" },
+  usage: { input_tokens: 20, output_tokens: 10 },
+  modelUsage: { "claude-fable-5": { inputTokens: 20, outputTokens: 10, costUSD: 0 } }
+}));
+`);
+fs.writeFileSync(path.join(fakeBin, "fake-claude-fail.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-claude-fail.js" %*\r\n`);
+fs.writeFileSync(path.join(workspace, "verify-trusted.js"), `"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+assert.equal(fs.readFileSync("src/trusted.txt", "utf8"), "trusted model changed primary\\n");
+`);
+spawnSync("git", ["init", "-q", workspace]);
+spawnSync("git", ["-C", workspace, "config", "user.email", "test@example.invalid"]);
+spawnSync("git", ["-C", workspace, "config", "user.name", "AI Mobile Test"]);
+spawnSync("git", ["-C", workspace, "add", "."]);
+spawnSync("git", ["-C", workspace, "commit", "-qm", "fixture"]);
+
+const { normalizeRequestedModel, trustedPrimaryDecision } = require("./core/trusted-models");
+const { cleanupIsolatedWorkspace, prepareWorkspaceForContract, rollbackPrimaryWorkspace } = require("./core/workspace-isolation");
+const { createRestartHandoff, safeThreadId } = require("./core/restart-handoff");
+const { jobDirectory } = require("./core/state-store");
+const { readJson, writeJson } = require("./core/utils");
+const { executeWorker } = require("./core/worker");
+
+const profile = {
+  worktreeDiskQuotaMb: 64,
+  worktreeMinFreeMb: 1,
+  worktreeMaxAgeHours: 1,
+  trustedPrimaryWriteModels: ["claude-fable-5", "claude-sonnet-5"],
+};
+const verificationCommands = [{ name: "trusted-content", command: "node", args: ["verify-trusted.js"] }];
+const contract = {
+  workspace,
+  provider: "claude",
+  model: "Fable 5",
+  readOnly: false,
+  expectedFiles: ["src/trusted.txt"],
+  verificationCommands,
+};
+
+assert.equal(normalizeRequestedModel("Fable 5"), "claude-fable-5");
+assert.equal(normalizeRequestedModel("Sonnet 5"), "claude-sonnet-5");
+assert.equal(trustedPrimaryDecision(contract, profile).trusted, true);
+const primary = prepareWorkspaceForContract(contract, "task-trusted-0001", "job-trusted-0001", profile);
+assert.equal(primary.mode, "trusted-primary-workspace");
+assert.equal(primary.executionWorkspace, workspace);
+assert.equal(primary.skipModelReview, true);
+assert.equal(fs.existsSync(path.join(process.env.AI_MOBILE_DATA_ROOT, "worktrees")), false);
+const taskId = "task-trusted-0001";
+const jobId = "job-trusted-0001";
+const dir = jobDirectory(taskId, jobId);
+fs.mkdirSync(dir, { recursive: true });
+writeJson(path.join(dir, "contract.json"), {
+  ...contract,
+  taskId,
+  jobId,
+  model: "claude-fable-5",
+  providerCommand: path.join(fakeBin, "fake-claude.cmd"),
+  providerAuthMode: "subscription",
+  projectGoal: "Ship the verified fixture",
+  currentCodexGoal: "Verify another disjoint file",
+  independenceReason: "The trusted file is independently owned.",
+  relevantFiles: ["src/trusted.txt"],
+  acceptanceCriteria: ["The trusted file contains the expected result."],
+  executionWorkspace: workspace,
+  isolation: primary,
+  skipModelReview: true,
+  maxWorkerOutputTokens: 500,
+  timeoutSeconds: 30,
+});
+assert.equal(executeWorker({ taskId, jobId }), 0);
+assert.equal(fs.readFileSync(path.join(workspace, "src", "trusted.txt"), "utf8"), "trusted model changed primary\n");
+const workerHandoff = readJson(path.join(dir, "handoff.json"));
+assert.equal(workerHandoff.skipModelReview, true);
+assert.equal(workerHandoff.alreadyInPrimaryWorkspace, true);
+assert.equal(workerHandoff.verification.passed, true);
+assert.equal(readJson(path.join(dir, "usage.json")).model, "claude-fable-5");
+spawnSync("git", ["-C", workspace, "restore", "src/trusted.txt"]);
+
+assert.equal(trustedPrimaryDecision({ ...contract, model: "sonnet" }, profile).trusted, false);
+const generic = prepareWorkspaceForContract({ ...contract, model: "sonnet" }, "task-generic-0001", "job-generic-0001", profile);
+assert.equal(generic.mode, "isolated-git-worktree");
+cleanupIsolatedWorkspace(generic);
+
+const noChecks = prepareWorkspaceForContract({ ...contract, verificationCommands: [] }, "task-checks-0001", "job-checks-0001", profile);
+assert.equal(noChecks.mode, "isolated-git-worktree");
+cleanupIsolatedWorkspace(noChecks);
+const codexOwned = prepareWorkspaceForContract({ ...contract, currentCodexFiles: ["src/current-codex.js"] }, "task-codex-owner-0001", "job-codex-owner-0001", profile);
+assert.equal(codexOwned.mode, "isolated-git-worktree");
+cleanupIsolatedWorkspace(codexOwned);
+
+
+fs.writeFileSync(path.join(workspace, "src", "trusted.txt"), "existing owner\n");
+assert.throws(() => prepareWorkspaceForContract(contract, "task-dirty-0001", "job-dirty-0001", profile), /completely clean repository/);
+spawnSync("git", ["-C", workspace, "restore", "src/trusted.txt"]);
+
+
+const failedPrimary = prepareWorkspaceForContract(contract, "task-failed-0001", "job-failed-0001", profile);
+const failedTaskId = "task-failed-0001";
+const failedJobId = "job-failed-0001";
+const failedDir = jobDirectory(failedTaskId, failedJobId);
+fs.mkdirSync(failedDir, { recursive: true });
+writeJson(path.join(failedDir, "contract.json"), {
+  ...contract,
+  taskId: failedTaskId,
+  jobId: failedJobId,
+  model: "claude-fable-5",
+  providerCommand: path.join(fakeBin, "fake-claude-fail.cmd"),
+  providerAuthMode: "subscription",
+  projectGoal: "Reject an invalid direct edit",
+  currentCodexGoal: "Work on a disjoint file",
+  independenceReason: "The trusted file is independently owned.",
+  relevantFiles: ["src/trusted.txt"],
+  acceptanceCriteria: ["The deterministic check must pass."],
+  executionWorkspace: workspace,
+  isolation: failedPrimary,
+  skipModelReview: true,
+  maxWorkerOutputTokens: 500,
+  timeoutSeconds: 30,
+});
+assert.equal(executeWorker({ taskId: failedTaskId, jobId: failedJobId }), 1);
+assert.equal(fs.readFileSync(path.join(workspace, "src", "trusted.txt"), "utf8").replace(/\r\n/g, "\n"), "base\n");
+const failedHandoff = readJson(path.join(failedDir, "handoff.json"));
+assert.equal(failedHandoff.rollback.rolledBack, true);
+assert.match(failedHandoff.blocker, /Verification failed/);
+assert.equal(String(spawnSync("git", ["-C", workspace, "status", "--porcelain=v1"], { encoding: "utf8" }).stdout).trim(), "");
+
+const boundedRollback = prepareWorkspaceForContract(contract, "task-bounded-rollback", "job-bounded-rollback", profile);
+fs.writeFileSync(path.join(workspace, "src", "trusted.txt"), "owned failure\n");
+fs.writeFileSync(path.join(workspace, "verify-trusted.js"), "unrelated concurrent change\n");
+const boundedResult = rollbackPrimaryWorkspace(boundedRollback, ["src/trusted.txt", "verify-trusted.js"]);
+assert.equal(boundedResult.rolledBack, false);
+assert.deepEqual(boundedResult.outsidePaths, ["verify-trusted.js"]);
+assert.equal(fs.readFileSync(path.join(workspace, "verify-trusted.js"), "utf8"), "unrelated concurrent change\n");
+spawnSync("git", ["-C", workspace, "restore", "src/trusted.txt", "verify-trusted.js"]);
+const threadId = "019f580c-1318-72b0-a77d-19d4a47a936e";
+assert.equal(safeThreadId(threadId), threadId);
+assert.throws(() => safeThreadId("bad"), /valid Codex thread id/);
+const handoff = createRestartHandoff({
+  userAuthorized: true,
+  threadId,
+  workspace,
+  outcome: "Ship the verified fixture",
+  latestUserRequest: "Continue without asking me to restate context",
+  priorities: ["finish acceptance evidence", "preserve the current task"],
+  nextAction: "Run the trusted writer verification",
+  cleanupPluginIds: ["ai-mobile@personal"],
+});
+assert.equal(handoff.oneShot, true);
+assert.equal(fs.existsSync(handoff.file), true);
+const dryRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "restart-codex-handoff.ps1"), "-HandoffFile", handoff.file, "-DryRun"], { encoding: "utf8" });
+assert.equal(dryRun.status, 0, dryRun.stderr);
+const dry = JSON.parse(dryRun.stdout);
+assert.equal(dry.OneShot, true);
+assert.equal(dry.Recurring, false);
+assert.equal(dry.OpensProviderUi, false);
+assert.deepEqual(dry.Arguments.slice(0, 4), ["-C", workspace, "exec", "resume"]);
+assert.deepEqual(dry.CleanupPluginIds, ["ai-mobile@personal"]);
+const restartSource = fs.readFileSync(path.join(__dirname, "restart-codex-handoff.ps1"), "utf8");
+assert.equal(restartSource.includes("The restart handoff was already consumed"), true);
+assert.equal(restartSource.includes('Start-Process codex -ArgumentList @("app", $workspace)'), true);
+assert.equal(restartSource.includes("codex plugin remove"), true);
+
+fs.rmSync(root, { recursive: true, force: true });
+process.stdout.write(JSON.stringify({
+  ok: true,
+  exactTrustedModels: ["claude-fable-5", "claude-sonnet-5"],
+  genericModelsRemainIsolated: true,
+  dirtyOwnershipRejected: true,
+  deterministicVerificationRequired: true,
+  restartHandoffOneShot: true,
+  concurrentCodexOwnershipIsolated: true,
+  rollbackNeverTouchesUnownedPaths: true,
+  trustedPrimaryWorkExecuted: true,
+}, null, 2) + "\n");

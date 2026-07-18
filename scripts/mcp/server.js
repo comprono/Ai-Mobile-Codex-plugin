@@ -10,6 +10,7 @@ const { cleanupAbandonedWorktrees, storageStatus } = require("../core/workspace-
 const { readProfile, writeProfile } = require("../lib/orchestrator-profile");
 const { assertCurrentRuntime, pluginVersion } = require("../lib/version");
 
+const { createRestartHandoff } = require("../core/restart-handoff");
 const PROVIDERS = ["auto", "codex", "claude", "antigravity", "cursor"];
 const TASK_KINDS = ["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"];
 const EVIDENCE_LEVELS = ["activity", "process-health", "focused-test", "integration", "end-to-end", "user-visible"];
@@ -76,6 +77,7 @@ const TOOLS = [
   { name: "cancel-task", description: "Cancel finite workers, release machine leases, and clean editing worktrees for one task or portfolio.", inputSchema: { type: "object", ...TASK_OR_PORTFOLIO, properties: { taskId: { type: "string" }, portfolioId: { type: "string" } } } },
   { name: "resource-inventory", description: "Passive diagnostic capacity inventory. It never opens provider desktop applications.", inputSchema: { type: "object", properties: { refresh: { type: "boolean" }, detail: { enum: ["compact", "full"] }, horizonHours: { type: "number", minimum: 1, maximum: 24 } } } },
   { name: "orchestrator-profile", description: "Read or update private local provider, model, reserve, efficiency, and communication preferences. It starts no workers or applications.", inputSchema: { type: "object", properties: { action: { enum: ["read", "update"] }, patch: { type: "object" } } } },
+  { name: "prepare-restart-handoff", description: "Persist one authorized restart boundary for the exact Codex thread and durable AI Mobile task. Returns a one-shot external launcher that resumes the same task through Codex CLI; it creates no loop and does not restart anything until Codex explicitly runs the returned launcher.", inputSchema: { type: "object", required: ["workspace", "nextAction"], properties: { taskId: { type: "string" }, threadId: { type: "string" }, workspace: { type: "string" }, outcome: { type: "string" }, latestUserRequest: { type: "string" }, nextAction: { type: "string" }, priorities: { type: "array", items: { type: "string" } }, cleanupPluginIds: { type: "array", maxItems: 5, items: { type: "string" } }, userAuthorized: { type: "boolean" } } } },
 ];
 
 function content(value, isError = false) { return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError }; }
@@ -97,6 +99,7 @@ async function invoke(name, args = {}, entrypoint) {
   if (name === "task-summary") return taskSummary(args);
   if (name === "complete-task") return completeTask(args);
   if (name === "cancel-task") return cancelTask(args);
+  if (name === "prepare-restart-handoff") return { runtimeVersion: pluginVersion(), ...createRestartHandoff(args) };
   if (name === "resource-inventory") {
     const value = await inventory({ refresh: args.refresh === true });
     const base = { runtimeVersion: pluginVersion(), generatedAt: value.generatedAt, cached: value.cached, passive: true, horizonHours: Math.max(1, Math.min(24, Number(args.horizonHours || 5))), machine: value.machine || null, providers: compactCapacity(value), leases: resourceLeaseSnapshot(), worktreeStorage: storageStatus() };

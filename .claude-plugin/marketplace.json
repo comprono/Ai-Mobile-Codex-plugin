@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ai-mobile",
+  "description": "AI Mobile plugins from the canonical repository source.",
+  "owner": {
+    "name": "comprono"
+  },
+  "plugins": [
+    {
+      "name": "ai-mobile",
+      "source": "./",
+      "description": "Coordinate local Codex, Claude Code, Antigravity, and optional Cursor capacity as one finite project team.",
+      "category": "development",
+      "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin"
+    }
+  ]
+}

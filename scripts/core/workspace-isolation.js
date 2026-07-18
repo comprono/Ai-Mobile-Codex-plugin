@@ -5,7 +5,9 @@ const path = require("node:path");
 const { commandResult, processAlive, readJson, safeWorkspace, utcNow, writeJson } = require("./utils");
 const { stateRoot } = require("./state-store");
 const { readProfile } = require("../lib/orchestrator-profile");
+const { boundaryAllows } = require("./git-evidence");
 
+const { trustedPrimaryDecision } = require("./trusted-models");
 const TRANSIENT_PATHS = [
   "node_modules", ".pnpm-store", ".yarn", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache",
   "__pycache__", ".venv", "venv", "env", "logs", "log", "coverage", ".coverage", "dist", "build",
@@ -68,6 +70,74 @@ function assertStorageAvailable(profile) {
     throw new Error(`Disk free space (${status.freeMb} MB) is below the configured ${profile.worktreeMinFreeMb} MB worktree floor.`);
   }
   return status;
+}
+
+function preparePrimaryWorkspace(workspaceValue, contract, profileValue) {
+  const workspace = safeWorkspace(workspaceValue);
+  const profile = profileValue || readProfile();
+  const decision = trustedPrimaryDecision(contract, profile);
+  if (!decision.trusted) throw new Error(`Trusted primary workspace denied: ${decision.reason}.`);
+
+  const rootProbe = commandResult("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { timeout: 5000 });
+  const root = String(rootProbe.stdout || "").trim();
+  if (rootProbe.status !== 0 || normalized(root) !== normalized(workspace)) {
+    throw new Error("Trusted primary writing requires the declared workspace to be a Git repository root.");
+  }
+  const ownedPaths = Array.isArray(contract.expectedFiles) ? contract.expectedFiles : [];
+  if (!ownedPaths.length) throw new Error("Trusted primary writing requires explicit expectedFiles boundaries.");
+  const dirty = commandResult("git", ["-C", workspace, "status", "--porcelain=v1", "--untracked-files=all"], { timeout: 10000, maxBuffer: 1024 * 1024 });
+  if (dirty.status !== 0) throw new Error("Unable to verify trusted primary file ownership.");
+  if (String(dirty.stdout || "").trim()) {
+    throw new Error("Trusted primary writing requires a completely clean repository; use an isolated worktree or finish existing owners first.");
+  }
+  const head = commandResult("git", ["-C", workspace, "rev-parse", "HEAD"], { timeout: 5000 });
+  return {
+    mode: "trusted-primary-workspace",
+    executionWorkspace: workspace,
+    sourceWorkspace: workspace,
+    cleanupRequired: false,
+    trustedModel: decision.model,
+    skipModelReview: true,
+    baselineHead: String(head.stdout || "").trim(),
+    ownedPaths,
+    createdAt: utcNow(),
+  };
+}
+
+function prepareWorkspaceForContract(contract, taskId, jobId, profileValue) {
+  const workspace = safeWorkspace(contract.workspace);
+  if (contract.readOnly === true) return { mode: "shared-read-only", executionWorkspace: workspace, cleanupRequired: false };
+  const profile = profileValue || readProfile();
+  const decision = trustedPrimaryDecision(contract, profile);
+  if (decision.trusted) return preparePrimaryWorkspace(workspace, contract, profile);
+  return prepareIsolatedWorkspace(workspace, taskId, jobId, false, profile);
+}
+function rollbackPrimaryWorkspace(isolation = {}, changedPaths = []) {
+  if (isolation.mode !== "trusted-primary-workspace") return { rolledBack: false, reason: "not-trusted-primary" };
+  const workspace = safeWorkspace(isolation.executionWorkspace);
+  const baselineHead = String(isolation.baselineHead || "").trim();
+  if (!baselineHead) return { rolledBack: false, reason: "missing-baseline-head" };
+  const changed = [...new Set((changedPaths || []).map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean))];
+  const ownedPaths = Array.isArray(isolation.ownedPaths) ? isolation.ownedPaths : [];
+  const paths = changed.filter((relative) => boundaryAllows(relative, ownedPaths));
+  const outsidePaths = changed.filter((relative) => !boundaryAllows(relative, ownedPaths));
+  const failures = [];
+  for (const relative of paths) {
+    const full = path.resolve(workspace, relative);
+    if (!normalized(full).startsWith(`${normalized(workspace)}/`)) {
+      failures.push({ path: relative, reason: "outside-workspace" });
+      continue;
+    }
+    const tracked = commandResult("git", ["-C", workspace, "ls-files", "--error-unmatch", "--", relative], { timeout: 5000 });
+    if (tracked.status === 0) {
+      const restore = commandResult("git", ["-C", workspace, "restore", "--source", baselineHead, "--staged", "--worktree", "--", relative], { timeout: 10000 });
+      if (restore.status !== 0) failures.push({ path: relative, reason: String(restore.stderr || restore.stdout).trim().slice(0, 300) });
+    } else {
+      try { fs.rmSync(full, { recursive: true, force: true }); }
+      catch (error) { failures.push({ path: relative, reason: String(error.message).slice(0, 300) }); }
+    }
+  }
+  return { rolledBack: failures.length === 0 && outsidePaths.length === 0, paths, outsidePaths, failures };
 }
 
 function prepareIsolatedWorkspace(workspaceValue, taskId, jobId, readOnly, profileValue) {
@@ -179,7 +249,10 @@ module.exports = {
   cleanupIsolatedWorkspace,
   directoryBytes,
   metadataFile,
+  preparePrimaryWorkspace,
+  prepareWorkspaceForContract,
   prepareIsolatedWorkspace,
+  rollbackPrimaryWorkspace,
   storageStatus,
   worktreeRoot,
 };

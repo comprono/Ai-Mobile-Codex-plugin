@@ -264,7 +264,8 @@ function nextPlanForTask(task, failures = [], completed = []) {
       workGraphNodeId: result.workGraphNodeId || null,
       requirementId: node?.acceptanceRequirementId || null,
       action: String(result.integration?.action || result.handoff?.integrationAction || "").slice(0, 1200),
-      rule: "Inspect this handoff once, run deterministic checks, and record only acceptance-linked evidence.",
+      trustedPrimaryWrite: result.skipModelReview === true,
+      rule: result.skipModelReview === true ? "The exact trusted model already changed the primary workspace and deterministic checks passed. Do not spend another model call reviewing it; record acceptance-linked evidence." : "Inspect this handoff once, run deterministic checks, and record only acceptance-linked evidence.",
     };
   });
   return {
@@ -280,7 +281,7 @@ function nextPlanForTask(task, failures = [], completed = []) {
     transitions,
     integrations,
     instruction: integrations.length
-      ? "Integrate each listed handoff exactly once, run deterministic checks, record acceptance evidence, then continue the returned current Codex goal."
+      ? integrations.every((item) => item.trustedPrimaryWrite) ? "Trusted changes are already in the primary workspace. Do not run another model review; record their deterministic acceptance evidence and continue the returned current Codex goal." : "Integrate each listed handoff exactly once, run deterministic checks, record acceptance evidence, then continue the returned current Codex goal."
       : base.state === "verification"
         ? "Run final deterministic acceptance checks, record sufficient evidence, then request completion."
         : "Start or continue this acceptance-linked current Codex unit now. Dispatch again only for a new disjoint unit with positive total economics.",
@@ -696,6 +697,17 @@ function withMandateNote(reason, unit) {
   return unit.mandateSource ? `${reason} ${unit.mandateSource}` : reason;
 }
 
+function workerTaskContext(task) {
+  return {
+    latestUserRequest: String(task.latestUserRequest || "").slice(0, 6000),
+    constraints: (task.constraints || []).slice(0, 20).map((item) => String(item).slice(0, 600)),
+    unresolvedAcceptance: (task.requirements || []).filter((item) => item.required !== false && item.status !== "passing").slice(0, 12).map((item) => ({
+      id: item.id,
+      description: String(item.description || "").slice(0, 1000),
+      blocker: item.blocker || null,
+    })),
+  };
+}
 function dispatchSingleRound(args, resources, histories, createJob) {
   const task = readTask(args.taskId);
   if (task.state !== "active") throw new Error(`Task ${task.taskId} is ${task.state}; it cannot dispatch another round.`);
@@ -739,6 +751,7 @@ function dispatchSingleRound(args, resources, histories, createJob) {
         roundId: round.roundId,
         workGraphNodeId: unit.workGraphNodeId || null,
         completionEvidence: task.requirements.map((item) => item.description),
+        taskContext: workerTaskContext(task),
         workspace: task.workspace,
         provider: decision.provider,
         providerCommand: selected.command,
@@ -886,6 +899,7 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
         roundId: round.roundId,
         workGraphNodeId: unit.workGraphNodeId || null,
         completionEvidence: task.requirements.map((item) => item.description),
+        taskContext: workerTaskContext(task),
         workspace: project.workspace,
         provider: decision.provider,
         providerCommand: selected.command,

@@ -7,7 +7,7 @@ description: Use when the user explicitly invokes @ai-mobile for nontrivial work
 
 ## Purpose
 
-AI Mobile is a local AI resource orchestrator. It helps current Codex finish one outcome or a portfolio of independent project outcomes by using authenticated local AI CLIs when delegation reduces total work or improves verified quality.
+AI Mobile is a local AI resource orchestrator installed from one repository into Codex and Claude Code. It helps finish one outcome or a portfolio of independent project outcomes by using authenticated local AI CLIs when delegation reduces total work or improves verified quality. The durable AI Mobile task, not either host's transient chat state, is the shared source of truth.
 
 It is not a manager-only chat, scheduler, control room, heartbeat, Goal, automation, background supervisor, or reason for Codex to stop working.
 
@@ -59,13 +59,15 @@ The `execution` object is a binding same-turn contract for Codex, not a suggesti
 - After bounded reconnaissance, call `dispatch-round` when a disjoint economical lane exists. If no worker is assigned, continue directly and report the rejection reason once.
 - Report the current Codex model and each external provider as selected, idle, or unavailable with the routing reason. Availability alone is not a resource plan.
 - Continue through finite implementation, verification, evidence recording, and the next acceptance-linked slice until a listed stop condition is actually reached.
-- The plugin does not create a background loop. Continuity means Codex keeps acting within the current turn and subsequent explicit continuations, with durable task state between them.
+- The plugin does not create a background loop. Within a loaded session, Codex continues finite acceptance-linked work until a true stop condition.
+- If a plugin upgrade requires restarting Codex while authorized work remains, call `prepare-restart-handoff` with the exact thread, workspace, task, priorities, evidence-backed next action, and existing authorization. Run its one-shot launcher only as the final action of the turn. It resumes the same thread through `codex exec resume`; never ask the user to restate context or create a replacement task.
+- Claude Code loads this same skill and MCP runtime. When it continues an existing task, use the durable task id and evidence rather than inventing a separate Claude plan; Codex CLI use remains a separately reported worker.
 
 ## Resource Judgment
 
 - **Current Codex:** owns user intent, ambiguous reasoning, architecture, critical-path implementation, integration, risky actions, and final verification. AI Mobile never changes the model selected for the current Codex task.
 - **Codex CLI worker:** use only when shared Codex capacity is measured above the private reserve and a separate high-value unit justifies consuming the same pool.
-- **Claude Code:** bounded implementation, refactoring, debugging, architecture, and repository reasoning. Prefer the user's allowed capable model family; premium or model-specific capacity is used only when difficulty or a near reset justifies it.
+- **Claude Code:** bounded implementation, refactoring, debugging, architecture, and repository reasoning. Prefer the user's allowed capable model family; premium or model-specific capacity is used only when difficulty or a near reset justifies it. Exact `claude-fable-5` and `claude-sonnet-5` may use the trusted-primary path only when the private profile enables them.
 - **Antigravity CLI:** economical browser-oriented analysis, repository scans, research, drafting, and validation. It requires explicit lane authorization or saved read-only consent.
 - **Cursor:** only a real authenticated headless `cursor-agent`; a desktop launcher is not a worker.
 - **No-model tools:** tests, linters, validators, diffs, screenshots, and runtime evidence. Prefer them for verification.
@@ -80,19 +82,20 @@ For a portfolio, discover machine and provider capacity once at start. Allocate 
 - Preserve the private Codex reserve, normally 15 percent, while using capacity above it productively.
 - Start zero to the configured machine-wide external-worker limit, normally two. Prefer one ready unit per project before granting a second unit to the same project. Zero is correct when work overlaps, is too small, is unsafe, or would cost more to hand off and review.
 - Count prompt, worker output, waiting, verification, retry, and integration cost. A cheap worker whose result needs expensive re-analysis is not a saving.
-- Never send the parent transcript. Workers receive a compact outcome, owned paths, unit acceptance, and integration action.
+- Do not dump the parent transcript. Workers receive a compact but complete task capsule: latest user request, outcome, constraints, unresolved acceptance, owned paths, unit acceptance, and integration action. Omit unrelated conversation.
 - Never create worker review chains. Deterministic checks come first; another premium model reviews only unresolved high-risk evidence.
 - Retry a transient provider failure at most once after a fresh capacity check. Semantic failures require a changed plan, not another dispatch.
 
 ## Isolation And Safety
 
 - Read-only workers may inspect the declared shared workspace.
-- Writer workers operate in detached Git worktrees that share repository history and return a stored patch; they never edit the primary worktree directly. Read-only workers create no worktree.
+- Writer workers normally operate in detached Git worktrees that share repository history and return a stored patch. Read-only workers create no worktree.
+- Exact Fable 5 and Sonnet 5 workers enabled by `trustedPrimaryWriteModels` may edit the primary Git workspace directly only when their explicit file boundaries are clean and disjoint and deterministic verification commands are present. Confirm the provider receipt matches the exact model. After successful checks, do not spend Luna, another Codex model, or another Claude model re-reviewing that work. Record acceptance evidence and continue. Generic aliases, older versions, dirty paths, and missing checks stay isolated.
 - Worktrees are bounded by configured disk quota, minimum free space, and maximum age. They exclude dependencies, logs, caches, virtual environments, and build outputs, and are cleaned after collection, cancellation, crash/startup recovery, or expiry.
 - If safe writer isolation is unavailable, keep the edit in current Codex or use a read-only adviser.
 - Preserve user and concurrent changes. One owner per file boundary and question.
 - Credentials, login, CAPTCHA, messages, applications, purchases, deploys, destructive operations, and other external side effects remain with current Codex under the user's applicable authorization.
-- AI Mobile never auto-opens Codex, Claude, Antigravity, Cursor, or ChatGPT desktop UI. A CLI limitation returns `ui-required`; opening UI is a separate explicit user decision.
+- Normal startup, inventory, and dispatch never auto-open Codex, Claude, Antigravity, Cursor, or ChatGPT desktop UI. A one-shot Codex restart-resume may reopen Codex only under `allowCodexRestartHandoff` or explicit call authorization. Other UI fallback remains a separate explicit user decision.
 - Classic ChatGPT is not a worker until it exposes a supported callable API, CLI, or MCP surface.
 
 ## Reporting
@@ -121,5 +124,6 @@ Do not send a final response while `execution.mustStartNow` is true. `Next` is n
 - `cancel-task`: stop only task-owned workers;
 - `resource-inventory`: explicit passive capacity diagnostic;
 - `orchestrator-profile`: private local preferences.
+- `prepare-restart-handoff`: durable one-shot Codex restart and exact-thread resume contract.
 
-If a tool reports `STALE AI MOBILE TASK`, stop using AI Mobile in that Codex task. Restart Codex after installation and begin a fresh task so the skill and MCP schema load together. Do not reconstruct removed v0.x commands or revive a manager loop.
+If a tool reports `STALE AI MOBILE TASK`, stop calling the stale MCP schema. When restart handoff is authorized, persist the exact continuation and run its one-shot launcher as the final action instead of asking the user to restart or repeat the task. Without authorization, report the single restart decision precisely. Do not reconstruct removed commands or revive a manager loop.

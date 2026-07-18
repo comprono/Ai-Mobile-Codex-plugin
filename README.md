@@ -2,7 +2,7 @@
 
 Created by [comprono](https://github.com/comprono).
 
-AI Mobile is a community Codex MCP plugin for Windows that coordinates the current Codex task with authenticated local Codex CLI, Claude Code, Antigravity CLI, and optional headless Cursor workers. One request can cover one project or a portfolio of separate projects while each project keeps independent outcomes, evidence, patches, and completion state.
+AI Mobile is a community Codex and Claude Code MCP plugin for Windows that coordinates the active project task with authenticated local Codex CLI, Claude Code, Antigravity CLI, and optional headless Cursor workers. Both hosts install from this repository and use the same versioned skill, MCP runtime, durable task state, and acceptance evidence.
 
 The objective is practical: finish more verified work without spending more tokens, time, RAM, or review effort on orchestration than the delegated work saves.
 
@@ -14,8 +14,8 @@ The objective is practical: finish more verified work without spending more toke
 4. `dispatch-round` assigns only dependency-ready, disjoint, economically useful work to available headless providers.
 5. Machine-wide leases protect provider slots, quota pools, RAM, file ownership, Codex reserve, and worktree storage across every task and project.
 6. Current Codex continues working while external workers run. No manager loop or polling feed is created.
-7. `collect-round` returns each compact handoff once, cleans editing worktrees, and supplies an owned recovery transition for rejection or failure.
-8. Current Codex integrates accepted work, runs deterministic checks, and records project-specific evidence.
+7. `collect-round` returns each compact handoff once, cleans isolated editing worktrees, and supplies an owned recovery transition for rejection or failure.
+8. Current Codex integrates isolated work. Exact Fable 5 or Sonnet 5 workers enabled by private policy may instead change clean bounded primary files directly; their deterministic checks replace a redundant lower-tier model review.
 9. `complete-task` refuses completion until every required project has its own sufficient evidence.
 
 AI Mobile starts no desktop application, Goal, automation, heartbeat, manager process, schedule, or recurring status loop.
@@ -67,7 +67,9 @@ Routing considers capability fit, dependency readiness, quota pools, reset horiz
 
 ## Worker Isolation
 
-Read-only workers inspect the declared shared repository and create no worktree. Editing workers use detached Git worktrees that share repository history and never modify the primary worktree directly.
+Read-only workers inspect the declared shared repository and create no worktree. Editing workers normally use detached Git worktrees that share repository history and never modify the primary worktree directly.
+
+The only direct-write exception is exact `claude-fable-5` or `claude-sonnet-5`, enabled in the user's private `trustedPrimaryWriteModels` profile. The owned paths must be clean and explicit, deterministic verification commands are mandatory, and the provider receipt must confirm the exact model. Generic `fable`, generic `sonnet`, older Sonnet versions, other providers, dirty paths, and unverified work remain isolated.
 
 Worktree controls are private local profile settings:
 
@@ -93,6 +95,7 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 | `cancel-task` | Stop owned workers, release leases, and clean owned worktrees. |
 | `resource-inventory` | Passively inspect current machine, provider, quota, lease, and storage evidence. |
 | `orchestrator-profile` | Read or update private local routing and resource preferences. |
+| `prepare-restart-handoff` | Persist one authorized thread/task handoff for a required Codex restart and return its one-shot resume launcher. |
 
 ## Token Efficiency
 
@@ -102,8 +105,8 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 - Workers receive compact outcome, ownership, acceptance, and integration contracts, never the parent transcript.
 - Delegation accounts for prompt, worker output, wait, verification, retry, and integration cost.
 - Small or overlapping work is rejected from delegation.
-- Deterministic checks precede qualitative model review.
-- No worker review chain or premium-model reassurance loop is created.
+- Deterministic checks precede qualitative model review; verified trusted Fable 5 and Sonnet 5 changes receive no second model review.
+- No worker review chain, lower-tier re-evaluation, or premium-model reassurance loop is created.
 - A failed worker is retried only after a classified transient failure and changed capacity evidence.
 - Worker activity, process health, elapsed time, and token usage are not reported as outcome progress.
 
@@ -113,20 +116,26 @@ The default communication mode is `smart-compact`: answer first, preserve exact 
 
 Requirements:
 
-- Windows and Codex plugin support;
+- Windows with Codex and/or Claude Code plugin support;
 - Node.js on `PATH`;
 - optional authenticated `codex`, `claude`, `agy`, and `cursor-agent` CLIs.
 
-Clone and verify:
+Clone once and install the same checkout into both hosts:
 
 ```powershell
 git clone https://github.com/comprono/Ai-Mobile-Codex-plugin.git "$env:USERPROFILE\plugins\ai-mobile"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" setup
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\install-ai-mobile.ps1"
 ```
 
-Install the repository as a personal Codex plugin, then restart Codex and start a fresh task. Existing Codex tasks keep the skill and MCP schema loaded when they started and cannot be upgraded in place.
+The repository is both an AI Mobile Codex marketplace and an AI Mobile Claude Code marketplace. A Git update followed by the same installer updates both host caches from this one source; there is no copied Claude orchestration implementation.
 
-The plugin does not launch provider apps during installation or Codex startup. A visible UI fallback is a separate explicit user decision after a verified CLI limitation.
+Existing host sessions keep the schema they loaded at startup. When a required Codex upgrade occurs during an authorized long task, `prepare-restart-handoff` writes the exact thread, workspace, task, priorities, evidence, and next action. Codex may run the returned one-shot launcher as its final action; the helper closes only the Codex package, resumes that thread headlessly with `codex exec resume`, and reopens Codex when the resumed turn ends.
+
+Normal installation, startup, inventory, and dispatch never launch a provider desktop app. Restart-resume is separately authorized in the private profile and only runs when Codex invokes the one-shot launcher.
+
+Private standing preferences for the requested behavior:
+
+```json
 
 ## CLI Diagnostics
 
@@ -165,6 +174,8 @@ node .\scripts\economic-regression.js
 node .\scripts\worker-isolation-regression.js
 node .\scripts\portfolio-e2e.js
 node .\scripts\global-resource-regression.js
+node .\scripts\trusted-primary-regression.js
+node .\scripts\shared-host-install-regression.js
 node .\scripts\storage-lifecycle-regression.js
 node .\scripts\reliability-e2e.js
 # Manual authenticated release canary; consumes one small provider request
@@ -174,8 +185,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\antigravity.ps1 privacy
 git diff --check
 pipx run plugin-scanner lint .
 pipx run plugin-scanner verify .
+pipx run plugin-scanner scan . --format json
 ```
 
+Scanner 2.0.1114 scores the repository `100/100` with zero findings. Its standalone `verify` command intentionally classifies every local stdio MCP launch as `safety-skip` and exits nonzero; use the executed `self-test` and `reliability-e2e` gates as the manual runtime evidence alongside that scanner result.
 See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for decision rules and [Implementation Report](docs/IMPLEMENTATION_REPORT.md) for the v1 architecture and falsifiable gates.
 
 ## License
