@@ -186,6 +186,8 @@ const handoff = createRestartHandoff({
   cleanupPluginIds: ["ai-mobile@personal"],
 });
 assert.equal(handoff.oneShot, true);
+assert.equal(handoff.restartState, "prepared");
+assert.equal(handoff.restartLog.length, 1);
 assert.equal(fs.existsSync(handoff.file), true);
 const dryRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "restart-codex-handoff.ps1"), "-HandoffFile", handoff.file, "-DryRun"], { encoding: "utf8" });
 assert.equal(dryRun.status, 0, dryRun.stderr);
@@ -197,7 +199,10 @@ assert.deepEqual(dry.Arguments.slice(0, 4), ["-C", workspace, "exec", "resume"])
 assert.deepEqual(dry.CleanupPluginIds, ["ai-mobile@personal"]);
 const restartSource = fs.readFileSync(path.join(__dirname, "restart-codex-handoff.ps1"), "utf8");
 assert.equal(restartSource.includes("The restart handoff was already consumed"), true);
-assert.equal(restartSource.includes('Start-Process codex -ArgumentList @("app", $workspace)'), true);
+assert.equal(restartSource.includes("$childArgumentLine"), true);
+assert.equal(restartSource.includes("$appArgumentLine"), true);
+assert.equal(restartSource.includes("Save-RestartState -State \"failed\""), true);
+assert.equal(restartSource.includes("No running OpenAI.Codex desktop process was found"), true);
 assert.equal(restartSource.includes("codex plugin remove"), true);
 
 fs.rmSync(root, { recursive: true, force: true });

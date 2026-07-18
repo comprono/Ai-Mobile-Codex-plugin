@@ -131,6 +131,8 @@ The repository is both an AI Mobile Codex marketplace and an AI Mobile Claude Co
 
 Existing host sessions keep the schema they loaded at startup. When a required Codex upgrade occurs during an authorized long task, `prepare-restart-handoff` writes the exact thread, workspace, task, priorities, evidence, and next action. Codex may run the returned one-shot launcher as its final action; the helper closes only the Codex package, resumes that thread headlessly with `codex exec resume`, and reopens Codex when the resumed turn ends.
 
+Every restart handoff records its current phase, helper process id, bounded transition log, and any failure in the handoff JSON. Paths containing spaces are quoted end to end. If the exact Codex desktop package cannot be identified, the helper fails closed without stopping another ChatGPT application.
+
 Normal installation, startup, inventory, and dispatch never launch a provider desktop app. Restart-resume is separately authorized in the private profile and only runs when Codex invokes the one-shot launcher.
 
 Private standing preferences for the requested behavior:

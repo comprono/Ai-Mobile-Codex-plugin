@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.4 - 2026-07-18
+
+- Fixed one-shot restart launch failures when the plugin, workspace, or handoff path contains spaces.
+- Added durable restart phases, process identifiers, concise error details, and a bounded transition log to every handoff.
+- Made restart execution fail closed when the installed Codex desktop process cannot be identified exactly.
+- Made workspace reopening path-safe and retained exact-thread, one-shot resume behavior.
+- Added regression and harmless hidden-child launch coverage for the real spaced paths used on Windows.
+
 ## 1.1.3 - 2026-07-18
 
 - Added exact Fable 5 and Sonnet 5 trusted-primary writing through a private standing policy, with clean Git ownership and mandatory deterministic verification.
