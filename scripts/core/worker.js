@@ -39,6 +39,8 @@ function promptFor(contract) {
     contract.integrationAction ? `Coordinator integration action: ${contract.integrationAction}` : "",
     contract.skipModelReview ? "You are trusted to edit the bounded primary workspace directly. Finish the unit and run its deterministic checks; do not request another model review." : "",
     "Do not delegate, start another agent, create recurring work, interact with the visible console, or broaden scope.",
+    "Read no more than 24 relevant files; stop with one exact blocker if the bounded scope is insufficient.",
+    "Run only the deterministic verification commands listed in this contract. Never launch a repository-wide test suite unless that exact command is listed.",
     "Do not claim the project outcome is complete. Return only your unit result, evidence, checks, changed files, and one blocker if present.",
     communicationContract(contract.communicationMode),
     `Hard summary budget: ${contract.maxWorkerOutputTokens || 1000} output tokens, approximately ${maxWords} words. Code changes belong in files, not the summary.`,
@@ -77,9 +79,18 @@ function executeWorker(payload) {
     fs.writeFileSync(path.join(dir, "worker.diff"), patch, "utf8");
 
     const usage = { provider: contract.provider, ...response.usage, capturedAt: utcNow(), outputBudgetTokens: contract.maxWorkerOutputTokens };
+    const inputTokens = Number(usage.inputTokens ?? usage.input_tokens);
+    const cachedInputTokens = Number(usage.cachedInputTokens ?? usage.cached_input_tokens);
     const outputTokens = Number(usage.outputTokens ?? usage.output_tokens);
     const equivalentUsd = Number(usage.equivalentUsd ?? usage.total_cost_usd);
+    const effectiveInputTokens = Number.isFinite(inputTokens) ? Math.max(0, inputTokens - (Number.isFinite(cachedInputTokens) ? cachedInputTokens : 0)) : null;
+    const effectiveTotalTokens = Number.isFinite(effectiveInputTokens) && Number.isFinite(outputTokens) ? effectiveInputTokens + outputTokens : null;
+    const totalBudgetTokens = Math.max(2000, Math.min(50000, Number(contract.estimatedDirectTokens || 12000)));
+    usage.effectiveInputTokens = effectiveInputTokens;
+    usage.effectiveTotalTokens = effectiveTotalTokens;
+    usage.totalBudgetTokens = totalBudgetTokens;
     usage.budgetExceeded = (Number.isFinite(outputTokens) && outputTokens > contract.maxWorkerOutputTokens)
+      || (Number.isFinite(effectiveTotalTokens) && effectiveTotalTokens > totalBudgetTokens)
       || (contract.providerAuthMode === "api-key" && Number.isFinite(equivalentUsd) && equivalentUsd > contract.maxApiBudgetUsd);
     writeJson(path.join(dir, "usage.json"), usage);
 
@@ -91,6 +102,9 @@ function executeWorker(payload) {
     }
     if (outside.length) blocker = `Writer boundary violation: ${outside.join(", ")}`;
     if (mutationViolation) blocker = `Read-only worker modified files: ${changed.join(", ")}`;
+    if (!blocker && response.ok && !contract.readOnly && changed.length === 0) {
+      blocker = "no-patch-produced: the editing worker changed no files; deterministic verification was skipped.";
+    }
     let verification = null;
     if (!blocker && response.ok) {
       verification = runVerification(executionWorkspace, dir, contract.verificationCommands);

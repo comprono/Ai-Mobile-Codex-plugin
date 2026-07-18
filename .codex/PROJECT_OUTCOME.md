@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-18T20:49:16Z
+Updated: 2026-07-18T21:57:37Z
 
 ## North Star
 
@@ -43,7 +43,7 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ### Non-goals
 
-- Managing Job Vibhu directly from this stale setup task.
+- Restarting or reopening Codex during normal project execution; restart is only an explicit plugin-upgrade boundary.
 - Guaranteeing an interview or bypassing truthful-profile, duplicate, authentication, CAPTCHA, document, suitability, or external-receipt gates.
 - Consuming quota merely because it is available.
 - Treating the classic ChatGPT desktop app as a worker without a supported callable interface.
@@ -56,6 +56,7 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 - Portfolio, provider/quota lease, storage lifecycle, trusted-primary, and no-auto-UI behavior remain covered by existing regression suites.
 - A prior Luna same-task follow-up was visible, but it ran against stale AI Mobile 1.1.8 after 1.1.10 had been installed. That disproved the previous restart claim and is not accepted as continuity evidence.
 - Release commit df4f0f6 is on origin/main; the complete 18-suite and scanner matrix passed, and both Codex and Claude now report AI Mobile 1.2.1 enabled.
+- The 1.2.2 candidate passed 18 local suites. Its cycle slices at 210 seconds, Codex writers retain workspace-write isolation with noninteractive approval, no-patch workers skip verification, and generated work without exact files and checks remains read-only.
 
 ## Context Pointers
 
@@ -85,18 +86,18 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Failure Memory
 
-- Source edits are not active in an already loaded task.
+- Source edits are not active in an already loaded task; model selection before fresh-runtime verification can place plugin repair on a stale lightweight console.
 - App reopening is not proof that a visible continuation turn was submitted or that the MCP runtime refreshed.
-- Model selection before runtime verification can place plugin repair on an incapable or stale lightweight console.
-- Worker activity and repeated status checks cannot substitute for acceptance evidence.
-- Unbounded retries, backups, worktrees, or background processes must fail closed under explicit resource and no-progress limits.
+- A synchronous 15-minute cycle cannot cross the Codex MCP host 300-second deadline. Each call must return within 210 seconds and resume only the same finite worker from a continuationRequired receipt.
+- A root-wide writer contract plus inferred full-suite verification can consume large quota without a patch. Generated work without explicit files and checks is read-only, and no-patch writers stop before verification.
+- Activity is not acceptance progress. Retries, backups, worktrees, and background processes must remain bounded by explicit resource and no-progress limits.
 
 ## Current Slice
 
 - Acceptance ID: RESTART_CONTINUITY
-- Goal: complete the exact validate/install/close/app-server-verify/same-task-Luna-execution/reopen sequence without a duplicate task, Classic ChatGPT launch, stale terminal state, or Luna-side plugin repair.
+- Goal: publish and install 1.2.2 without restarting this active task, while preserving a future explicit-upgrade handoff that reopens Codex before any long verification and never affects normal project execution.
 - Required proof: the corrected version is installed; a Sol verification turn in this exact persisted task observes that runtime; only then a GPT-5.6 Luna-low turn reconciles Job Vibhu and invokes a bounded deterministic cycle in which a real provider starts, terminates, is collected, and either integrates verified work or returns a correctly classified actionable blocker before OpenAI.Codex reopens this exact task.
 
 ## Next
 
-Perform the exact OpenAI.Codex same-task restart, prove runtimeVersion 1.2.1 before Luna-low starts, and complete one bounded Job Vibhu worker cycle through terminal collection.
+Install the verified 1.2.2 package without restarting this active Codex task. Then use the currently loaded AI Mobile runtime only for one explicit, bounded Job Vibhu work unit. Prove restart continuity on a later explicitly authorized plugin upgrade; never restart during normal project work.

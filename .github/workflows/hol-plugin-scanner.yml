@@ -23,6 +23,9 @@ jobs:
       - name: Same-turn continuation regression
         run: node scripts/continuation-regression.js
 
+      - name: Bounded task-cycle regression
+        run: node scripts/task-cycle-regression.js
+
       - name: Fable routing regression
         run: node scripts/fable-routing-regression.js
 

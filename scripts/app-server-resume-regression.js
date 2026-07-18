@@ -96,7 +96,7 @@ async function main() {
     consumedAt: new Date().toISOString(),
     threadId: "01234567-89ab-cdef-0123-456789abcdef",
     workspace: process.cwd(),
-    expectedRuntimeVersion: "1.2.1",
+    expectedRuntimeVersion: "1.2.2",
     verificationModel: "gpt-5.6-sol",
     verificationEffort: "ultra",
     resumeModel: "gpt-5.6-luna",
@@ -106,11 +106,11 @@ async function main() {
 
   const observed = {};
   const result = await runContinuation(handoff, {
-    spawnAppServer: fakeAppServer("1.2.1", observed),
+    spawnAppServer: fakeAppServer("1.2.2", observed),
     verificationTimeoutMs: 1000,
     continuationTimeoutMs: 1000,
   });
-  assert.equal(result.runtimeVersion, "1.2.1");
+  assert.equal(result.runtimeVersion, "1.2.2");
   assert.equal(result.resumeModel, "gpt-5.6-luna");
   assert.equal(observed.args.join(" "), "app-server --stdio");
   assert.equal(observed.resume.threadId, handoff.threadId);

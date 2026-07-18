@@ -29,9 +29,10 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
   if (!taskId) throw new Error("run-task-cycle requires taskId.");
   const maxRounds = boundedInteger(args.maxRounds, 3, 1, 5);
   const maxMinutes = boundedInteger(args.maxMinutes, 15, 1, 30);
+  const sliceSeconds = boundedInteger(args.sliceSeconds, 210, 1, 240);
   const horizonHours = boundedInteger(args.horizonHours, 5, 1, 24);
   const noProgressLimit = boundedInteger(args.noProgressLimit, 2, 1, 3);
-  const deadline = Date.now() + maxMinutes * 60 * 1000;
+  const deadline = Date.now() + Math.min(maxMinutes * 60, sliceSeconds) * 1000;
   const inventoryFn = dependencies.inventory || inventory;
   const historiesFn = dependencies.providerHistory || providerHistory;
   const createJobFn = dependencies.createJob || ((contract) => createJob(contract, entrypoint));
@@ -61,12 +62,13 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
       const collected = collectRound({
         taskId,
         roundId: latest.roundId,
-        waitSeconds: latest.state === "running" ? Math.min(300, remainingSeconds) : 0,
+        waitSeconds: latest.state === "running" ? Math.min(210, remainingSeconds) : 0,
         detail: "full",
       });
       if (collected.state === "running") {
         transitions.push({ type: "waiting", roundId: latest.roundId, state: "running" });
-        continue;
+        stopReason = "continuation-required";
+        break;
       }
 
       const terminalFailures = (collected.results || []).filter((row) => row.terminal && row.state !== "completed");
@@ -192,11 +194,15 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
   }
 
   const summary = taskSummary({ taskId });
+  const continuationRequired = summary.latestRound?.state === "running";
+  if (continuationRequired && stopReason === "time-limit") stopReason = "continuation-required";
   return {
     taskId,
     state: summary.state,
     workState: summary.workState,
     stopReason,
+    continuationRequired,
+    sliceSeconds,
     startedRounds: roundsStarted,
     progress: summary.progress,
     transitions,

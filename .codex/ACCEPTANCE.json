@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-18T20:49:16Z",
+  "updated_utc": "2026-07-18T21:58:58Z",
   "project_state": "active",
   "current_slice_requirement_id": "RESTART_CONTINUITY",
   "requirements": [
@@ -54,7 +54,7 @@
       "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
         "Prove a deterministic app-server regression performs initialize, thread/resume, a capable-model verification turn, and only after exact runtimeVersion evidence a Luna-low turn in the same thread; stale evidence must stop before Luna.",
-        "Commit, push, and install AI Mobile 1.2.1, then prove codex plugin list reports ai-mobile@ai-mobile 1.2.1.",
+        "Commit, push, and install AI Mobile 1.2.2, then prove codex plugin list reports ai-mobile@ai-mobile 1.2.2.",
         "Close only OpenAI.Codex and run the one-shot handoff against this exact task with Sol Ultra verification and GPT-5.6 Luna low continuation; never launch Classic ChatGPT, codex exec resume, a duplicate task, Goal, automation, manager loop, or UI automation.",
         "On the fresh Luna turn, reconcile the existing Job Vibhu durable task once and invoke one bounded deterministic cycle; Luna must not inspect or patch the plugin or project.",
         "Prove a real installed provider accepts its structured schema, reaches a terminal state without another user message, is collected once, and either integrates deterministic evidence or emits the correct failure class and recovery transition."
@@ -278,24 +278,39 @@
       "blocker": null
     },
     {
-      "id": "PUBLIC_RELEASE",
-      "description": "Version 1.2.1 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
+      "id": "BOUNDED_EXECUTION",
+      "description": "Normal project execution never launches or restarts desktop applications; each MCP cycle call stays below the host deadline, sandboxed Codex writers can edit without interactive approval, generated root-wide writers fail closed, and no-patch workers skip verification.",
       "required": true,
       "status": "passing",
-      "minimum_evidence_level": "end-to-end",
+      "minimum_evidence_level": "integration",
       "acceptance_steps": [
-        "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
-        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.2.1 runtime.",
-        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.2.1."
+        "Prove run-task-cycle returns within a 240-second maximum slice and emits continuationRequired for a still-running finite worker.",
+        "Prove Codex writer arguments retain workspace-write isolation with noninteractive approval and no dangerous sandbox bypass.",
+        "Prove a successful provider response with no changed files fails before any verification command runs.",
+        "Prove normal lifecycle and task execution open no desktop application and generated work without explicit files and checks remains read-only."
       ],
       "evidence": [
         {
-          "level": "end-to-end",
-          "ref": "commit df4f0f6; git push origin main; complete 18-suite release matrix; strict scanner full scan; scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list",
-          "summary": "AI Mobile 1.2.1 passed all 18 regression and end-to-end suites, strict Codex and Claude validation, privacy checks, and the scanner full scan at score 100 / grade A with policy_pass and verify_pass true and zero findings. Commit df4f0f6 is pushed to origin/main, and both Codex and Claude independently report ai-mobile@ai-mobile 1.2.1 enabled after installation.",
-          "verified_utc": "2026-07-18T20:49:16Z"
+          "level": "integration",
+          "ref": "node scripts/task-cycle-regression.js; node scripts/self-test.js; node scripts/reliability-e2e.js; 18-suite release matrix",
+          "summary": "The cycle uses 210-second MCP slices, Codex writers use -a never inside workspace-write isolation, no-patch verification is skipped, auto-generated unbounded writers remain read-only, and normal lifecycle tests start no desktop application.",
+          "verified_utc": "2026-07-18T21:58:58Z"
         }
       ],
+      "blocker": null
+    },
+    {
+      "id": "PUBLIC_RELEASE",
+      "description": "Version 1.2.2 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
+      "required": true,
+      "status": "failing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
+        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.2.2 runtime.",
+        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.2.2."
+      ],
+      "evidence": [],
       "blocker": null
     },
     {

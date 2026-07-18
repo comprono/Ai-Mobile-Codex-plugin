@@ -259,10 +259,11 @@ function recommendedWorkUnit(task) {
   if (!["ready", "awaiting-evidence", "verification", "blocked"].includes(plan.state)) return null;
   const node = (task.workGraph || []).find((row) => row.id === plan.workGraphNodeId) || {};
   const declaredVerification = node.verificationCommands || [];
-  const verificationCommands = declaredVerification.length ? declaredVerification : inferredVerificationCommands(task.workspace);
-  const readOnly = node.readOnly === true || verificationCommands.length === 0;
   const relevantFiles = cleanStrings(node.relevantFiles, 80, 500);
   const expectedFiles = cleanStrings(node.expectedFiles, 80, 500);
+  const boundedWriter = expectedFiles.length > 0 && declaredVerification.length > 0;
+  const readOnly = node.readOnly === true || !boundedWriter;
+  const verificationCommands = readOnly ? [] : declaredVerification;
   const goal = plan.state === "blocked" && String(blocker?.recoveryAction || "").trim()
     ? String(blocker.recoveryAction).trim().slice(0, 5000)
     : plan.goal;
@@ -271,14 +272,15 @@ function recommendedWorkUnit(task) {
     workGraphNodeId: plan.workGraphNodeId || undefined,
     independenceReason: "The visible project console owns no implementation files; this is the single dependency-ready work-plane unit.",
     relevantFiles: relevantFiles.length ? relevantFiles : ["."],
-    expectedFiles: readOnly ? [] : (expectedFiles.length ? expectedFiles : ["."]),
+    expectedFiles: readOnly ? [] : expectedFiles,
     acceptanceCriteria: node.acceptanceCriteria?.length ? node.acceptanceCriteria : plan.acceptanceCriteria,
     verificationCommands,
     taskKind: node.taskKind || (readOnly ? "repository-scan" : inferTaskKind(goal)),
-    complexity: node.complexity || "large",
+    complexity: node.complexity || (readOnly ? "medium" : "large"),
     readOnly,
-    estimatedDirectTokens: 12000,
-    maxWorkerOutputTokens: 1600,
+    timeoutSeconds: readOnly ? 240 : 600,
+    estimatedDirectTokens: readOnly ? 4000 : 12000,
+    maxWorkerOutputTokens: readOnly ? 800 : 1600,
     workPlaneRequired: true,
   };
 }

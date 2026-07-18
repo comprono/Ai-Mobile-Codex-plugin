@@ -24,6 +24,7 @@ async function run() {
     const { runVerification } = require("./core/verification");
     const { communicationContract, promptFor } = require("./core/worker");
     const { normalizeProfile } = require("./lib/orchestrator-profile");
+    const { buildCodexExecArgs } = require("./lib/codex-cli");
     const { buildAntigravityArgs, buildClaudeArgs, classifyFailure } = require("./providers");
 
     const resources = { generatedAt: new Date().toISOString(), cached: false, providers: {
@@ -80,6 +81,10 @@ async function run() {
     assert.deepEqual(profile.trustedPrimaryWriteModels, []);
     assert.equal(profile.allowCodexRestartHandoff, false);
 
+    const codexWriterArgs = buildCodexExecArgs({ workspace, model: "gpt-fixture", effort: "medium", readOnly: false });
+    assert.deepEqual(codexWriterArgs.slice(0, 3), ["-a", "never", "exec"]);
+    assert.equal(codexWriterArgs[codexWriterArgs.indexOf("--sandbox") + 1], "workspace-write");
+
     const antigravityArgs = buildAntigravityArgs({ workspace, readOnly: true, timeoutSeconds: 60 }, "inspect");
     assert.equal(antigravityArgs.includes("--dangerously-skip-permissions"), false);
     assert.equal(antigravityArgs.includes("--sandbox"), true);
@@ -103,7 +108,7 @@ async function run() {
       assert.equal(serverSource.includes(forbidden), false);
       assert.equal(skillSource.includes(forbidden), false);
     }
-    return { ok: true, assertions: 48, durationMs: Date.now() - started, tools: TOOLS.length };
+    return { ok: true, assertions: 50, durationMs: Date.now() - started, tools: TOOLS.length };
   } finally {
     if (savedDataRoot === undefined) delete process.env.AI_MOBILE_DATA_ROOT; else process.env.AI_MOBILE_DATA_ROOT = savedDataRoot;
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocalAppData;

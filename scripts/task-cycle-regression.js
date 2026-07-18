@@ -24,6 +24,9 @@ fs.writeFileSync(path.join(fakeBin, "fake-codex-failover.cmd"), "@echo off\r\n\"
 fs.writeFileSync(path.join(fakeBin, "fake-claude-fail.cmd"), '@echo off\r\necho {"is_error":true,"result":"provider-process-failed fixture"}\r\nexit /b 1\r\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-claude-read.js"), 'process.stdout.write(JSON.stringify({is_error:false,structured_output:{outcome:"Found one exact bounded fact.",evidence:["verify.js exists"],checks:["node verify.js"],blocker:""},usage:{input_tokens:30,output_tokens:12}}));\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-claude-read.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-claude-read.js\" %*\r\n", "utf8");
+fs.writeFileSync(path.join(workspace, "verify-noop.js"), 'require("node:fs").writeFileSync("verification-ran.txt","BAD\\n");\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-noop.js"), 'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"No changes were needed."}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:50,output_tokens:10}})+"\\n");\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-noop.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-noop.js\" %*\r\n", "utf8");
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: workspace, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -82,6 +85,8 @@ const resources = {
       providerHistory: () => ({}),
     });
     assert.equal(result.completionAllowed, true, JSON.stringify(result));
+    assert.equal(result.continuationRequired, false);
+    assert.equal(result.sliceSeconds, 210);
     assert.equal(fs.readFileSync(path.join(workspace, "feature.txt"), "utf8").trim(), "TASK_CYCLE_OK");
     assert.ok(result.transitions.some((row) => row.type === "dispatched"));
     assert.ok(result.transitions.some((row) => row.type === "collected"));
@@ -171,6 +176,37 @@ const resources = {
     assert.equal(readOnly.transitions.filter((row) => row.type === "dispatched").length, 1);
     assert.match(readOnly.transitions.find((row) => row.type === "read-only-result")?.jobs[0]?.summary || "", /bounded fact/i);
 
+    const noPatchResources = JSON.parse(JSON.stringify(resources));
+    noPatchResources.providers.codex.command = path.join(fakeBin, "fake-codex-noop.cmd");
+    const noPatchTask = startTask({
+      workspace,
+      outcome: "Reject a no-patch editor before verification",
+      outcomeAuthority: "user",
+      acceptanceEvidence: [{ description: "A real patch passes the focused no-op verification", minimumEvidenceLevel: "integration" }],
+      workGraph: [{
+        id: "W4",
+        goal: "Create noop.txt",
+        state: "pending",
+        priority: 100,
+        acceptanceRequirementId: "A1",
+        relevantFiles: ["noop.txt", "verify-noop.js"],
+        expectedFiles: ["noop.txt"],
+        acceptanceCriteria: ["noop.txt exists"],
+        verificationCommands: [{ name: "must-not-run", command: "node", args: ["verify-noop.js"], timeoutSeconds: 30 }],
+        taskKind: "code",
+        complexity: "medium",
+      }],
+      consoleModel: "gpt-5.6-luna",
+      consoleEffort: "low",
+      codexReservePercent: 15,
+    }, noPatchResources);
+    const noPatch = await runTaskCycle({ taskId: noPatchTask.taskId, maxRounds: 1, maxMinutes: 2, sliceSeconds: 30, noProgressLimit: 2 }, entrypoint, {
+      inventory: async () => noPatchResources,
+      providerHistory: () => ({}),
+    });
+    assert.equal(noPatch.completionAllowed, false);
+    assert.match(noPatch.failures[0]?.blocker || "", /no-patch-produced/);
+    assert.equal(fs.existsSync(path.join(workspace, "verification-ran.txt")), false, "verification must not run after a no-patch editor");
     process.stdout.write(JSON.stringify({
       ok: true,
       completionAllowed: true,
@@ -179,6 +215,8 @@ const resources = {
       failedProviderRetriedUnchanged: false,
       automaticFailoverProviders: dispatchedProviders,
       readOnlyArtifactRepeated: false,
+      noPatchVerificationSkipped: true,
+      mcpSliceSeconds: result.sliceSeconds,
     }, null, 2) + "\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

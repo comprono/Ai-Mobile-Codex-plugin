@@ -133,10 +133,10 @@ try {
   const fix = skill.indexOf("fixes the plugin");
   const noSwitch = skill.indexOf("Do not switch the visible task");
   const closeDesktop = skill.indexOf("closes only OpenAI.Codex");
+  const reopen = skill.indexOf("immediately reopens the exact OpenAI.Codex task");
   const verify = skill.indexOf("requires its runtimeVersion");
   const switchAfter = skill.indexOf("Only after that tool evidence");
-  const reopen = skill.indexOf("reopens the exact OpenAI.Codex task");
-  assert.ok(fix >= 0 && fix < noSwitch && noSwitch < closeDesktop && closeDesktop < verify && verify < switchAfter && switchAfter < reopen);
+  assert.ok(fix >= 0 && fix < noSwitch && noSwitch < closeDesktop && closeDesktop < reopen && reopen < verify && verify < switchAfter);
 
   process.stdout.write(JSON.stringify({
     ok: true,

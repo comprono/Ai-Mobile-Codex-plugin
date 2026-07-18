@@ -138,16 +138,16 @@ Existing host sessions keep the schema they loaded at startup. A schema or runti
 1. Keep the capable setup model active while it fixes, validates, scans, versions, and installs the plugin.
 2. Do not switch the visible task to the lightweight console before restart.
 3. prepare-restart-handoff closes only OpenAI.Codex and refreshes the canonical AI Mobile plugin. Classic ChatGPT is never a fallback.
-4. The official local Codex app-server resumes the exact persisted task while the desktop is closed. A bounded capable-model turn calls AI Mobile resource-inventory once and must observe the expected runtimeVersion.
-5. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and invokes one bounded run-task-cycle call.
-6. The cycle waits without repeated model turns, collects terminal workers once, integrates verified work, and advances only on accepted evidence or a materially changed recovery path.
-7. The launcher then reopens the exact OpenAI.Codex task so the material execution result is visible.
+4. Immediately after refresh, the launcher reopens the exact OpenAI.Codex task so the desktop cannot remain hidden behind verification or worker execution.
+5. With that task visible, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once and must observe the expected runtimeVersion.
+6. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and invokes the bounded run-task-cycle.
+7. Each MCP slice waits at most 210 seconds. A continuationRequired receipt resumes the same finite worker without another task, status poll, or replanning; a hard launcher timeout stops only stale continuation children while the desktop remains open.
 
 This path never uses codex exec resume, a duplicate task, a Goal, an automation, an LLM manager loop, or UI automation. Normal continuation does not restart the app. Today the private console preference is GPT-5.6 Luna at low effort; future models are selected by role and live evidence rather than a permanent product name.
 
 For a durable task whose outcome matches the project North Star, summary, dispatch, integration, evidence, and completion refresh authoritative .codex state. Execution states distinguish dispatch-required, workers-running, integration-required, blocked, and completed.
 
-Normal installation, startup, inventory, and dispatch never launch a provider desktop app. Restart is a separate explicitly authorized boundary.
+Normal installation, startup, inventory, dispatch, and long project execution never launch or restart a desktop app. Restart is used only after an explicitly authorized plugin upgrade that cannot load in the current task.
 ## CLI Diagnostics
 
 ```powershell

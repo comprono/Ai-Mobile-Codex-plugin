@@ -82,6 +82,7 @@ function buildCodexExecArgs(options = {}) {
   const effort = safeCodexEffort(options.effort);
   const sandbox = options.readOnly === false ? "workspace-write" : "read-only";
   return [
+    "-a", "never",
     "exec",
     "--ephemeral",
     "--ignore-user-config",

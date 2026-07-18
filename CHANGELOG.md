@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2 - 2026-07-19
+
+- Reopens the exact OpenAI.Codex task immediately after plugin refresh, before any potentially long app-server verification or worker cycle.
+- Adds a hard 20-minute continuation-process timeout that cleans only its own stale child tree while leaving the desktop visible.
+- Records the real 1.2.1 failure mode where a synchronous verification turn left Codex closed and the restart helper indefinitely active.
+- Keeps normal task execution UI-free, slices MCP waits below the host timeout, enables sandboxed noninteractive Codex worktree edits, and skips verification after no-patch workers.
+- Prevents generated acceptance gaps from becoming root-wide editing lanes or inferred full-repository test runs without explicit file and verification boundaries.
 ## 1.2.1 - 2026-07-19
 
 - Adds run-task-cycle as the default bounded execution path: dispatch, local wait, terminal collection, deterministic integration, evidence completion, and next-gap advance without repeated model turns.

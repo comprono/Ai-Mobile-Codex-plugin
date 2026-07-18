@@ -31,8 +31,8 @@ Set consoleModel and consoleEffort from the visible task when known. Under the c
 After start-task or reconcile-task:
 
 1. Read the returned workPlane.recommendedWorkUnits; do not inspect the repository to reinvent them.
-2. If execution.mustDispatchNow is true, call run-task-cycle once in the same turn. Use maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5 unless a stricter project contract applies.
-3. The deterministic cycle dispatches the dependency-ready recommendation, waits locally without model-turn polling, collects terminal workers once, integrates verified patches, and advances only after accepted evidence or a materially changed recovery path.
+2. If execution.mustDispatchNow is true, call run-task-cycle in the same turn with maxRounds 3, maxMinutes 15, sliceSeconds 210, noProgressLimit 2, and horizonHours 5 unless a stricter project contract applies.
+3. One MCP call never waits longer than 210 seconds. If it returns continuationRequired true, call run-task-cycle again immediately for the same task, without replanning or a status call, up to four slices in the current turn. This resumes the same finite worker and never creates another task or worker.
 4. A successful read-only worker returns one compact artifact and ends that cycle. Do not repeat the same inspection or send it through a redundant premium review.
 5. The visible console must not take project ownership when dispatch or execution fails. Report the typed blocker, owner, recovery trigger, and already-owned recovery action.
 6. Accept trusted-primary work only when exact model identity, clean ownership boundaries, and deterministic checks pass. For isolated work, integrate the stored patch once and verify it deterministically; do not ask Luna or another premium model to re-read it by default.
@@ -67,14 +67,17 @@ Credentials, login, CAPTCHA, fabricated profile facts, duplicate submissions, pu
 
 A plugin source change is not active in an already loaded Codex task.
 
+Normal project execution never closes, reopens, or relaunches Codex or any provider UI. Restart handoff exists only for an explicitly authorized plugin upgrade that cannot load in the current task.
+
 For a schema or runtime upgrade, follow this order exactly:
 
 1. Keep the capable setup model active. It fixes the plugin, runs all tests and scanner gates, installs the new version, and records the expected version.
 2. Do not switch the visible task to the lightweight console yet.
 3. Use prepare-restart-handoff only with explicit restart authorization and exact verification and resume models. The one-shot launcher closes only OpenAI.Codex and refreshes AI Mobile. It never launches Classic ChatGPT.
-4. While the desktop is closed, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once; the launcher requires its runtimeVersion to equal the installed version.
-5. Only after that tool evidence, the same app-server starts one turn in the same task on the requested lightweight model and low effort. That turn reconciles the existing durable task once and invokes one bounded run-task-cycle call. The deterministic cycle waits for finite workers without repeated model turns, collects and integrates once, and returns a material result.
-6. After that execution result is persisted, the launcher reopens the exact OpenAI.Codex task so the user sees it. No codex exec resume, duplicate task, Goal, automation, LLM manager loop, or hidden continuation is used.
+4. After the refresh, the launcher immediately reopens the exact OpenAI.Codex task. The desktop must never remain hidden while model verification or project workers run.
+5. With that task visible, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once; the launcher requires its runtimeVersion to equal the installed version.
+6. Only after that tool evidence, the same app-server starts one turn in the same task on the requested lightweight model and low effort. That turn reconciles the existing durable task once and invokes one bounded run-task-cycle call. The deterministic cycle waits for finite workers without repeated model turns, collects and integrates once, and returns a material result.
+7. The continuation has a hard process timeout and kills only its own stale child tree. On timeout or failure the already reopened Codex task stays visible. No codex exec resume, duplicate task, Goal, automation, LLM manager loop, or hidden continuation is used.
 
 If fresh runtime proof is missing or stale, the launcher fails closed before selecting Luna. A lightweight console must never diagnose or patch the plugin.
 ## Reporting
