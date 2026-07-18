@@ -1,6 +1,6 @@
 {
     "schema_version":  1,
-    "updated_utc":  "2026-07-18T07:42:35Z",
+    "updated_utc":  "2026-07-18T07:53:34Z",
     "project_state":  "active",
     "current_slice_requirement_id":  "RESTART_CONTINUITY",
     "requirements":  [
@@ -48,14 +48,14 @@
                          },
                          {
                              "id":  "RESTART_CONTINUITY",
-                             "description":  "A required restart targets only the installed OpenAI.Codex desktop package, resumes the exact thread with the requested Codex model, and never invokes Classic ChatGPT or an installer-capable generic launcher.",
+                             "description":  "AI Mobile continues the same visible Codex task through the app-native task API with the selected model and reasoning effort, while unavoidable Windows restarts reopen only the exact OpenAI.Codex app/task and never create hidden CLI continuations.",
                              "required":  true,
                              "status":  "failing",
                              "minimum_evidence_level":  "user-visible",
                              "acceptance_steps":  [
-                                                      "Distinguish the installed OpenAI.Codex package from OpenAI.ChatGPT-Desktop and resolve only its declared application executable.",
-                                                      "Dry-run one handoff and prove the exact thread, workspace, gpt-5.6-luna model, OpenAI.Codex executable, project argument, and thread deep link without invoking codex app.",
-                                                      "Perform one authorized restart and prove this same task resumes on GPT-5.6 Luna before the existing production project continuation starts."
+                                                      "Prove ordinary continuation uses send_message_to_thread with the existing thread id, a compact continuation capsule, and an explicit lightweight model and low reasoning effort.",
+                                                      "Perform one same-task continuation on GPT-5.6 Luna with low effort and verify the follow-up appears in the same visible Codex task without a duplicate task or hidden codex exec process.",
+                                                      "Prove an unavoidable restart targets only the exact OpenAI.Codex package and task deep link, never Classic ChatGPT, and never claims that app reopening equals a submitted visible turn."
                                                   ],
                              "evidence":  [
 

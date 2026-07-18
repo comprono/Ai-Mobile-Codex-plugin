@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.10 - 2026-07-18
+
+- Uses Codex's app-native same-task follow-up surface for ordinary continuation instead of treating desktop restart or `codex exec resume` as orchestration.
+- Defines future-proof lightweight-orchestrator, bulk-context, critical-reasoning, and deterministic-verification model roles; the current private lightweight preference resolves to GPT-5.6 Luna at low effort.
+- Clarifies that the Windows restart helper only refreshes and reopens the exact Codex app/task and cannot itself prove a visible continued turn.
 ## 1.1.9 - 2026-07-18
 
 - Removed the misleading Windows detached `codex exec resume` path: it created an independent CLI run and could not post a visible turn into the reopened Desktop task.

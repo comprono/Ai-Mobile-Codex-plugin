@@ -60,7 +60,8 @@ The `execution` object is a binding same-turn contract for Codex, not a suggesti
 - Report the current Codex model and each external provider as selected, idle, or unavailable with the routing reason. Availability alone is not a resource plan.
 - Continue through finite implementation, verification, evidence recording, and the next acceptance-linked slice until a listed stop condition is actually reached.
 - The plugin does not create a background loop. Within a loaded session, Codex continues finite acceptance-linked work until a true stop condition.
-- If a plugin upgrade requires restarting Codex while authorized work remains, call `prepare-restart-handoff` with the exact thread, workspace, exact resume model, task, priorities, evidence-backed next action, and existing authorization. Run its one-shot launcher only as the final action of the turn. It must target package `OpenAI.Codex`, resume the same thread through `codex exec resume -m <model>`, and reopen that package with the project and thread deep link. Never call `codex app`, launch Classic ChatGPT, ask the user to restate context, or create a replacement task.
+- For ordinary same-task continuation, use the Codex app's native `send_message_to_thread` capability as the final action. Target the existing thread id, pass a compact durable continuation capsule, and select the live lightweight-orchestrator model with low reasoning. This is a follow-up in the same task, not a new chat, CLI run, Goal, automation, or manager loop.
+- Avoid restarting Codex for skill text, profile, routing policy, or other changes that a fresh same-thread turn can load. If a schema-level plugin upgrade truly requires a desktop restart, call `prepare-restart-handoff` only to persist context and reopen the exact `OpenAI.Codex` package and thread. On Windows, do not claim that the launcher injects a visible turn. Never use `codex exec resume` as proof of Desktop continuation, call installer-capable `codex app`, launch Classic ChatGPT, ask the user to restate context, or create a replacement task.
 - Claude Code loads this same skill and MCP runtime. When it continues an existing task, use the durable task id and evidence rather than inventing a separate Claude plan; Codex CLI use remains a separately reported worker.
 
 ## Resource Judgment
@@ -73,6 +74,12 @@ The `execution` object is a binding same-turn contract for Codex, not a suggesti
 - **No-model tools:** tests, linters, validators, diffs, screenshots, and runtime evidence. Prefer them for verification.
 
 Capacity is evidence with a timestamp, source, expiry, and confidence. Unknown remains unknown. Cached unavailable providers are re-probed before dispatch. Never create unnecessary work merely to consume capacity before reset.
+Select models by role from fresh inventory rather than permanent product names:
+
+- **Lightweight orchestrator:** the cheapest available capable current-Codex model at its lowest supported reasoning effort. It gathers bounded state, maintains the compact task capsule, routes work, and reports material transitions. Under the current private preference this resolves to `gpt-5.6-luna` with `low` effort (Luna Lite).
+- **Bulk context:** prefer deterministic search or Antigravity/another economical model for bounded reading, extraction, and summarization. Return a compact artifact with source pointers; never dump the full parent transcript into a premium model.
+- **Critical reasoning:** select the strongest available suitable model only for architecture, ambiguity, consequential planning, or hard integration. Rank live candidates by capability tier, task fit, independent quota, reset horizon, reliability, and total review cost; do not assume today's Sol or Fable name remains best after model inventory changes.
+- **Verification:** use tests and direct evidence first. A premium result is not automatically re-read by another premium model; escalate only when deterministic evidence leaves a material unresolved risk.
 
 For a portfolio, discover machine and provider capacity once at start. Allocate within the configured horizon using capability fit, dependencies, quota pools, reset horizons, reliability, subscription/API cost, free RAM, project priority, and fairness. Machine-wide leases prevent separate projects or tasks from oversubscribing one provider or quota pool. Current Codex's private reserve remains protected.
 
@@ -124,6 +131,6 @@ Do not send a final response while `execution.mustStartNow` is true. `Next` is n
 - `cancel-task`: stop only task-owned workers;
 - `resource-inventory`: explicit passive capacity diagnostic;
 - `orchestrator-profile`: private local preferences.
-- `prepare-restart-handoff`: durable one-shot Codex restart and exact-thread resume contract.
+- `prepare-restart-handoff`: durable one-shot exact-package and exact-thread reopen contract for unavoidable schema-level restarts; it is not the same-task continuation mechanism on Windows.
 
-If a tool reports `STALE AI MOBILE TASK`, stop calling the stale MCP schema. When restart handoff is authorized, persist the exact continuation and run its one-shot launcher as the final action instead of asking the user to restart or repeat the task. Without authorization, report the single restart decision precisely. Do not reconstruct removed commands or revive a manager loop.
+If a tool reports `STALE AI MOBILE TASK`, stop calling the stale MCP schema. First try a fresh same-task app-native follow-up so the updated skill/runtime can load without creating another task. Only when a schema-level restart is genuinely required may an authorized one-shot launcher refresh and reopen the exact app/task; never claim that the Windows launcher submitted the next visible turn. Do not reconstruct removed commands or revive a manager loop.

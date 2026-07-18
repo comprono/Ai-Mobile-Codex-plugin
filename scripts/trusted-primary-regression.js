@@ -256,6 +256,13 @@ const resumeSource = fs.readFileSync(path.join(__dirname, "resume-codex-thread.p
 assert.equal(resumeSource.includes("& codex @codexArgs"), false);
 assert.equal(resumeSource.includes("resume-awaiting-visible-turn"), true);
 assert.equal(resumeSource.includes("separate CLI run"), true);
+const skillSource = fs.readFileSync(path.join(__dirname, "..", "skills", "ai-mobile", "SKILL.md"), "utf8");
+assert.equal(skillSource.includes("send_message_to_thread"), true);
+assert.equal(skillSource.includes("`gpt-5.6-luna` with `low` effort (Luna Lite)"), true);
+assert.equal(skillSource.includes("resume the same thread through `codex exec resume"), false);
+const mcpServerSource = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
+assert.equal(mcpServerSource.includes("resumes the same task through Codex CLI"), false);
+assert.equal(mcpServerSource.includes("does not inject a visible turn"), true);
 
 fs.rmSync(root, { recursive: true, force: true });
 process.stdout.write(JSON.stringify({

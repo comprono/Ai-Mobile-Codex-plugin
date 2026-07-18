@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-18T07:42:35Z
+Updated: 2026-07-18T07:53:34Z
 
 ## North Star
 
@@ -82,7 +82,7 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - AI Mobile 1.1.6 now targets only the exact `OpenAI.Codex` package, carries an exact resume model, and reopens the requested workspace and thread deep link without using `codex app` or Classic ChatGPT.
 - Acceptance fingerprints now refresh stale matching tasks only when the project contract changes, preserving newer task evidence when the project file is unchanged and isolating explicit unrelated outcomes.
 - All 14 release suites pass; Scanner 2.0.1114 default, public, strict, and full scan gates score 100 with zero findings. Standalone verify has only its documented local-stdio safety skip, covered by the 46-assertion runtime self-test.
-- AI Mobile 1.1.8 verified the exact OpenAI.Codex package restart and deep link. The detached CLI process was not a visible Desktop task continuation; it was removed. RESTART_CONTINUITY remains failing until visible-task injection is supported and verified.
+- The Codex app exposes native same-task follow-up with model and reasoning controls. AI Mobile 1.1.10 uses that for normal continuation; the Windows package launcher remains only an exact app/task reopener.
 
 ## Context Pointers
 
@@ -123,9 +123,9 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 ## Current Slice
 
 - Acceptance ID: RESTART_CONTINUITY
-- Goal: Prove an exact visible Codex Desktop task turn after an authorized restart, including the selected model.
-- Evidence: user-visible task message and model selection, not a separate CLI process or app launch.
+- Goal: continue this task through the Codex app-native task API on the lightweight-orchestrator role.
+- Evidence: a queued and visible same-task GPT-5.6 Luna low-effort turn, plus no duplicate task or hidden CLI process.
 
 ## Next
 
-- Keep the existing Job Vibhu project separate. Do not claim release completion or job progress until a visible Desktop task continuation can be proven.
+Validate and publish 1.1.10, install it locally, then queue one same-task Luna low-effort Job Vibhu continuation through the app-native thread API.

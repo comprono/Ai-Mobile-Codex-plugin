@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const readline = require("node:readline");
 const { inventory } = require("../core/capacity");
@@ -77,7 +77,7 @@ const TOOLS = [
   { name: "cancel-task", description: "Cancel finite workers, release machine leases, and clean editing worktrees for one task or portfolio.", inputSchema: { type: "object", ...TASK_OR_PORTFOLIO, properties: { taskId: { type: "string" }, portfolioId: { type: "string" } } } },
   { name: "resource-inventory", description: "Passive diagnostic capacity inventory. It never opens provider desktop applications.", inputSchema: { type: "object", properties: { refresh: { type: "boolean" }, detail: { enum: ["compact", "full"] }, horizonHours: { type: "number", minimum: 1, maximum: 24 } } } },
   { name: "orchestrator-profile", description: "Read or update private local provider, model, reserve, efficiency, and communication preferences. It starts no workers or applications.", inputSchema: { type: "object", properties: { action: { enum: ["read", "update"] }, patch: { type: "object" } } } },
-  { name: "prepare-restart-handoff", description: "Persist one authorized restart boundary for the exact Codex thread and durable AI Mobile task. Returns a one-shot external launcher that resumes the same task through Codex CLI; it creates no loop and does not restart anything until Codex explicitly runs the returned launcher.", inputSchema: { type: "object", required: ["workspace", "nextAction"], properties: { taskId: { type: "string" }, threadId: { type: "string" }, workspace: { type: "string" }, resumeModel: { type: "string" }, outcome: { type: "string" }, latestUserRequest: { type: "string" }, nextAction: { type: "string" }, priorities: { type: "array", items: { type: "string" } }, cleanupPluginIds: { type: "array", maxItems: 5, items: { type: "string" } }, userAuthorized: { type: "boolean" } } } },
+  { name: "prepare-restart-handoff", description: "Persist one authorized restart boundary for the exact Codex thread and durable AI Mobile task. Returns a one-shot launcher that refreshes the plugin and reopens only the exact OpenAI.Codex package and thread. On Windows it does not inject a visible turn or start a hidden Codex CLI continuation.", inputSchema: { type: "object", required: ["workspace", "nextAction"], properties: { taskId: { type: "string" }, threadId: { type: "string" }, workspace: { type: "string" }, resumeModel: { type: "string" }, outcome: { type: "string" }, latestUserRequest: { type: "string" }, nextAction: { type: "string" }, priorities: { type: "array", items: { type: "string" } }, cleanupPluginIds: { type: "array", maxItems: 5, items: { type: "string" } }, userAuthorized: { type: "boolean" } } } },
 ];
 
 function content(value, isError = false) { return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError }; }

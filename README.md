@@ -95,7 +95,7 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 | `cancel-task` | Stop owned workers, release leases, and clean owned worktrees. |
 | `resource-inventory` | Passively inspect current machine, provider, quota, lease, and storage evidence. |
 | `orchestrator-profile` | Read or update private local routing and resource preferences. |
-| `prepare-restart-handoff` | Persist one authorized thread/task handoff for a required Codex restart and return its one-shot resume launcher. |
+| `prepare-restart-handoff` | Persist one authorized thread/task handoff for an unavoidable schema-level Codex restart and return its exact-app/task reopen launcher. |
 
 ## Token Efficiency
 
@@ -130,6 +130,8 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 The repository is both an AI Mobile Codex marketplace and an AI Mobile Claude Code marketplace. A Git update followed by the same installer updates both host caches from this one source; there is no copied Claude orchestration implementation.
 
 Existing host sessions keep the schema they loaded at startup. When a required Codex upgrade occurs during an authorized long task, `prepare-restart-handoff` writes the exact thread, workspace, requested next model, task, priorities, evidence, and next action. Codex may run the returned one-shot launcher as its final action; the helper closes only processes owned by the installed `OpenAI.Codex` package, activates it through `shell:AppsFolder`, and opens the exact `codex://threads/<thread-id>` deep link. On Windows it deliberately does not run `codex exec resume`: that creates a separate CLI run rather than a visible Desktop task turn. The handoff records `resume-awaiting-visible-turn` until a visible turn is started. It never calls installer-capable `codex app` and never falls back to `OpenAI.ChatGPT-Desktop`.
+
+Normal continuation does not restart the desktop app. AI Mobile instructs Codex to use the app-native same-task follow-up surface with a compact continuation capsule and a lightweight model/effort selected from current inventory. Today the private preference resolves that role to GPT-5.6 Luna at low effort; future model names are ranked by role, live capability, quota horizon, reliability, and total work cost rather than hard-coded as permanent choices.
 
 Every restart handoff records its current phase, helper process id, bounded transition log, and any failure in the handoff JSON. Paths containing spaces are quoted end to end. After Codex closes, the helper refreshes the canonical AI Mobile cache before reopening the exact task. If the exact Codex desktop package cannot be identified or the refresh fails, the helper fails closed without stopping or launching Classic ChatGPT, or reopening with mixed plugin versions.
 

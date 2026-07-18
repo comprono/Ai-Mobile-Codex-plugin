@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Finite capacity-aware orchestration for Codex CLI, Claude Code, Antigravity, and optional Cursor workers.",
   "author": {
     "name": "comprono"
