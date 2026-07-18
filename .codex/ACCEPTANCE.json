@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-18T20:29:41.9696347Z",
+  "updated_utc": "2026-07-18T20:49:16Z",
   "project_state": "active",
   "current_slice_requirement_id": "RESTART_CONTINUITY",
   "requirements": [
@@ -281,7 +281,7 @@
       "id": "PUBLIC_RELEASE",
       "description": "Version 1.2.1 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
       "required": true,
-      "status": "failing",
+      "status": "passing",
       "minimum_evidence_level": "end-to-end",
       "acceptance_steps": [
         "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
@@ -291,17 +291,12 @@
       "evidence": [
         {
           "level": "end-to-end",
-          "ref": "commit c64ced2; git push origin main; powershell -ExecutionPolicy Bypass -File scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list",
-          "summary": "The complete AI Mobile 1.2.0 regression, manifest, scanner, and privacy matrix passed; commit c64ced2 was pushed to origin/main; the installer upgraded both Codex and Claude Code from 1.1.10 to 1.2.0; both hosts independently reported ai-mobile@ai-mobile 1.2.0 enabled.",
-          "verified_utc": "2026-07-18T09:37:39Z"
+          "ref": "commit df4f0f6; git push origin main; complete 18-suite release matrix; strict scanner full scan; scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list",
+          "summary": "AI Mobile 1.2.1 passed all 18 regression and end-to-end suites, strict Codex and Claude validation, privacy checks, and the scanner full scan at score 100 / grade A with policy_pass and verify_pass true and zero findings. Commit df4f0f6 is pushed to origin/main, and both Codex and Claude independently report ai-mobile@ai-mobile 1.2.1 enabled after installation.",
+          "verified_utc": "2026-07-18T20:49:16Z"
         }
       ],
-      "blocker": {
-        "owner": "AI Mobile release",
-        "reason": "Version 1.2.1 has focused proof but has not yet passed the full release, shared-host installation, and exact-task restart gates.",
-        "recoveryTrigger": "The complete regression and scanner matrix passes, both hosts report 1.2.1, and the exact Codex task observes runtimeVersion 1.2.1.",
-        "recoveryAction": "Finish validation, commit and push 1.2.1, install it in Codex and Claude, then complete the authorized exact-task restart sequence."
-      }
+      "blocker": null
     },
     {
       "id": "EXECUTION_CONTINUITY",

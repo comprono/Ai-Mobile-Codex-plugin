@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-18T20:25:44.8151500Z
+Updated: 2026-07-18T20:49:16Z
 
 ## North Star
 
@@ -55,6 +55,7 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 - Editing jobs use isolated worktrees, while deterministic integration protects file boundaries and concurrent primary changes and rolls back failed verification.
 - Portfolio, provider/quota lease, storage lifecycle, trusted-primary, and no-auto-UI behavior remain covered by existing regression suites.
 - A prior Luna same-task follow-up was visible, but it ran against stale AI Mobile 1.1.8 after 1.1.10 had been installed. That disproved the previous restart claim and is not accepted as continuity evidence.
+- Release commit df4f0f6 is on origin/main; the complete 18-suite and scanner matrix passed, and both Codex and Claude now report AI Mobile 1.2.1 enabled.
 
 ## Context Pointers
 
@@ -98,4 +99,4 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Next
 
-Run the complete 1.2.1 release matrix, publish and install the exact package, then perform the exact restart and Job Vibhu execution sequence.
+Perform the exact OpenAI.Codex same-task restart, prove runtimeVersion 1.2.1 before Luna-low starts, and complete one bounded Job Vibhu worker cycle through terminal collection.
