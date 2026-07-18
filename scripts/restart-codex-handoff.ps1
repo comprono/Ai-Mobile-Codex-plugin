@@ -104,11 +104,6 @@ $isDryRun = $DryRun -or (-not $Schedule -and -not $Execute)
 $codexDesktopPackage = Resolve-CodexDesktopPackage -AllowUnavailable:$isDryRun
 $desktopArguments = @("--open-project", $workspace, "codex://threads/$([string]$handoff.threadId)")
 
-$codexArgs = @("-C", $workspace, "exec", "resume")
-if ($resumeModel) {
-    $codexArgs += @("-m", $resumeModel)
-}
-$codexArgs += @([string]$handoff.threadId, [string]$handoff.resumePrompt)
 $refreshPluginIds = @($handoff.refreshPluginIds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 if ($refreshPluginIds.Count -eq 0) {
     $refreshPluginIds = @("ai-mobile@ai-mobile")
@@ -118,9 +113,9 @@ if ($isDryRun) {
         Valid = $true
         OneShot = $true
         HandoffFile = $handoffPath
-        Command = "codex"
-        Arguments = $codexArgs
-        ResumeModel = $resumeModel
+        ResumeSurface = "OpenAI.Codex desktop deep link"
+        RequestedResumeModel = $resumeModel
+        ModelSwitchVerified = $false
         PackageName = $codexDesktopPackage.PackageName
         PackageFullName = $codexDesktopPackage.PackageFullName
         DesktopResolved = $codexDesktopPackage.Resolved
@@ -206,21 +201,29 @@ try {
     }
 
     $handoff | Add-Member -NotePropertyName consumedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "resuming" -Message "Plugin cleanup and refresh finished; resuming the exact Codex thread."
-    & codex @codexArgs
-    $resumeExitCode = $LASTEXITCODE
-    if ($resumeExitCode -ne 0) {
-        throw "Codex resume failed with exit code $resumeExitCode."
-    }
-    Save-RestartState -State "resume-complete" -Message "The resumed Codex turn completed successfully."
+    Save-RestartState -State "reopening" -Message "Plugin refresh finished; reopening the exact Codex package and thread now."
+    $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
+    $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
+    $desktopProcess = Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine -PassThru
+    $handoff | Add-Member -NotePropertyName desktopPackage -NotePropertyValue $codexDesktopPackage.PackageFullName -Force
+    $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopProcess.Id -Force
+    $handoff | Add-Member -NotePropertyName desktopLaunchedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
+    $handoff | Add-Member -NotePropertyName requestedResumeModel -NotePropertyValue $resumeModel -Force
+    $handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue $false -Force
+    Save-RestartState -State "reopened" -Message "The exact OpenAI.Codex package was reopened for the target workspace and thread."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message
 } finally {
-    $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
-    $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
-    Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine
-    Save-RestartState -State $(if ($caughtError) { "reopened-after-failure" } else { "reopened" }) -Message "The exact OpenAI.Codex package was reopened for the target workspace and thread."
+    if ($caughtError) {
+        $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
+        $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
+        $desktopProcess = Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine -PassThru
+        $handoff | Add-Member -NotePropertyName desktopPackage -NotePropertyValue $codexDesktopPackage.PackageFullName -Force
+        $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopProcess.Id -Force
+        $handoff | Add-Member -NotePropertyName desktopLaunchedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
+        Save-RestartState -State "reopened-after-failure" -Message "The exact OpenAI.Codex package was reopened after the refresh failure."
+    }
 }
 if ($caughtError) {
     throw $caughtError
