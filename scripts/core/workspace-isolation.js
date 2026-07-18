@@ -15,7 +15,11 @@ const TRANSIENT_PATHS = [
 ];
 
 function normalized(value) {
-  return path.resolve(String(value || "")).replace(/\\/g, "/").toLowerCase();
+  let resolved = path.resolve(String(value || ""));
+  try {
+    resolved = (fs.realpathSync.native || fs.realpathSync)(resolved);
+  } catch { /* compare the resolved input when the path does not exist yet */ }
+  return resolved.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
 }
 
 function worktreeRoot() { return path.join(stateRoot(), "worktrees"); }
