@@ -13,6 +13,13 @@ function safeThreadId(value) {
   return threadId;
 }
 
+function safeResumeModel(value) {
+  const model = String(value || "").trim();
+  if (!model) return "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(model)) throw new Error("Restart resume model must be an exact safe model id.");
+  return model;
+}
+
 function createRestartHandoff(args = {}) {
   const profile = readProfile();
   if (args.userAuthorized !== true && profile.allowCodexRestartHandoff !== true) {
@@ -20,6 +27,7 @@ function createRestartHandoff(args = {}) {
   }
   const workspace = safeWorkspace(args.workspace);
   const threadId = safeThreadId(args.threadId);
+  const resumeModel = safeResumeModel(args.resumeModel || "");
   const task = args.taskId ? readTask(args.taskId) : null;
   const nextAction = String(args.nextAction || task?.currentCodex?.goal || "").trim().slice(0, 4000);
   if (!nextAction) throw new Error("Restart handoff requires the exact next action.");
@@ -46,6 +54,7 @@ function createRestartHandoff(args = {}) {
     restartLog: [{ At: createdAt, State: "prepared", Message: "Authorized one-shot restart handoff prepared; no process has been started." }],
     threadId,
     workspace,
+    resumeModel,
     cleanupPluginIds,
     refreshPluginIds: ["ai-mobile@ai-mobile"],
     taskId: task?.taskId || String(args.taskId || ""),
@@ -56,6 +65,7 @@ function createRestartHandoff(args = {}) {
     nextAction,
     resumePrompt: [
       "Resume the same AI Mobile task after the required plugin restart.",
+      resumeModel ? `Resume model: ${resumeModel}.` : "",
       task?.taskId ? `Task: ${task.taskId}.` : "",
       task?.outcome ? `Outcome: ${task.outcome}` : "",
       priorities.length ? `Priorities: ${priorities.join(" | ")}` : "",
@@ -77,4 +87,4 @@ function createRestartHandoff(args = {}) {
   };
 }
 
-module.exports = { createRestartHandoff, safeThreadId };
+module.exports = { createRestartHandoff, safeResumeModel, safeThreadId };

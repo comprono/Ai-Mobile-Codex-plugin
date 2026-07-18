@@ -57,6 +57,7 @@ function createTaskRecord(input) {
     requestedOutcome: String(input.requestedOutcome || input.outcome || "").trim(),
     latestUserRequest: String(input.latestUserRequest || "").trim(),
     outcomeReconciliation: input.outcomeReconciliation || null,
+    outcomeAuthority: input.outcomeAuthority === "user" ? "user" : "auto",
     projectContext: input.projectContext || null,
     contractVersion: Number.isInteger(input.contractVersion) ? input.contractVersion : 1,
     revisedAt: input.revisedAt || null,

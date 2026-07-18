@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-18T00:21:17Z",
-  "project_state": "complete",
-  "current_slice_requirement_id": null,
+  "updated_utc": "2026-07-18T03:43:14.8425206Z",
+  "project_state": "active",
+  "current_slice_requirement_id": "RESTART_CONTINUITY",
   "requirements": [
     {
       "id": "TRUSTED_PRIMARY_WRITERS",
@@ -48,23 +48,16 @@
     },
     {
       "id": "RESTART_CONTINUITY",
-      "description": "A required Codex host restart uses a durable one-shot handoff that resumes the exact task and next action through the supported Codex CLI without adding a manager loop or launching providers during normal startup.",
+      "description": "A required restart targets only the installed OpenAI.Codex desktop package, resumes the exact thread with the requested Codex model, and never invokes Classic ChatGPT or an installer-capable generic launcher.",
       "required": true,
-      "status": "passing",
-      "minimum_evidence_level": "integration",
+      "status": "failing",
+      "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
-        "Create a restart handoff containing the exact thread, workspace, task, priorities, evidence state, and next action.",
-        "Dry-run the handoff and prove it builds one delayed Codex resume command, rejects missing authorization or invalid thread/workspace input, and creates no recurring process.",
-        "Prove normal plugin startup and capacity discovery still open no desktop application."
+        "Distinguish the installed OpenAI.Codex package from OpenAI.ChatGPT-Desktop and resolve only its declared application executable.",
+        "Dry-run one handoff and prove the exact thread, workspace, gpt-5.6-luna model, OpenAI.Codex executable, project argument, and thread deep link without invoking codex app.",
+        "Perform one authorized restart and prove this same task resumes on GPT-5.6 Luna before the existing production project continuation starts."
       ],
-      "evidence": [
-        {
-          "level": "integration",
-          "ref": "node scripts/trusted-primary-regression.js; node scripts/portfolio-e2e.js; codex exec resume --help; codex app --help",
-          "summary": "An authorized handoff persists the exact thread, workspace, task context, priorities, evidence, and next action; dry-run produces one Codex resume command, the launcher consumes the handoff once, reopens the exact workspace, and normal startup still opens no desktop application.",
-          "verified_utc": "2026-07-18T00:21:17Z"
-        }
-      ],
+      "evidence": [],
       "blocker": null
     },
     {
@@ -311,6 +304,27 @@
           "ref": "node scripts/continuation-regression.js; installed cache 1.1.1 production-project start-task field test",
           "summary": "The regression and installed field test preserved an executable runtime repair transition, required current Codex to start the ready parser slice in the same turn, reserved extra Codex CLI capacity, explained idle/unavailable providers, and reported a selected Claude Sonnet worker with its routing reason.",
           "verified_utc": "2026-07-17T15:23:00Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "AUTHORITATIVE_TASK_SYNC",
+      "description": "A durable task whose outcome matches the bounded project outcome refreshes requirement status, blockers, and evidence from the authoritative project acceptance contract without creating a duplicate task or contaminating unrelated work.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Prove a project acceptance contract overrides duplicate supplied requirement status unless the latest explicit request declares user outcome authority.",
+        "Change project acceptance evidence and prove task-summary refreshes the same durable task without a new task or polling loop.",
+        "Prove a task with a different explicit user outcome does not import unrelated project evidence."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/outcome-recovery-e2e.js; node scripts/reliability-e2e.js; full 14-suite release matrix",
+          "summary": "Matching project acceptance contracts override duplicate stale requirement status; a changed acceptance fingerprint refreshes the same durable task, unchanged project files preserve newer recorded task evidence, and explicit unrelated user outcomes remain isolated.",
+          "verified_utc": "2026-07-18T03:43:14.8425206Z"
         }
       ],
       "blocker": null

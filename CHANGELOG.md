@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.6 - 2026-07-18
+
+- Replaced installer-capable `codex app` reopening with the exact installed `OpenAI.Codex` AppX executable and exact workspace/thread deep link.
+- Added model-bound one-shot resume so an authorized handoff can continue the same thread on an exact model such as `gpt-5.6-luna`.
+- Prevented Classic ChatGPT from being selected as a restart fallback.
+- Made matching project acceptance contracts authoritative over duplicate stale request requirements and refresh the same durable task during summary, dispatch, and completion.
+- Added explicit execution state so an active durable task is not misreported as active worker execution.
+- Added regressions for exact-package restart, Luna resume, authoritative evidence refresh, same-task continuity, and unrelated-task isolation.
+
 ## 1.1.5 - 2026-07-18
 
 - Refreshes the canonical AI Mobile plugin cache after Codex closes and before the exact thread resumes.

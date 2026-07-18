@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "A finite, capacity-aware Codex orchestrator for local Codex CLI, Claude Code, Antigravity, and optional Cursor workers on Windows.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
@@ -69,7 +69,9 @@
       "Optional headless Cursor workers",
       "Passive startup with explicit UI fallback",
       "Private local routing profile",
-      "One-shot Codex restart and exact-thread resume"
+      "One-shot Codex restart and exact-thread resume",
+      "Authoritative project-task evidence synchronization",
+      "Exact OpenAI.Codex package restart with model-bound resume"
     ],
     "defaultPrompt": [
       "Use AI Mobile to finish this project outcome efficiently while current Codex stays on the critical path",

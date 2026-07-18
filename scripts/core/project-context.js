@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { boundedList, safeWorkspace } = require("./utils");
@@ -141,6 +142,8 @@ function discoverProjectContext(workspaceValue) {
   ];
   const outcomeMarkdown = readBounded(outcomeFile, 128 * 1024);
   const acceptance = readJsonBounded(acceptanceFile, 512 * 1024);
+  const acceptanceFingerprint = acceptance ? crypto.createHash("sha256").update(JSON.stringify(acceptance)).digest("hex").slice(0, 16) : "";
+  const acceptanceUpdatedAt = String(acceptance?.updated_utc || acceptance?.updatedAt || "").trim().slice(0, 80);
   const manifestFile = manifestFiles.find((file) => fs.existsSync(file)) || "";
   const manifest = manifestFile ? readJsonBounded(manifestFile, 256 * 1024) : null;
   const northStar = compactSection(markdownSection(outcomeMarkdown, "North Star"));
@@ -162,6 +165,8 @@ function discoverProjectContext(workspaceValue) {
     projectOutcome,
     userIntent,
     projectState: String(acceptance?.project_state || "").trim(),
+    acceptanceFingerprint,
+    acceptanceUpdatedAt,
     currentSliceRequirementId: String(acceptance?.current_slice_requirement_id || "").trim(),
     requirements,
     workGraph: manifestGraph,
@@ -288,6 +293,8 @@ function compactProjectContext(context) {
     projectState: context.projectState,
     currentSliceRequirementId: context.currentSliceRequirementId,
     acceptance: {
+      fingerprint: context.acceptanceFingerprint || "",
+      updatedAt: context.acceptanceUpdatedAt || null,
       required: context.requirements.filter((row) => row.required !== false).length,
       passing: context.requirements.filter((row) => row.required !== false && row.status === "passing").length,
       blocked: context.requirements.filter((row) => row.required !== false && row.status === "blocked").length,

@@ -126,6 +126,64 @@ try {
   assert.equal(explicitReview.outcomeReconciliation.changed, false);
   assert.equal(explicitReview.outcomeReconciliation.source, "latest-user-request");
 
+  const syncWorkspace = makeWorkspace("authoritative-sync-project");
+  const syncAcceptancePath = path.join(syncWorkspace, ".codex", "ACCEPTANCE.json");
+  const syncContract = JSON.parse(fs.readFileSync(syncAcceptancePath, "utf8"));
+  syncContract.updated_utc = "2026-07-18T03:15:00Z";
+  syncContract.requirements[0].status = "passing";
+  syncContract.requirements[0].evidence = [{
+    level: "end-to-end",
+    ref: "runtime-e2e",
+    summary: "Runtime recovery passed the authoritative project gate.",
+    verified_utc: "2026-07-18T03:15:00Z",
+  }];
+  syncContract.requirements[1].status = "blocked";
+  syncContract.requirements[1].blocker = {
+    owner: "current-codex",
+    reason: "Canonical receipt evidence is not present yet.",
+    recovery_trigger: "A canonical receipt is recorded.",
+    recovery_action: "Produce and verify one canonical receipt.",
+  };
+  writeJson(syncAcceptancePath, syncContract);
+
+  const synced = startTask({
+    workspace: syncWorkspace,
+    outcome: recovered.outcome,
+    acceptanceEvidence: [
+      { id: "RUNTIME", description: "Runtime recovery is verified end to end.", status: "failing" },
+      { id: "THROUGHPUT", description: "A unique canonical result is observed at the required cadence.", status: "failing" },
+    ],
+  }, resources);
+  assert.equal(synced.requirements.find((row) => row.id === "RUNTIME").status, "passing");
+  assert.equal(synced.requirements.find((row) => row.id === "THROUGHPUT").status, "blocked");
+
+  syncContract.requirements[1].status = "passing";
+  syncContract.requirements[1].blocker = null;
+  syncContract.requirements[1].evidence = [{
+    level: "end-to-end",
+    ref: "throughput-e2e",
+    summary: "A unique canonical result passed the authoritative cadence gate.",
+    verified_utc: "2026-07-18T03:16:00Z",
+  }];
+  syncContract.updated_utc = "2026-07-18T03:16:00Z";
+  writeJson(syncAcceptancePath, syncContract);
+  const refreshed = taskSummary({ taskId: synced.taskId });
+  assert.equal(refreshed.taskId, synced.taskId);
+  assert.equal(refreshed.contractVersion, 2);
+  assert.deepEqual(refreshed.progress, { passing: 2, required: 2 });
+  assert.equal(refreshed.projectContext.acceptance.passing, 2);
+
+  const isolatedUserTask = startTask({
+    workspace: syncWorkspace,
+    outcome: "Deliver a standalone architecture note.",
+    userRequest: "Deliver only the standalone architecture note.",
+    outcomeAuthority: "user",
+    acceptanceEvidence: [{ id: "NOTE", description: "The standalone architecture note is delivered." }],
+  }, resources);
+  const isolatedSummary = taskSummary({ taskId: isolatedUserTask.taskId });
+  assert.deepEqual(isolatedSummary.requirements.map((row) => row.id), ["NOTE"]);
+  assert.equal(isolatedSummary.progress.passing, 0);
+
   const stale = startTask({
     workspace,
     outcome: "Produce a bounded architecture review.",

@@ -56,7 +56,7 @@ git(["commit", "-qm", "fixture"]);
 
 const { normalizeRequestedModel, trustedPrimaryDecision } = require("./core/trusted-models");
 const { cleanupIsolatedWorkspace, prepareWorkspaceForContract, rollbackPrimaryWorkspace } = require("./core/workspace-isolation");
-const { createRestartHandoff, safeThreadId } = require("./core/restart-handoff");
+const { createRestartHandoff, safeResumeModel, safeThreadId } = require("./core/restart-handoff");
 const { jobDirectory } = require("./core/state-store");
 const { readJson, writeJson } = require("./core/utils");
 const { executeWorker } = require("./core/worker");
@@ -172,13 +172,16 @@ assert.equal(boundedResult.rolledBack, false);
 assert.deepEqual(boundedResult.outsidePaths, ["verify-trusted.js"]);
 assert.equal(fs.readFileSync(path.join(workspace, "verify-trusted.js"), "utf8"), "unrelated concurrent change\n");
 spawnSync("git", ["-C", workspace, "restore", "src/trusted.txt", "verify-trusted.js"]);
-const threadId = "019f580c-1318-72b0-a77d-19d4a47a936e";
+const threadId = "01234567-89ab-cdef-0123-456789abcdef";
 assert.equal(safeThreadId(threadId), threadId);
 assert.throws(() => safeThreadId("bad"), /valid Codex thread id/);
+assert.equal(safeResumeModel("gpt-5.6-luna"), "gpt-5.6-luna");
+assert.throws(() => safeResumeModel("gpt-5.6-luna --danger"), /exact safe model id/);
 const handoff = createRestartHandoff({
   userAuthorized: true,
   threadId,
   workspace,
+  resumeModel: "gpt-5.6-luna",
   outcome: "Ship the verified fixture",
   latestUserRequest: "Continue without asking me to restate context",
   priorities: ["finish acceptance evidence", "preserve the current task"],
@@ -187,6 +190,8 @@ const handoff = createRestartHandoff({
 });
 assert.equal(handoff.oneShot, true);
 assert.equal(handoff.restartState, "prepared");
+assert.equal(handoff.resumeModel, "gpt-5.6-luna");
+assert.match(handoff.resumePrompt, /Resume model: gpt-5\.6-luna/);
 assert.equal(handoff.restartLog.length, 1);
 assert.deepEqual(handoff.refreshPluginIds, ["ai-mobile@ai-mobile"]);
 assert.equal(fs.existsSync(handoff.file), true);
@@ -196,13 +201,24 @@ const dry = JSON.parse(dryRun.stdout);
 assert.equal(dry.OneShot, true);
 assert.equal(dry.Recurring, false);
 assert.equal(dry.OpensProviderUi, false);
-assert.deepEqual(dry.Arguments.slice(0, 4), ["-C", workspace, "exec", "resume"]);
+assert.deepEqual(dry.Arguments.slice(0, 6), ["-C", workspace, "exec", "resume", "-m", "gpt-5.6-luna"]);
+assert.equal(dry.Arguments[6], threadId);
+assert.equal(dry.ResumeModel, "gpt-5.6-luna");
+assert.equal(dry.PackageName, "OpenAI.Codex");
+assert.deepEqual(dry.DesktopArguments, ["--open-project", workspace, `codex://threads/${threadId}`]);
+if (dry.DesktopResolved) {
+  assert.match(dry.DesktopExecutable, /OpenAI\.Codex_/i);
+  assert.doesNotMatch(dry.DesktopExecutable, /ChatGPT-Desktop/i);
+}
 assert.deepEqual(dry.CleanupPluginIds, ["ai-mobile@personal"]);
 assert.deepEqual(dry.RefreshPluginIds, ["ai-mobile@ai-mobile"]);
 const restartSource = fs.readFileSync(path.join(__dirname, "restart-codex-handoff.ps1"), "utf8");
 assert.equal(restartSource.includes("The restart handoff was already consumed"), true);
 assert.equal(restartSource.includes("$childArgumentLine"), true);
 assert.equal(restartSource.includes("$appArgumentLine"), true);
+assert.equal(restartSource.includes('Get-AppxPackage -Name "OpenAI.Codex"'), true);
+assert.equal(restartSource.includes('--open-project "{0}" "{1}"'), true);
+assert.equal(restartSource.includes('app "{0}"'), false);
 assert.equal(restartSource.includes("Save-RestartState -State \"failed\""), true);
 assert.equal(restartSource.includes("No running OpenAI.Codex desktop process was found"), true);
 assert.equal(restartSource.includes("codex plugin remove"), true);

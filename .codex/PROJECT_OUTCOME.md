@@ -1,7 +1,7 @@
 # Project Outcome
 
-State: complete
-Updated: 2026-07-18T00:21:17Z
+State: active
+Updated: 2026-07-18T03:43:30.4046357Z
 
 ## North Star
 
@@ -26,6 +26,8 @@ AI Mobile must make current Codex and available local AI CLIs work as one effici
 - Exact Claude Fable 5 and Sonnet 5 workers may edit a clean, explicitly bounded primary workspace under the user's saved trust policy; other writers remain isolated, and trusted work is mechanically verified without a second model review.
 - Codex and Claude Code install AI Mobile from the same repository and execute the same versioned MCP runtime instead of separate copied implementations.
 - A required Codex upgrade can cross the restart boundary through one explicit, durable, one-shot resume handoff without asking the user to restate the project.
+- A restart targets only the installed `OpenAI.Codex` package, reopens the exact workspace and thread, and resumes with the requested Codex model without invoking an installer-capable launcher or Classic ChatGPT.
+- A durable task whose outcome matches its project contract refreshes requirement status and evidence from that authoritative contract, without creating a duplicate task or importing evidence into an unrelated explicit outcome.
 
 ## User Intent
 
@@ -76,6 +78,12 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - A production-project field test exposed that imported blocked requirements lose their owner, recovery trigger, and recovery action; start-task also reports provider availability without an explicit use/non-use decision, allowing Codex to stop after diagnosis.
 - AI Mobile 1.1.1 now preserves executable blockers, emits same-turn execution and reasoned resource reports, passes 11 deterministic suites and both scanner profiles at 100, and passes an installed production-project field test.
 - AI Mobile 1.1.3 adds exact Fable 5 and Sonnet 5 trusted-primary execution, mechanical verification without lower-tier model review, private policy controls, shared Codex/Claude installation, and authorized one-shot Codex restart continuity.
+- The prior restart-continuity proof was invalidated after a real restart invoked installer-capable `codex app` and failed to guarantee the exact desktop package, model, and thread.
+- A the existing production project field run exposed a second gap: durable task requirements could remain at 0/5 while the matching project acceptance contract reported 3/5, because supplied requirements overrode authoritative project evidence and summary did not refresh it.
+- AI Mobile 1.1.6 now targets only the exact `OpenAI.Codex` package, carries an exact resume model, and reopens the requested workspace and thread deep link without using `codex app` or Classic ChatGPT.
+- Acceptance fingerprints now refresh stale matching tasks only when the project contract changes, preserving newer task evidence when the project file is unchanged and isolating explicit unrelated outcomes.
+- All 14 release suites pass; Scanner 2.0.1114 default, public, strict, and full scan gates score 100 with zero findings. Standalone verify has only its documented local-stdio safety skip, covered by the 46-assertion runtime self-test.
+- The real same-thread Luna restart remains the only open user-visible release gate.
 
 ## Context Pointers
 
@@ -101,6 +109,7 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - Store runtime state under `%LOCALAPPDATA%\AI Mobile\v1`, never in the managed workspace.
 - CLI is automatic; UI fallback is explicit and user initiated.
 - Recover intent from bounded project contracts and the latest user request; never add an unbounded manager loop or hidden model call to interpret it.
+- Restart only the exact installed `OpenAI.Codex` package and reopen with the supported project and thread deep-link arguments; never use installer-capable `codex app` for continuity.
 
 ## Failure Memory
 
@@ -109,13 +118,15 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - Rejected delegation or passive capacity discovery is a planning event, not a stopping point; preserve executable recovery metadata and start the owned same-turn action.
 - Worker activity, polling, process health, and review chains are not outcome progress and may cost more than direct work.
 - Resource and worktree limits must remain machine-wide and bounded while the outcome-recovery layer changes.
+- A dry-run command is not proof that a desktop restart targets the correct package, thread, and model.
+- Stored task requirements must not override newer evidence in a matching authoritative project acceptance contract.
 
 ## Current Slice
 
-- Acceptance ID: complete
-- Goal: All required v1.1.3 acceptance requirements pass.
-- Evidence: `.codex/ACCEPTANCE.json` plus the full release, installation, and scanner gates.
+- Acceptance ID: RESTART_CONTINUITY
+- Goal: Prove exact-package Codex restart, same-thread Luna resume, and authoritative task-state synchronization.
+- Evidence: deterministic restart and task-sync regressions plus one real same-thread restart and the existing production project reconciliation.
 
 ## Next
 
-Commit and publish v1.1.3, then use the one-shot handoff when a live Codex task actually requires the new runtime to continue across restart.
+Implement and verify the exact-package restart and task-state synchronization, publish the release, then execute one authorized same-thread Luna restart and reconcile the existing the existing production project task.

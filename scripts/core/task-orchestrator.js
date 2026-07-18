@@ -161,6 +161,9 @@ function highestValueReadyProject(portfolio) {
 }
 
 function requirementsForStart(args, context, defaultLevel) {
+  const hasSuppliedAcceptance = Array.isArray(args.acceptanceEvidence) && args.acceptanceEvidence.length > 0;
+  const projectOutcomeMatches = context.projectOutcome && outcomeKey(args.resolvedOutcome || args.outcome) === outcomeKey(context.projectOutcome);
+  if (context.requirements.length && args.outcomeAuthority !== "user" && (projectOutcomeMatches || !hasSuppliedAcceptance)) return requirementRows(context.requirements, defaultLevel);
   if (Array.isArray(args.acceptanceEvidence) && args.acceptanceEvidence.length) {
     return requirementRows(args.acceptanceEvidence, defaultLevel);
   }
@@ -192,7 +195,18 @@ function requirementKey(row) {
   return String(row?.description || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function mergeRequirements(existing, proposed) {
+function outcomeKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function mergeRequirements(existing, proposed, options = {}) {
+  if (options.authoritative === true) {
+    return (proposed || []).map((row) => ({
+      ...row,
+      evidence: [...(row.evidence || [])].slice(-10),
+      blocker: row.status === "blocked" ? (row.blocker || null) : null,
+    }));
+  }
   const current = new Map((existing || []).map((row) => [requirementKey(row), row]));
   return (proposed || []).map((row) => {
     const match = current.get(requirementKey(row));
@@ -384,7 +398,7 @@ function startSingleTask(args, resources, portfolioContext = {}) {
   const outcomeReconciliation = resolveOutcome(args, context);
   const outcome = outcomeReconciliation.resolvedOutcome;
   const defaultLevel = EVIDENCE_RANK[args.minimumEvidenceLevel] === undefined ? "end-to-end" : args.minimumEvidenceLevel;
-  const requirements = requirementsForStart(args, context, defaultLevel);
+  const requirements = requirementsForStart({ ...args, resolvedOutcome: outcome }, context, defaultLevel);
   const workGraph = graphForStart(args, context, requirements);
   const record = createTaskRecord({
     workspace: args.workspace,
@@ -392,6 +406,7 @@ function startSingleTask(args, resources, portfolioContext = {}) {
     requestedOutcome: outcomeReconciliation.requestedOutcome || outcome,
     latestUserRequest: outcomeReconciliation.latestUserRequest,
     outcomeReconciliation,
+    outcomeAuthority: args.outcomeAuthority === "user" ? "user" : "auto",
     projectContext: compactProjectContext(context),
     contractVersion: 1,
     requirements,
@@ -526,8 +541,12 @@ function reconcileSingleTask(args, portfolioReference = null) {
   const task = readTask(args.taskId);
   const context = discoverProjectContext(task.workspace);
   const outcomeInput = Object.prototype.hasOwnProperty.call(args, "outcome") ? args.outcome : task.outcome;
+  const latestCorrection = String(args.userRequest || args.latestUserRequest || "").trim();
+  const latestRequestChanged = Boolean(latestCorrection && latestCorrection !== String(task.latestUserRequest || "").trim());
+  const outcomeAuthority = args.outcomeAuthority || (latestRequestChanged ? "auto" : task.outcomeAuthority || "auto");
   const resolution = resolveOutcome({
     ...args,
+    outcomeAuthority,
     outcome: outcomeInput,
     userRequest: args.userRequest || args.latestUserRequest || task.latestUserRequest,
   }, context);
@@ -535,10 +554,13 @@ function reconcileSingleTask(args, portfolioReference = null) {
   const hasAcceptance = Array.isArray(args.acceptanceEvidence) && args.acceptanceEvidence.length > 0;
   const outcomeChanged = resolution.resolvedOutcome !== task.outcome;
   const refreshFromProject = args.refreshProjectContext === true || outcomeChanged;
+  const projectOutcomeMatches = context.projectOutcome && outcomeKey(resolution.resolvedOutcome) === outcomeKey(context.projectOutcome);
+  const projectRequirementsAuthoritative = context.requirements.length > 0 && projectOutcomeMatches && outcomeAuthority !== "user" && (refreshFromProject || hasAcceptance);
   let proposedRequirements = task.requirements;
-  if (hasAcceptance) proposedRequirements = requirementRows(args.acceptanceEvidence, defaultLevel);
+  if (projectRequirementsAuthoritative) proposedRequirements = requirementRows(context.requirements, defaultLevel);
+  else if (hasAcceptance) proposedRequirements = requirementRows(args.acceptanceEvidence, defaultLevel);
   else if (refreshFromProject && context.requirements.length) proposedRequirements = requirementRows(context.requirements, defaultLevel);
-  const requirements = mergeRequirements(task.requirements, proposedRequirements);
+  const requirements = mergeRequirements(task.requirements, proposedRequirements, { authoritative: projectRequirementsAuthoritative });
 
   const explicitGraph = Array.isArray(args.workGraph);
   const workGraph = explicitGraph
@@ -612,6 +634,7 @@ function reconcileSingleTask(args, portfolioReference = null) {
     requestedOutcome: resolution.requestedOutcome || resolution.resolvedOutcome,
     latestUserRequest: resolution.latestUserRequest,
     outcomeReconciliation: { ...resolution, contractChanged: materialChange },
+    outcomeAuthority,
     projectContext: compactProjectContext(context),
     contractVersion: Number(current.contractVersion || 1) + (materialChange ? 1 : 0),
     revisedAt: materialChange ? utcNow() : current.revisedAt,
@@ -709,7 +732,7 @@ function workerTaskContext(task) {
   };
 }
 function dispatchSingleRound(args, resources, histories, createJob) {
-  const task = readTask(args.taskId);
+  const task = synchronizeTaskWithProject(readTask(args.taskId));
   if (task.state !== "active") throw new Error(`Task ${task.taskId} is ${task.state}; it cannot dispatch another round.`);
   const previousRoundRef = (task.rounds || []).at(-1);
   if (previousRoundRef) {
@@ -1110,14 +1133,75 @@ function recordEvidence(args) {
   return taskSummary({ portfolioId: portfolio.portfolioId });
 }
 
+function synchronizeTaskWithProject(task) {
+  const context = discoverProjectContext(task.workspace);
+  if (
+    task.outcomeAuthority === "user"
+    || !context.projectOutcome
+    || !context.requirements.length
+    || outcomeKey(task.outcome) !== outcomeKey(context.projectOutcome)
+  ) return task;
+
+  const requirements = requirementRows(context.requirements);
+  const projectContext = compactProjectContext(context);
+  const previousFingerprint = String(task.projectContext?.acceptance?.fingerprint || "");
+  const currentFingerprint = String(projectContext.acceptance?.fingerprint || "");
+  if (previousFingerprint && previousFingerprint === currentFingerprint) return task;
+  const requirementsChanged = JSON.stringify(task.requirements || []) !== JSON.stringify(requirements);
+  const contextChanged = JSON.stringify(task.projectContext || null) !== JSON.stringify(projectContext);
+  if (!requirementsChanged && !contextChanged) return task;
+
+  const workGraph = normalizeWorkGraph(context.workGraph.length
+    ? context.workGraph
+    : defaultWorkGraph(requirements, context.currentSliceRequirementId));
+  const currentCodex = codexPlan({
+    currentCodexModel: task.currentCodex?.model,
+    codexReservePercent: task.currentCodex?.reservePercent,
+  }, requirements, workGraph);
+  const unresolved = requirements.some((item) => item.required !== false && item.status !== "passing");
+  const active = activeRound(task);
+
+  return updateTask(task.taskId, (current) => ({
+    ...current,
+    state: current.state === "completed" && unresolved ? "active" : current.state,
+    completedAt: current.state === "completed" && unresolved ? null : current.completedAt,
+    projectContext,
+    requirements,
+    evidence: requirements.flatMap((requirement) => (requirement.evidence || []).map((evidence) => ({ requirementId: requirement.id, ...evidence }))).slice(-50),
+    workGraph,
+    currentCodex,
+    contractVersion: Number(current.contractVersion || 1) + 1,
+    revisedAt: utcNow(),
+    outcomeReconciliation: {
+      ...(current.outcomeReconciliation || {}),
+      authoritativeEvidenceRefreshed: true,
+      source: "project-contract",
+    },
+    authoritativeSync: {
+      syncedAt: utcNow(),
+      source: ".codex/ACCEPTANCE.json",
+      activeRoundNeedsReconciliation: Boolean(active),
+    },
+  }));
+}
+
 function singleTaskSummary(task) {
   const lastRoundRef = (task.rounds || []).at(-1);
   const lastRound = lastRoundRef ? readRound(task.taskId, lastRoundRef.roundId) : null;
   const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, required: item.required !== false, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length, blocker: item.blocker || null }));
+  const execution = executionContract(task);
+  const workState = task.state === "completed"
+    ? "completed"
+    : lastRound?.state === "running"
+      ? "workers-running"
+      : execution.mustStartNow
+        ? "ready-for-current-codex"
+        : execution.status || "blocked";
   return {
     taskId: task.taskId,
     projectId: task.projectId || null,
     state: task.state,
+    workState,
     contractVersion: Number(task.contractVersion || 1),
     outcome: task.outcome,
     outcomeReconciliation: task.outcomeReconciliation || null,
@@ -1128,7 +1212,7 @@ function singleTaskSummary(task) {
     requirements,
     currentCodex: task.currentCodex,
     nextPlan: nextPlanForTask(task),
-    execution: executionContract(task),
+    execution,
     resources: resourceReport(task, lastRound?.jobs || [], lastRound?.rejected || []),
     latestRound: lastRound ? { roundId: lastRound.roundId, state: lastRound.state, workers: (lastRound.jobs || []).map((job) => ({ jobId: job.jobId, provider: job.provider, model: job.model, goal: job.goal })) } : null,
     completionAllowed: task.state === "completed",
@@ -1136,9 +1220,9 @@ function singleTaskSummary(task) {
 }
 
 function taskSummary(args) {
-  if (!args.portfolioId) return singleTaskSummary(readTask(args.taskId));
+  if (!args.portfolioId) return singleTaskSummary(synchronizeTaskWithProject(readTask(args.taskId)));
   const portfolio = readPortfolio(args.portfolioId);
-  const projects = portfolio.projects.map((project) => singleTaskSummary(readTask(project.taskId)));
+  const projects = portfolio.projects.map((project) => singleTaskSummary(synchronizeTaskWithProject(readTask(project.taskId))));
   const latestRef = (portfolio.rounds || []).at(-1);
   const latest = latestRef ? readPortfolioRound(portfolio.portfolioId, latestRef.roundId) : null;
   return {
@@ -1157,7 +1241,7 @@ function taskSummary(args) {
 }
 
 function completeSingleTask(taskId) {
-  const task = readTask(taskId);
+  const task = synchronizeTaskWithProject(readTask(taskId));
   const missing = task.requirements.filter((item) => item.required && item.status !== "passing").map((item) => ({ id: item.id, description: item.description, status: item.status }));
   if (missing.length) return { taskId: task.taskId, state: task.state, completionAllowed: false, missing, rule: "Worker completion, process health, and activity cannot replace required acceptance evidence." };
   if (task.state === "completed") return { taskId: task.taskId, state: task.state, completionAllowed: true, completedAt: task.completedAt, alreadyCompleted: true };

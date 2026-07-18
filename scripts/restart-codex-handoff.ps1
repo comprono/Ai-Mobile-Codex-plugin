@@ -36,6 +36,53 @@ function Save-RestartState {
     $script:handoff | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
     Move-Item -LiteralPath $temporaryPath -Destination $script:handoffPath -Force
 }
+
+function Resolve-CodexDesktopPackage {
+    param([switch]$AllowUnavailable)
+
+    $packages = @(Get-AppxPackage -Name "OpenAI.Codex" -ErrorAction SilentlyContinue | Sort-Object Version -Descending)
+    if ($packages.Count -eq 0) {
+        if ($AllowUnavailable) {
+            return [pscustomobject]@{
+                Resolved = $false
+                PackageName = "OpenAI.Codex"
+                PackageFullName = ""
+                PackageFamilyName = ""
+                InstallLocation = ""
+                ApplicationId = "App"
+                Executable = ""
+            }
+        }
+        throw "The installed OpenAI.Codex desktop package was not found. Classic ChatGPT will not be used as a fallback."
+    }
+
+    $package = $packages[0]
+    $manifest = Get-AppxPackageManifest -Package $package -ErrorAction Stop
+    $application = @($manifest.Package.Applications.Application | Where-Object { [string]$_.Id -eq "App" })[0]
+    if (-not $application -or [string]::IsNullOrWhiteSpace([string]$application.Executable)) {
+        throw "OpenAI.Codex package application App has no declared executable."
+    }
+
+    $installLocation = [IO.Path]::GetFullPath([string]$package.InstallLocation)
+    $executable = [IO.Path]::GetFullPath((Join-Path $installLocation ([string]$application.Executable)))
+    $installPrefix = $installLocation.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $executable.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "OpenAI.Codex declared executable resolves outside its package directory."
+    }
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+        throw "OpenAI.Codex declared executable does not exist: $executable"
+    }
+
+    return [pscustomobject]@{
+        Resolved = $true
+        PackageName = [string]$package.Name
+        PackageFullName = [string]$package.PackageFullName
+        PackageFamilyName = [string]$package.PackageFamilyName
+        InstallLocation = $installLocation
+        ApplicationId = [string]$application.Id
+        Executable = $executable
+    }
+}
 if ($handoff.oneShot -ne $true -or $handoff.userAuthorized -ne $true) {
     throw "The restart handoff is not an authorized one-shot contract."
 }
@@ -49,20 +96,38 @@ $workspace = (Resolve-Path -LiteralPath ([string]$handoff.workspace)).Path
 if (-not [string]$handoff.resumePrompt) {
     throw "The restart handoff has no resume prompt."
 }
+$resumeModel = [string]$handoff.resumeModel
+if ($resumeModel -and $resumeModel -notmatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$") {
+    throw "The restart handoff has an invalid resume model id."
+}
+$isDryRun = $DryRun -or (-not $Schedule -and -not $Execute)
+$codexDesktopPackage = Resolve-CodexDesktopPackage -AllowUnavailable:$isDryRun
+$desktopArguments = @("--open-project", $workspace, "codex://threads/$([string]$handoff.threadId)")
 
-$codexArgs = @("-C", $workspace, "exec", "resume", [string]$handoff.threadId, [string]$handoff.resumePrompt)
+$codexArgs = @("-C", $workspace, "exec", "resume")
+if ($resumeModel) {
+    $codexArgs += @("-m", $resumeModel)
+}
+$codexArgs += @([string]$handoff.threadId, [string]$handoff.resumePrompt)
 $refreshPluginIds = @($handoff.refreshPluginIds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 if ($refreshPluginIds.Count -eq 0) {
     $refreshPluginIds = @("ai-mobile@ai-mobile")
 }
-if ($DryRun -or (-not $Schedule -and -not $Execute)) {
+if ($isDryRun) {
     [pscustomobject]@{
         Valid = $true
         OneShot = $true
         HandoffFile = $handoffPath
         Command = "codex"
         Arguments = $codexArgs
+        ResumeModel = $resumeModel
+        PackageName = $codexDesktopPackage.PackageName
+        PackageFullName = $codexDesktopPackage.PackageFullName
+        DesktopResolved = $codexDesktopPackage.Resolved
+        DesktopExecutable = $codexDesktopPackage.Executable
+        DesktopArguments = $desktopArguments
         OpensProviderUi = $false
+        DryRunOpensUi = $false
         Recurring = $false
         CleanupPluginIds = @($handoff.cleanupPluginIds)
         RefreshPluginIds = @($refreshPluginIds)
@@ -90,9 +155,12 @@ if ($Schedule) {
 }
 
 Start-Sleep -Seconds $DelaySeconds
-Save-RestartState -State "stopping-codex" -Message "Locating the installed Codex desktop package processes."
+Save-RestartState -State "stopping-codex" -Message "Locating processes owned by the exact OpenAI.Codex package."
+$installPrefix = $codexDesktopPackage.InstallLocation.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 $codexProcesses = Get-CimInstance Win32_Process | Where-Object {
-    $_.ExecutablePath -like "*\OpenAI.Codex_*" -and
+    $processPath = [string]$_.ExecutablePath
+    $processPath -and
+    $processPath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -and
     ($_.Name -ieq "ChatGPT.exe" -or $_.Name -ieq "codex-code-mode-host.exe")
 }
 if (@($codexProcesses).Count -eq 0) {
@@ -149,10 +217,10 @@ try {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message
 } finally {
-    $codexPath = (Get-Command codex -ErrorAction Stop).Source
-    $appArgumentLine = 'app "{0}"' -f $workspace.Replace('"', '\"')
-    Start-Process -FilePath $codexPath -ArgumentList $appArgumentLine
-    Save-RestartState -State $(if ($caughtError) { "reopened-after-failure" } else { "reopened" }) -Message "Codex desktop reopen command was issued for the target workspace."
+    $threadDeepLink = "codex://threads/$([string]$handoff.threadId)"
+    $appArgumentLine = '--open-project "{0}" "{1}"' -f $workspace.Replace('"', '\"'), $threadDeepLink
+    Start-Process -FilePath $codexDesktopPackage.Executable -ArgumentList $appArgumentLine
+    Save-RestartState -State $(if ($caughtError) { "reopened-after-failure" } else { "reopened" }) -Message "The exact OpenAI.Codex package was reopened for the target workspace and thread."
 }
 if ($caughtError) {
     throw $caughtError
