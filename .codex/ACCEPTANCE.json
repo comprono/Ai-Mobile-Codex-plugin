@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-18T03:43:14.8425206Z",
-  "project_state": "active",
-  "current_slice_requirement_id": "RESTART_CONTINUITY",
+  "updated_utc": "2026-07-18T04:02:00Z",
+  "project_state": "complete",
+  "current_slice_requirement_id": null,
   "requirements": [
     {
       "id": "TRUSTED_PRIMARY_WRITERS",
@@ -50,14 +50,21 @@
       "id": "RESTART_CONTINUITY",
       "description": "A required restart targets only the installed OpenAI.Codex desktop package, resumes the exact thread with the requested Codex model, and never invokes Classic ChatGPT or an installer-capable generic launcher.",
       "required": true,
-      "status": "failing",
+      "status": "passing",
       "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
         "Distinguish the installed OpenAI.Codex package from OpenAI.ChatGPT-Desktop and resolve only its declared application executable.",
         "Dry-run one handoff and prove the exact thread, workspace, gpt-5.6-luna model, OpenAI.Codex executable, project argument, and thread deep link without invoking codex app.",
         "Perform one authorized restart and prove this same task resumes on GPT-5.6 Luna before the existing production project continuation starts."
       ],
-      "evidence": [],
+      "evidence": [
+        {
+          "level": "user-visible",
+          "ref": "authorized one-shot restart handoff; codex plugin list --json; resumed exact Codex thread",
+          "summary": "The authorized one-shot handoff consumed for the installed OpenAI.Codex desktop package, resumed the exact thread on gpt-5.6-luna, and loaded ai-mobile@ai-mobile 1.1.6 from this repository. Classic ChatGPT was not selected or launched.",
+          "verified_utc": "2026-07-18T04:02:00Z"
+        }
+      ],
       "blocker": null
     },
     {

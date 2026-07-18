@@ -196,7 +196,12 @@ function requirementKey(row) {
 }
 
 function outcomeKey(value) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return String(value || "")
+    .trim()
+    .replace(/^(?:[-*]\s*)?outcome:\s*/i, "")
+    .replace(/\s+(?:[-*]\s*)?why(?: it matters)?:.*$/i, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function mergeRequirements(existing, proposed, options = {}) {

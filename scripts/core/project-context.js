@@ -148,7 +148,7 @@ function discoverProjectContext(workspaceValue) {
   const manifest = manifestFile ? readJsonBounded(manifestFile, 256 * 1024) : null;
   const northStar = compactSection(markdownSection(outcomeMarkdown, "North Star"));
   const userIntent = compactSection(markdownSection(outcomeMarkdown, "User Intent"), 3000);
-  const projectOutcome = northStar || String(manifest?.outcome || "").trim().slice(0, 6000);
+  const projectOutcome = canonicalNorthStar(northStar || String(manifest?.outcome || ""));
   const acceptanceValues = Array.isArray(acceptance?.requirements) && acceptance.requirements.length
     ? acceptance.requirements
     : Array.isArray(manifest?.acceptanceEvidence)
@@ -178,6 +178,13 @@ function discoverProjectContext(workspaceValue) {
 function methodOnly(value) {
   const text = String(value || "").trim();
   return Boolean(text && METHOD_TERMS.test(text) && !OPERATIONAL_TERMS.test(text));
+}
+
+function canonicalNorthStar(value) {
+  const section = String(value || "").trim();
+  if (!section) return "";
+  const match = section.match(/(?:^|\s)(?:[-*]\s*)?outcome:\s*(.+?)(?=\s+(?:[-*]\s*)?why(?: it matters)?:|$)/i);
+  return (match ? match[1] : section).trim().slice(0, 6000);
 }
 
 function resolveOutcome(args, context) {

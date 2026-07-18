@@ -1,7 +1,7 @@
 # Project Outcome
 
-State: active
-Updated: 2026-07-18T03:43:30.4046357Z
+State: complete
+Updated: 2026-07-18T04:02:00Z
 
 ## North Star
 
@@ -83,7 +83,7 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 - AI Mobile 1.1.6 now targets only the exact `OpenAI.Codex` package, carries an exact resume model, and reopens the requested workspace and thread deep link without using `codex app` or Classic ChatGPT.
 - Acceptance fingerprints now refresh stale matching tasks only when the project contract changes, preserving newer task evidence when the project file is unchanged and isolating explicit unrelated outcomes.
 - All 14 release suites pass; Scanner 2.0.1114 default, public, strict, and full scan gates score 100 with zero findings. Standalone verify has only its documented local-stdio safety skip, covered by the 46-assertion runtime self-test.
-- The real same-thread Luna restart remains the only open user-visible release gate.
+- The authorized one-shot restart consumed for the installed OpenAI.Codex package, resumed the exact thread on gpt-5.6-luna, and loaded ai-mobile@ai-mobile 1.1.6 without selecting Classic ChatGPT. Evidence is recorded in `.codex/ACCEPTANCE.json`, verified 2026-07-18.
 
 ## Context Pointers
 
@@ -123,10 +123,10 @@ Build the plugin properly in one coherent v1 replacement. Preserve useful provid
 
 ## Current Slice
 
-- Acceptance ID: RESTART_CONTINUITY
-- Goal: Prove exact-package Codex restart, same-thread Luna resume, and authoritative task-state synchronization.
-- Evidence: deterministic restart and task-sync regressions plus one real same-thread restart and the existing production project reconciliation.
+- Acceptance ID: none
+- Goal: Maintain the complete AI Mobile 1.1.6 release contract.
+- Evidence: all 16 required acceptance requirements pass, including exact-package restart continuity and authoritative task-state synchronization.
 
 ## Next
 
-Implement and verify the exact-package restart and task-state synchronization, publish the release, then execute one authorized same-thread Luna restart and reconcile the existing the existing production project task.
+Maintain the finite AI Mobile 1.1.6 release. Future changes must reopen the affected acceptance requirement before publication.
