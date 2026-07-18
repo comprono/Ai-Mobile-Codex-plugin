@@ -31,6 +31,9 @@ function Save-ResumeState {
     if ($State -eq "resume-complete") {
         $script:handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue ([bool]$script:handoff.resumeModel) -Force
     }
+    if ($State -eq "resume-awaiting-visible-turn") {
+        $script:handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue $false -Force
+    }
     if ($ErrorText) {
         $script:handoff | Add-Member -NotePropertyName restartError -NotePropertyValue $ErrorText -Force
     }
@@ -55,21 +58,7 @@ if (-not [string]$handoff.resumePrompt) {
     throw "The restart handoff has no resume prompt."
 }
 
-$codexArgs = @("-C", $workspace, "exec", "resume")
-if ($resumeModel) {
-    $codexArgs += @("-m", $resumeModel)
-}
-$codexArgs += @([string]$handoff.threadId, [string]$handoff.resumePrompt)
-
-try {
-    Save-ResumeState -State "resume-running" -Message "The detached exact-thread Codex continuation is running."
-    & codex @codexArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Codex resume failed with exit code $LASTEXITCODE."
-    }
-    $handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue ([bool]$resumeModel) -Force
-    Save-ResumeState -State "resume-complete" -Message "The detached exact-thread Codex continuation completed successfully."
-} catch {
-    Save-ResumeState -State "resume-failed" -Message "The Codex desktop remains open, but the detached continuation failed." -ErrorText $_.Exception.Message
-    throw
-}
+# On Windows, `codex exec resume` creates a separate CLI run. It neither injects
+# a turn into the Desktop task nor provides visible continuation evidence. Do not
+# spend a second quota pool while claiming that the reopened Desktop task started.
+Save-ResumeState -State "resume-awaiting-visible-turn" -Message "The exact Codex Desktop task is open. Windows currently has no supported desktop-task turn injection, so no hidden CLI continuation was started." -ErrorText "Desktop task continuation requires a user-visible turn; Codex app-server daemon control is Unix-only and desktop UI automation is unsupported."

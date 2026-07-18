@@ -201,18 +201,17 @@ const dry = JSON.parse(dryRun.stdout);
 assert.equal(dry.OneShot, true);
 assert.equal(dry.Recurring, false);
 assert.equal(dry.OpensProviderUi, false);
-assert.equal(dry.ResumeSurface, "OpenAI.Codex desktop deep link");
+assert.equal(dry.ResumeSurface, "OpenAI.Codex desktop deep link (visible task only)");
 assert.equal(dry.RequestedResumeModel, "gpt-5.6-luna");
 assert.equal(dry.ModelSwitchVerified, false);
 assert.equal(dry.DesktopLaunchBeforeResume, true);
-assert.equal(dry.ResumeDetached, true);
+assert.equal(dry.ResumeDetached, false);
 assert.equal(dry.DesktopLaunchMethod, "shell:AppsFolder activation plus codex protocol deep link");
 assert.match(dry.DesktopAppUserModelId, /!App$/);
 assert.match(dry.DesktopAppsFolderTarget, /^shell:AppsFolder\\/i);
 assert.equal(dry.ThreadDeepLink, `codex://threads/${threadId}`);
 assert.match(dry.ResumeHelper, /resume-codex-thread\.ps1$/i);
-assert.deepEqual(dry.ResumeArguments.slice(0, 6), ["-C", workspace, "exec", "resume", "-m", "gpt-5.6-luna"]);
-assert.equal(dry.ResumeArguments[6], threadId);
+assert.deepEqual(dry.ResumeArguments, []);
 assert.equal(dry.PackageName, "OpenAI.Codex");
 assert.deepEqual(dry.DesktopArguments, ["--open-project", workspace, `codex://threads/${threadId}`]);
 if (dry.DesktopResolved) {
@@ -226,7 +225,7 @@ fs.mkdirSync(fakeCodexBin, { recursive: true });
 fs.writeFileSync(path.join(fakeCodexBin, "codex.cmd"), "@echo off\r\nexit /b 0\r\n", "utf8");
 const consumedHandoff = JSON.parse(fs.readFileSync(handoff.file, "utf8"));
 consumedHandoff.consumedAt = new Date().toISOString();
-consumedHandoff.restartState = "reopened-resuming";
+consumedHandoff.restartState = "reopened-awaiting-visible-turn";
 fs.writeFileSync(handoff.file, JSON.stringify(consumedHandoff, null, 2) + "\n", "utf8");
 const resumeRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "resume-codex-thread.ps1"), "-HandoffFile", handoff.file, "-DelaySeconds", "0"], {
   encoding: "utf8",
@@ -234,8 +233,8 @@ const resumeRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "By
 });
 assert.equal(resumeRun.status, 0, resumeRun.stderr);
 const completedHandoff = JSON.parse(fs.readFileSync(handoff.file, "utf8"));
-assert.equal(completedHandoff.restartState, "resume-complete");
-assert.equal(completedHandoff.modelSwitchVerified, true);
+assert.equal(completedHandoff.restartState, "resume-awaiting-visible-turn");
+assert.equal(completedHandoff.modelSwitchVerified, false);
 assert.equal(completedHandoff.resumeModel, "gpt-5.6-luna");
 const restartSource = fs.readFileSync(path.join(__dirname, "restart-codex-handoff.ps1"), "utf8");
 assert.equal(restartSource.includes("The restart handoff was already consumed"), true);
@@ -254,9 +253,9 @@ assert.equal(restartSource.includes("verifiedDesktopProcessIds"), true);
 assert.equal(restartSource.includes("resume-codex-thread.ps1"), true);
 assert.equal(restartSource.includes("& codex @codexArgs"), false);
 const resumeSource = fs.readFileSync(path.join(__dirname, "resume-codex-thread.ps1"), "utf8");
-assert.equal(resumeSource.includes("& codex @codexArgs"), true);
-assert.equal(resumeSource.includes("resume-running"), true);
-assert.equal(resumeSource.includes("resume-complete"), true);
+assert.equal(resumeSource.includes("& codex @codexArgs"), false);
+assert.equal(resumeSource.includes("resume-awaiting-visible-turn"), true);
+assert.equal(resumeSource.includes("separate CLI run"), true);
 
 fs.rmSync(root, { recursive: true, force: true });
 process.stdout.write(JSON.stringify({

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.9 - 2026-07-18
+
+- Removed the misleading Windows detached `codex exec resume` path: it created an independent CLI run and could not post a visible turn into the reopened Desktop task.
+- Restart handoffs now reopen only the exact OpenAI.Codex app and task, then record `resume-awaiting-visible-turn` instead of consuming quota in an invisible session.
+- Added regression coverage that forbids restoring detached CLI continuation behavior.
 ## 1.1.8 - 2026-07-18
 
 - Replaced direct WindowsApps executable launch with supported shell:AppsFolder package activation followed by the exact Codex thread deep link.

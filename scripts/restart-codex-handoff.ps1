@@ -142,13 +142,13 @@ if ($isDryRun) {
         Valid = $true
         OneShot = $true
         HandoffFile = $handoffPath
-        ResumeSurface = "OpenAI.Codex desktop deep link"
+        ResumeSurface = "OpenAI.Codex desktop deep link (visible task only)"
         RequestedResumeModel = $resumeModel
         ModelSwitchVerified = $false
         ResumeHelper = (Join-Path $PSScriptRoot "resume-codex-thread.ps1")
-        ResumeArguments = @("-C", $workspace, "exec", "resume") + $(if ($resumeModel) { @("-m", $resumeModel) } else { @() }) + @([string]$handoff.threadId, [string]$handoff.resumePrompt)
+        ResumeArguments = @()
         DesktopLaunchBeforeResume = $true
-        ResumeDetached = $true
+        ResumeDetached = $false
         PackageName = $codexDesktopPackage.PackageName
         PackageFullName = $codexDesktopPackage.PackageFullName
         DesktopResolved = $codexDesktopPackage.Resolved
@@ -277,7 +277,7 @@ try {
     $resumeProcess = Start-Process -FilePath $powershellPath -ArgumentList $resumeArgumentLine -WindowStyle Hidden -PassThru
     $handoff | Add-Member -NotePropertyName resumeProcessId -NotePropertyValue $resumeProcess.Id -Force
     $handoff | Add-Member -NotePropertyName resumeStartedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "reopened-resuming" -Message "Codex desktop is open; the exact Luna thread continuation is running independently."
+    Save-RestartState -State "reopened-awaiting-visible-turn" -Message "Codex desktop is open on the exact task. No hidden CLI continuation will be started; a visible user turn is required on Windows."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message
