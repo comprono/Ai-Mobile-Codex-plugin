@@ -49,6 +49,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
   const transitions = [];
   const failures = [];
   const failedProviders = new Set();
+  const executionRoundIds = new Set();
   let roundsStarted = 0;
   let noProgressCount = 0;
   let lastProgressSignature = progressSignature(taskSummary({ taskId }));
@@ -75,6 +76,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
         waitSeconds: latest.state === "running" ? Math.min(210, remainingSeconds) : 0,
         detail: "full",
       });
+      const belongsToCurrentExecution = executionRoundIds.has(latest.roundId);
       if (collected.state === "running") {
         transitions.push({ type: "waiting", roundId: latest.roundId, state: "running" });
         stopReason = "continuation-required";
@@ -97,7 +99,9 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
         })),
       });
       failures.push(...terminalFailures.map(compactFailure));
-      for (const failure of terminalFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
+      if (belongsToCurrentExecution) {
+        for (const failure of terminalFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
+      }
 
       const needsIntegration = collected.state === "ready-for-integration" && terminalCompleted.length > 0;
       if (needsIntegration) {
@@ -109,7 +113,9 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
           blocker: row.blocker,
         }));
         failures.push(...integrationFailures);
-        for (const failure of integrationFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
+        if (belongsToCurrentExecution) {
+          for (const failure of integrationFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
+        }
         transitions.push({
           type: "integrated",
           roundId: latest.roundId,
@@ -125,7 +131,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
       if (currentProgressSignature !== lastProgressSignature) {
         lastProgressSignature = currentProgressSignature;
         noProgressCount = 0;
-      } else {
+      } else if (belongsToCurrentExecution) {
         noProgressCount += 1;
       }
       if (noProgressCount >= noProgressLimit) {
@@ -174,6 +180,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
       },
     );
     roundsStarted += 1;
+    executionRoundIds.add(round.roundId);
     transitions.push({
       type: "dispatched",
       roundId: round.roundId,

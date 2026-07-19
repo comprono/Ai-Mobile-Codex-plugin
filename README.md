@@ -143,7 +143,8 @@ Existing host sessions keep the schema they loaded at startup. A schema or runti
 4. Immediately after refresh, the launcher reopens the exact OpenAI.Codex task so the desktop cannot remain hidden behind verification or worker execution.
 5. With that task visible, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once and must observe the expected runtimeVersion.
 6. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and invokes run-task-cycle exactly once.
-7. The detached coordinator continues finite worker, integration, and recovery transitions after the visible turn returns. Later explicit status requests use material-status once; the console never polls or creates another task.
+7. After the app-server persists that continuation, the same authorized upgrade handoff performs one finite package-owned OpenAI.Codex process reload and reopens the exact task. This clears the desktop renderer's stale task snapshot; it is never used during normal project execution.
+8. The detached coordinator continues finite worker, integration, and recovery transitions after the visible turn returns. Later explicit status requests use material-status once; the console never polls or creates another task.
 
 This path never uses codex exec resume, a duplicate task, a Goal, an automation, an LLM manager loop, or UI automation. Normal continuation does not restart the app. Today the private console preference is GPT-5.6 Luna at low effort; future models are selected by role and live evidence rather than a permanent product name.
 

@@ -11,6 +11,10 @@ const ALLOWED = new Set([
   "powershell", "powershell.exe", "pwsh", "pwsh.exe",
 ]);
 
+function verificationPlanningGuidance() {
+  return "Verification policy: use an allowlisted executable with argument arrays only. Never use inline code flags such as node -e, python -c, or PowerShell -Command. Prefer node <existing-or-expected-script>, python <existing-or-expected-script>, python -m unittest <module>, python -m json.tool <json-file>, or pytest <existing-or-expected-test>. Every directly named script must already exist or be listed in expectedFiles, and every new expected file must have an existing immediate parent directory.";
+}
+
 function normalizeCommands(value) {
   return (Array.isArray(value) ? value : []).slice(0, 8).map((entry, index) => ({
     name: String(entry?.name || `verification-${index + 1}`).slice(0, 80),
@@ -88,4 +92,4 @@ function runVerification(workspace, jobDir, commands) {
   return evidence;
 }
 
-module.exports = { normalizeCommands, runVerification, validateCommands };
+module.exports = { normalizeCommands, runVerification, validateCommands, verificationPlanningGuidance };

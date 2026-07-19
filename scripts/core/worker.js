@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { boundaryAllows, changedFingerprints, collectDiff, fingerprint, statusPaths } = require("./git-evidence");
 const { event, setStatus } = require("./job-store");
-const { runVerification } = require("./verification");
+const { runVerification, verificationPlanningGuidance } = require("./verification");
 const { clearInventoryCache } = require("./capacity");
 const { bounded, readJson, redact, safeWorkspace, utcNow, writeJson } = require("./utils");
 const { jobDirectory } = require("./state-store");
@@ -25,7 +25,7 @@ function promptFor(contract) {
   const codexPatchWriter = contract.provider === "codex" && contract.readOnly !== true && contract.skipModelReview !== true;
   const maxWords = Math.max(220, Math.min(1400, Math.floor((contract.maxWorkerOutputTokens || 1000) * 0.7)));
   const workPlanContract = contract.artifactKind === "work-plan"
-    ? 'Return exactly one JSON object and nothing else: no Markdown, code fences, commentary, or file URLs. Include every top-level key in this schema: {"outcome":"string","evidence":["string"],"checks":["string"],"blocker":"string","blockerOwner":"string","recoveryTrigger":"string","recoveryAction":"string","proposedWorkUnits":[{"goal":"string","relevantFiles":["relative/path"],"expectedFiles":["relative/path"],"acceptanceCriteria":["observable result"],"verificationCommands":[{"name":"string","command":"executable","args":["argument"],"timeoutSeconds":30}],"taskKind":"code|test|review|repository-scan","complexity":"small|medium|large","priority":100,"requiredCapabilities":["source","local-files","tests"]}]}. proposedWorkUnits must contain at most three exact dependency-ready units. Paths must be bounded and relative; expectedFiles cannot be root-wide. Verification commands must be structured objects, never shell strings. If no safe unit exists, return an empty proposedWorkUnits array and fill blocker, blockerOwner, recoveryTrigger, and recoveryAction.'
+    ? 'Return exactly one JSON object and nothing else: no Markdown, code fences, commentary, or file URLs. Include every top-level key in this schema: {"outcome":"string","evidence":["string"],"checks":["string"],"blocker":"string","blockerOwner":"string","recoveryTrigger":"string","recoveryAction":"string","proposedWorkUnits":[{"goal":"string","relevantFiles":["relative/path"],"expectedFiles":["relative/path"],"acceptanceCriteria":["observable result"],"verificationCommands":[{"name":"string","command":"executable","args":["argument"],"timeoutSeconds":30}],"taskKind":"code|test|review|repository-scan","complexity":"small|medium|large","priority":100,"requiredCapabilities":["source","local-files","tests"]}]}. proposedWorkUnits must contain at most three exact dependency-ready units. Every source in relevantFiles must exist. Each expectedFiles entry must already exist or have an existing immediate parent directory. Paths must be bounded and relative; expectedFiles cannot be root-wide. Verification commands must be structured objects, never shell strings. If no safe unit exists, return an empty proposedWorkUnits array and fill blocker, blockerOwner, recoveryTrigger, and recoveryAction. ' + verificationPlanningGuidance()
     : "";
   return [
     "You are one bounded worker in a finite project round. Complete only the assigned unit.",

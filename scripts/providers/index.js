@@ -221,8 +221,9 @@ function provider(id, available, extra = {}) {
 }
 
 function classifyFailure(value, exitCode) {
-  if (exitCode === 0) return "";
   const text = String(value || "").toLowerCase();
+  if (/tool required.{0,240}permission|permission.{0,240}cannot prompt|auto-denied|(?:missing|not (?:present|included)).{0,120}permissions\.allow|permissions\.allow.{0,120}(?:required|missing|denied)/.test(text)) return "authorization-required";
+  if (exitCode === 0) return "";
   if (/transport closed|econnreset|econnrefused|socket hang up|broken pipe|connection (?:closed|reset|refused)/.test(text)) return "transport-unavailable";
   if (/etimedout|timedout|timed? out|timeout|deadline exceeded/.test(text)) return "provider-timeout";
   if (/rate.?limit|quota|usage limit|capacity.*exhaust|model.*unavailable/.test(text)) return "capacity-unavailable";
@@ -354,8 +355,9 @@ function runAntigravity(providerState, contract, prompt) {
   if (contract.needsUi) return { ok: false, typedBlocker: "ui-required", text: "This lane requires visible Antigravity UI state; CLI execution was intentionally not attempted." };
   const args = buildAntigravityArgs(contract, prompt);
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
-  const text = result.stdout || result.stderr;
-  return { ok: result.status === 0, typedBlocker: result.status === 0 ? "" : classifyFailure(text, result.status), text, usage: { model: contract.model || "unknown" }, exitCode: result.status };
+  const text = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  const typedBlocker = classifyFailure(text, result.status);
+  return { ok: result.status === 0 && !typedBlocker, typedBlocker, text, usage: { model: contract.model || "unknown" }, exitCode: result.status };
 }
 
 function runCursor(providerState, contract, prompt) {

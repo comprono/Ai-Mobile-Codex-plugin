@@ -53,6 +53,13 @@ fs.writeFileSync(path.join(fakeBin, "fake-codex-valid-writer.js"), [
   'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:65,output_tokens:20}})+"\\n");',
 ].join("\n") + "\n", "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-valid-writer.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-valid-writer.js\" %*\r\n", "utf8");
+fs.writeFileSync(path.join(workspace, "verify-stale-inline.js"), 'const fs=require("node:fs"); if(fs.readFileSync("stale-inline.txt","utf8").trim()!=="STALE_INLINE_OK") process.exit(1);\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-stale-inline.js"), [
+  'const patch=["```diff","diff --git a/stale-inline.txt b/stale-inline.txt","new file mode 100644","--- /dev/null","+++ b/stale-inline.txt","@@ -0,0 +1 @@","+STALE_INLINE_OK","```"].join("\\n");',
+  'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:60,output_tokens:18}})+"\\n");',
+].join("\n") + "\n", "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-stale-inline.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-stale-inline.js\" %*\r\n", "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-stale-inline-fail.cmd"), '@echo off\r\necho {"type":"error","message":"stale inline provider failure fixture"}\r\nexit /b 1\r\n', "utf8");
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: workspace, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -63,10 +70,15 @@ run("git", ["config", "user.name", "AI Mobile Test"]);
 run("git", ["add", "."]);
 run("git", ["commit", "-m", "fixture"]);
 
-const { setStatus, statusFor } = require("./core/job-store");
-const { startTask } = require("./core/task-orchestrator");
+const { createJob, setStatus, statusFor } = require("./core/job-store");
+const { dispatchRound, startTask } = require("./core/task-orchestrator");
 const { jobDirectory, readRound, readTask } = require("./core/state-store");
 const { runTaskCycle } = require("./core/task-cycle");
+const { promptFor } = require("./core/worker");
+const planningPrompt = promptFor({ artifactKind: "work-plan", provider: "claude", readOnly: true, maxWorkerOutputTokens: 600 });
+assert.match(planningPrompt, /Never use inline code flags such as node -e, python -c, or PowerShell -Command/);
+assert.match(planningPrompt, /python -m unittest/);
+assert.match(planningPrompt, /existing immediate parent directory/);
 const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
 const resources = {
   generatedAt: new Date().toISOString(),
@@ -163,6 +175,56 @@ const resources = {
     assert.equal(fs.readFileSync(path.join(workspace, "failover.txt"), "utf8").trim(), "FAILOVER_OK");
     assert.equal(failover.failures.filter((row) => row.provider === "claude").length, 1);
     assert.equal(failover.transitions.find((row) => row.type === "collected" && row.failedJobs.length)?.recovery[0]?.failureClass, "provider-adapter-failure");
+    run("git", ["add", "."]);
+    run("git", ["commit", "-m", "accept failover cycle"]);
+    const staleInlineFailureResources = JSON.parse(JSON.stringify(resources));
+    staleInlineFailureResources.providers.codex.command = path.join(fakeBin, "fake-codex-stale-inline-fail.cmd");
+    const staleInlineTask = startTask({
+      workspace,
+      outcome: "Recover the same provider after collecting a stale failed round",
+      outcomeAuthority: "user",
+      acceptanceEvidence: [{ description: "The primary workspace contains deterministically verified STALE_INLINE_OK", minimumEvidenceLevel: "integration" }],
+      workGraph: [{
+        id: "STALE_INLINE",
+        goal: "Create stale-inline.txt containing STALE_INLINE_OK",
+        state: "pending",
+        priority: 100,
+        acceptanceRequirementId: "A1",
+        relevantFiles: ["stale-inline.txt", "verify-stale-inline.js"],
+        expectedFiles: ["stale-inline.txt"],
+        acceptanceCriteria: ["node verify-stale-inline.js exits zero in the primary workspace"],
+        verificationCommands: [{ name: "verify-stale-inline", command: "node", args: ["verify-stale-inline.js"], timeoutSeconds: 30 }],
+        taskKind: "code",
+        complexity: "large",
+      }],
+      consoleModel: "gpt-5.6-luna",
+      consoleEffort: "low",
+      codexReservePercent: 15,
+    }, staleInlineFailureResources);
+    const staleInlineRound = dispatchRound(
+      { taskId: staleInlineTask.taskId, horizonHours: 5 },
+      staleInlineFailureResources,
+      {},
+      (contract) => createJob(contract, entrypoint),
+    );
+    const staleInlineJob = staleInlineRound.workers[0];
+    const staleInlineDeadline = Date.now() + 10000;
+    while (!["completed", "failed", "blocked", "cancelled"].includes(statusFor(staleInlineTask.taskId, staleInlineJob.jobId).state) && Date.now() < staleInlineDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(statusFor(staleInlineTask.taskId, staleInlineJob.jobId).state, "failed");
+    const staleInlineRecoveryResources = JSON.parse(JSON.stringify(resources));
+    staleInlineRecoveryResources.providers.codex.command = path.join(fakeBin, "fake-codex-stale-inline.cmd");
+    const staleInlineResult = await runTaskCycle(
+      { taskId: staleInlineTask.taskId, maxRounds: 1, maxMinutes: 2, noProgressLimit: 1 },
+      entrypoint,
+      { inventory: async () => staleInlineRecoveryResources, providerHistory: () => ({}) },
+    );
+    assert.equal(staleInlineResult.completionAllowed, true, JSON.stringify(staleInlineResult));
+    assert.equal(staleInlineResult.stopReason, "acceptance-complete", JSON.stringify(staleInlineResult));
+    assert.equal(fs.readFileSync(path.join(workspace, "stale-inline.txt"), "utf8").trim(), "STALE_INLINE_OK");
+    run("git", ["add", "."]);
+    run("git", ["commit", "-m", "accept stale inline recovery"]);
 
     const readOnlyResources = JSON.parse(JSON.stringify(resources));
     readOnlyResources.providers.codex.available = false;

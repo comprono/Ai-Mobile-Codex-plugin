@@ -146,20 +146,46 @@ function Wait-CodexDesktop {
     }
     return $processes
 }
-function Refresh-CodexDesktopThread {
-    param([Parameter(Mandatory = $true)][string]$ThreadId)
+function Get-CodexDesktopProcesses {
+    param([Parameter(Mandatory = $true)]$Package)
 
-    $explorerPath = (Get-Command explorer.exe -ErrorAction Stop).Source
-    $threadDeepLink = "codex://threads/$ThreadId"
-    $reviewDeepLink = "{0}?view=review&diffFilter=last-turn" -f $threadDeepLink
-    Start-Process -FilePath $explorerPath -ArgumentList $reviewDeepLink | Out-Null
-    Start-Sleep -Milliseconds 400
-    Start-Process -FilePath $explorerPath -ArgumentList $threadDeepLink | Out-Null
-    Start-Sleep -Milliseconds 800
-    Start-Process -FilePath $explorerPath -ArgumentList $threadDeepLink | Out-Null
+    $packagePrefix = $Package.InstallLocation.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    return @(Get-CimInstance Win32_Process | Where-Object {
+        $processPath = [string]$_.ExecutablePath
+        $processPath -and
+        $processPath.StartsWith($packagePrefix, [StringComparison]::OrdinalIgnoreCase) -and
+        ($_.Name -ieq "ChatGPT.exe" -or $_.Name -ieq "codex-code-mode-host.exe")
+    })
+}
+
+function Reload-CodexDesktopThread {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [Parameter(Mandatory = $true)][string]$ThreadId,
+        [ValidateRange(5, 60)][int]$TimeoutSeconds = 20
+    )
+
+    $before = @(Get-CodexDesktopProcesses -Package $Package)
+    if ($before.Count -gt 0) {
+        Stop-Process -Id @($before | ForEach-Object { [int]$_.ProcessId }) -Force -ErrorAction SilentlyContinue
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $remaining = @(Get-CodexDesktopProcesses -Package $Package)
+    while ($remaining.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        $remaining = @(Get-CodexDesktopProcesses -Package $Package)
+    }
+    if ($remaining.Count -gt 0) {
+        throw "The package-owned OpenAI.Codex desktop processes did not stop before the post-continuation reload."
+    }
+
+    $launch = Start-CodexDesktop -Package $Package -ThreadId $ThreadId
+    $verified = @(Wait-CodexDesktop -Package $Package -TimeoutSeconds 15)
     return [pscustomobject]@{
-        ThreadDeepLink = $threadDeepLink
-        RefreshMethod = "supported last-turn route bounce followed by exact task foreground"
+        Launch = $launch
+        VerifiedProcesses = $verified
+        StoppedProcessIds = @($before | ForEach-Object { [int]$_.ProcessId })
+        RefreshMethod = "exact OpenAI.Codex package process reload after same-task continuation"
     }
 }
 
@@ -386,14 +412,23 @@ try {
         throw "The same-task continuation did not prove the fresh runtime and post-proof model switch."
     }
 
-    # The app-server turn can finish while the desktop still displays its
-    # pre-restart snapshot. Bounce through the supported last-turn route before
-    # returning to the exact task so the persisted continuation is reloaded.
-    $desktopRefresh = Refresh-CodexDesktopThread -ThreadId ([string]$handoff.threadId)
-    $handoff | Add-Member -NotePropertyName desktopRefreshMethod -NotePropertyValue $desktopRefresh.RefreshMethod -Force
-    $handoff | Add-Member -NotePropertyName desktopForegroundedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    $handoff | Add-Member -NotePropertyName desktopVisibleContinuationRequestedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex task was refreshed and foregrounded after the fresh runtime proof and lightweight continuation completed."
+    # The app-server can persist the continuation while the desktop renderer
+    # still holds its pre-continuation snapshot. This second finite process
+    # cycle belongs to the same explicitly authorized plugin-upgrade restart.
+    $desktopOpened = $false
+    $desktopReload = Reload-CodexDesktopThread -Package $codexDesktopPackage -ThreadId ([string]$handoff.threadId)
+    $desktopOpened = $true
+    $reloadedAt = [DateTime]::UtcNow.ToString("o")
+    $handoff | Add-Member -NotePropertyName desktopProcessId -NotePropertyValue $desktopReload.Launch.LauncherProcessId -Force
+    $handoff | Add-Member -NotePropertyName desktopLaunchMethod -NotePropertyValue $desktopReload.Launch.LaunchMethod -Force
+    $handoff | Add-Member -NotePropertyName desktopThreadDeepLink -NotePropertyValue $desktopReload.Launch.ThreadDeepLink -Force
+    $handoff | Add-Member -NotePropertyName verifiedDesktopProcessIds -NotePropertyValue @($desktopReload.VerifiedProcesses | ForEach-Object { $_.ProcessId }) -Force
+    $handoff | Add-Member -NotePropertyName desktopReloadStoppedProcessIds -NotePropertyValue @($desktopReload.StoppedProcessIds) -Force
+    $handoff | Add-Member -NotePropertyName desktopRefreshMethod -NotePropertyValue $desktopReload.RefreshMethod -Force
+    $handoff | Add-Member -NotePropertyName desktopReloadedAfterContinuationAt -NotePropertyValue $reloadedAt -Force
+    $handoff | Add-Member -NotePropertyName desktopForegroundedAt -NotePropertyValue $reloadedAt -Force
+    $handoff | Add-Member -NotePropertyName desktopVisibleContinuationRequestedAt -NotePropertyValue $reloadedAt -Force
+    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex package and task were reloaded after fresh runtime proof and lightweight continuation completed."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message

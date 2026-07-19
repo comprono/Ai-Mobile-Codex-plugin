@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.4 - 2026-07-19
+
+- Scopes provider cooldown and no-progress accounting to rounds created by the current execution, so a stale failed round cannot exclude a healthy provider or consume a fresh recovery budget.
+- Tells structured planning workers the exact deterministic verifier policy before they propose work, including the ban on inline interpreter flags and required workspace paths.
+- Treats headless Antigravity permission auto-denial as `authorization-required` even when the CLI exits zero, then cools that surface and allows another eligible provider to continue.
+- Replaces ineffective post-continuation route bouncing with one finite package-owned OpenAI.Codex process reload inside the explicitly authorized plugin-upgrade handoff.
+- Adds regressions for same-provider stale-round recovery in both execution paths, verifier-safe planning prompts, exit-zero Antigravity denial, and post-continuation desktop reload.
+
 ## 1.3.3 - 2026-07-19
 
 - Rejects structured work plans before writer dispatch when source paths, write parents, or directly named verification files are not present in the real workspace.

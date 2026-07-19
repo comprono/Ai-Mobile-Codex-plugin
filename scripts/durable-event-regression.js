@@ -64,7 +64,7 @@ fs.writeFileSync(path.join(fakeBin, "fake-codex.js"), [
 fs.writeFileSync(path.join(fakeBin, "fake-codex.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.js" %*\r\n`, "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-slow.js"), 'setTimeout(() => process.stdout.write(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:0}})+"\\n"), 30000);\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-slow.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-codex-slow.js" %*\r\n`, "utf8");
-fs.writeFileSync(path.join(fakeBin, "fake-claude-fail.cmd"), '@echo off\r\necho {"is_error":true,"result":"stale provider failure fixture"}\r\nexit /b 1\r\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-fail.cmd"), '@echo off\r\necho {"type":"error","message":"stale provider failure fixture"}\r\nexit /b 1\r\n', "utf8");
 
 const { inventory: unusedInventory } = require("./core/capacity");
 void unusedInventory;
@@ -183,8 +183,8 @@ function resources(provider) {
     assert.equal(status.noProviderProbe, true);
     assert.equal(status.noProjectScan, true);
 
-    const staleFailureResources = resources("claude");
-    staleFailureResources.providers.claude.command = path.join(fakeBin, "fake-claude-fail.cmd");
+    const staleFailureResources = resources("codex");
+    staleFailureResources.providers.codex.command = path.join(fakeBin, "fake-codex-fail.cmd");
     const stale = startTask({
       workspace: staleWorkspace,
       outcome: "Finish after collecting a failed round from before this coordinator execution",
@@ -252,7 +252,7 @@ function resources(provider) {
     const lostPid = statusFor(lost.taskId, lostJob.jobId).pid;
     const lostStarted = Date.now();
     const lostRun = runCoordinator({ taskId: lost.taskId, executionId: "execution-lost-worker-test", config: { maxRounds: 2, maxMinutes: 1, noProgressLimit: 1, horizonHours: 5 } }, entrypoint, {
-      inventory: async () => lostResources,
+      inventory: async () => resources("none"),
       providerHistory: () => ({}),
     });
     await new Promise((resolve) => setTimeout(resolve, 250));

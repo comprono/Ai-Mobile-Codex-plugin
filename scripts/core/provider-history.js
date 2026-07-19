@@ -27,7 +27,7 @@ function providerHistory() {
     }
     const last = terminal[0] || null;
     const lastBlocker = String(last?.status?.blocker || "");
-    const outage = /transport-unavailable|authentication-required|provider-timeout/.test(lastBlocker);
+    const outage = /transport-unavailable|authentication-required|authorization-required|provider-timeout/.test(lastBlocker);
     result[id] = {
       samples: terminal.length,
       completed,

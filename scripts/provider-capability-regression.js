@@ -15,11 +15,13 @@ process.env[diagnosticKeyName] = diagnosticKeyValue;
 const workspace = path.join(root, "workspace");
 fs.mkdirSync(workspace, { recursive: true });
 fs.writeFileSync(path.join(workspace, "source.txt"), "fixture\n", "utf8");
+const antigravityPermissionFixture = path.join(root, "agy-permission.cmd");
+fs.writeFileSync(antigravityPermissionFixture, '@echo off\r\necho jetski: a tool required the "command" permission; headless mode cannot prompt, so it was auto-denied.\r\nexit /b 0\r\n', "utf8");
 
 const { providerDiagnostics } = require("./core/provider-diagnostics");
 const { route } = require("./core/router");
 const { writeProfile } = require("./lib/orchestrator-profile");
-const { enrichModel } = require("./providers");
+const { classifyFailure, enrichModel, runProvider } = require("./providers");
 
 const resetSoon = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 const providers = {
@@ -60,6 +62,10 @@ const resources = { generatedAt: new Date().toISOString(), machine: { freeRamMb:
     assert.equal(diagnostics.providers.antigravity.surfaces.browser, true);
     assert.equal(diagnostics.passiveDiscovery, true);
 
+    assert.equal(classifyFailure('jetski: a tool required the "command" permission; headless mode cannot prompt, so it was auto-denied.', 0), "authorization-required");
+    const antigravityPermission = runProvider({ antigravity: { available: true, command: antigravityPermissionFixture } }, { provider: "antigravity", workspace, timeoutSeconds: 30, readOnly: true, model: "fixture" }, "inspect fixture");
+    assert.equal(antigravityPermission.ok, false);
+    assert.equal(antigravityPermission.typedBlocker, "authorization-required");
     const base = {
       workspace,
       projectGoal: "Complete the capability-routed fixture",

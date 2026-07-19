@@ -338,6 +338,7 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
           }
         }
         const collected = collectRound({ ...args, roundId: latest.roundId, waitSeconds: 0, detail: "full" });
+        const belongsToCurrentExecution = executionRoundIds.has(latest.roundId);
         const terminal = (collected.results || []).filter((row) => row.terminal);
         material(args, state, {
           type: "round.collected",
@@ -346,15 +347,19 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
           summary: `Collected ${terminal.length} terminal worker result(s) exactly once.`,
           data: { workers: workerDetails(terminal) },
         });
-        for (const row of terminal.filter((item) => item.state !== "completed")) failedProviders.add(String(row.provider || "").toLowerCase());
+        if (belongsToCurrentExecution) {
+          for (const row of terminal.filter((item) => item.state !== "completed")) failedProviders.add(String(row.provider || "").toLowerCase());
+        }
 
         const completed = terminal.filter((row) => row.state === "completed");
         if (completed.length) {
           const integrated = integrateRound({ ...args, roundId: latest.roundId });
           const failed = (integrated.integrations || []).filter((row) => row.integrated !== true);
-          for (const row of failed) {
-            const worker = terminal.find((item) => item.jobId === row.jobId);
-            failedProviders.add(String(worker?.provider || "").toLowerCase());
+          if (belongsToCurrentExecution) {
+            for (const row of failed) {
+              const worker = terminal.find((item) => item.jobId === row.jobId);
+              failedProviders.add(String(worker?.provider || "").toLowerCase());
+            }
           }
           const observations = (integrated.integrations || []).filter((row) => row.observation === true && row.integrated === true);
           const accepted = (integrated.acceptedEvidence || []).length;
@@ -371,7 +376,6 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
 
         summary = taskSummary(args);
         const nextSignature = progressSignature(summary);
-        const belongsToCurrentExecution = executionRoundIds.has(latest.roundId);
         if (nextSignature !== signature) {
           noProgress = 0;
           signature = nextSignature;

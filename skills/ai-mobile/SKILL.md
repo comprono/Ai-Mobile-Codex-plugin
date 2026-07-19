@@ -76,7 +76,8 @@ For a schema or runtime upgrade, follow this order exactly:
 4. After the refresh, the launcher immediately reopens the exact OpenAI.Codex task. The desktop must never remain hidden while model verification or project workers run.
 5. With that task visible, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once; the launcher requires its runtimeVersion to equal the installed version.
 6. Only after that tool evidence, the same app-server starts one turn in the same task on the requested lightweight model and low effort. That turn reconciles the existing durable task once and invokes run-task-cycle exactly once. The detached deterministic coordinator continues finite workers after the visible turn returns; the console does not poll it.
-7. The continuation has a hard process timeout and kills only its own stale child tree. On timeout or failure the already reopened Codex task stays visible. No codex exec resume, duplicate task, Goal, automation, LLM manager loop, or hidden continuation is used.
+7. After the app-server persists that continuation, the same authorized upgrade handoff performs one finite package-owned OpenAI.Codex process reload and reopens the exact task. This clears the desktop renderer's stale task snapshot; normal execution never uses this reload.
+8. The continuation has a hard process timeout and kills only its own stale child tree. On timeout or failure the already reopened Codex task stays visible. No codex exec resume, duplicate task, Goal, automation, LLM manager loop, or hidden continuation is used.
 
 If fresh runtime proof is missing or stale, the launcher fails closed before selecting Luna. A lightweight console must never diagnose or patch the plugin.
 ## Reporting
