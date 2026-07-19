@@ -34,9 +34,9 @@ async function run() {
       cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
     } };
 
-    assert.equal(TOOLS.length, 13);
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "run-task-cycle", "collect-round", "integrate-round", "record-evidence", "task-summary", "complete-task", "cancel-task", "resource-inventory", "orchestrator-profile", "prepare-restart-handoff"]);
-    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 13);
+    assert.equal(TOOLS.length, 15);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "run-task-cycle", "collect-round", "integrate-round", "record-evidence", "task-summary", "material-status", "complete-task", "cancel-task", "resource-inventory", "provider-diagnostics", "orchestrator-profile", "prepare-restart-handoff"]);
+    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 15);
 
     const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
@@ -84,6 +84,7 @@ async function run() {
     const codexWriterArgs = buildCodexExecArgs({ workspace, model: "gpt-fixture", effort: "medium", readOnly: false });
     assert.deepEqual(codexWriterArgs.slice(0, 3), ["-a", "never", "exec"]);
     assert.equal(codexWriterArgs[codexWriterArgs.indexOf("--sandbox") + 1], "workspace-write");
+    assert.equal(codexWriterArgs.includes("plugins"), true);
 
     const antigravityArgs = buildAntigravityArgs({ workspace, readOnly: true, timeoutSeconds: 60 }, "inspect");
     assert.equal(antigravityArgs.includes("--dangerously-skip-permissions"), false);
@@ -108,7 +109,7 @@ async function run() {
       assert.equal(serverSource.includes(forbidden), false);
       assert.equal(skillSource.includes(forbidden), false);
     }
-    return { ok: true, assertions: 50, durationMs: Date.now() - started, tools: TOOLS.length };
+    return { ok: true, assertions: 51, durationMs: Date.now() - started, tools: TOOLS.length };
   } finally {
     if (savedDataRoot === undefined) delete process.env.AI_MOBILE_DATA_ROOT; else process.env.AI_MOBILE_DATA_ROOT = savedDataRoot;
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocalAppData;

@@ -1,103 +1,109 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-18T21:57:37Z
+Updated: 2026-07-19T00:00:00Z
 
 ## North Star
 
-AI Mobile must finish measurable project outcomes by coordinating available Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers efficiently. The visible Codex task is only a lightweight project console; actual project work runs in separately selected, acceptance-linked workers.
+AI Mobile must finish measurable outcomes across one project or a portfolio by coordinating available Codex CLI, Claude Code, Antigravity CLI, optional Cursor, GitHub, local tools, and explicitly authorized app/browser surfaces as one capacity-aware team. The visible Codex task is only a lightweight project console; durable event-driven coordination and separately selected workers perform the work.
 
 ## Done Means
 
 - Authority: .codex/ACCEPTANCE.json
-- A natural `@ai-mobile` request creates or resumes one durable finite task and derives the next dependency-ready unit from the project's outcome and acceptance contract.
-- The visible task owns no project files and performs no bulk reading, heavy planning, coding, patch review, or expensive verification.
-- Fresh capacity, capability, dependencies, quota pools, reset horizons, reliability, cost, RAM, storage, and user priority determine worker and model selection.
-- Codex CLI is an ordinary work-plane provider and may use shared Codex capacity above the configured reserve, normally 15 percent.
-- Independent work may run concurrently; provider, quota, file, worker, RAM, and storage leases prevent oversubscription.
-- Editing workers use isolated Git worktrees unless an exact privately trusted Fable 5 or Sonnet 5 worker is explicitly eligible for a clean bounded primary write.
-- Collected patches are boundary checked, conflict checked, applied once, deterministically verified, rolled back on failure, and recorded only against their own acceptance requirement.
-- Completion requires project-specific acceptance evidence. Worker activity, healthy processes, elapsed time, and token use are not progress.
-- No LLM manager loop, Goal, automation, heartbeat, repeated chat poll, provider desktop UI, or Classic ChatGPT launch occurs automatically. A bounded deterministic execution cycle may wait for finite workers, collect terminal results, integrate verified patches once, and advance only while acceptance evidence or a materially changed recovery path exists.
-- A plugin upgrade is validated and installed by a capable setup model before OpenAI.Codex closes. The official local app-server resumes the exact task, proves the fresh runtime on the capable model, and only then starts the lightweight console turn before reopening the desktop.
-- After that proof, the same visible task switches to GPT-5.6 Luna at low effort under the current private preference, reconciles the existing durable task once, and invokes one bounded deterministic cycle that produces a terminal worker result before the desktop reopens.
+- One natural request creates or reconciles one durable task or portfolio without duplicate chats, Goals, automations, manager loops, or hidden LLM continuations.
+- Each portfolio project keeps independent outcome, acceptance, priority, dependencies, blockers, evidence, work graph, files, patches, and completion state.
+- The visible console owns zero project files and performs no bulk reading, heavy planning, coding, patch review, or expensive verification.
+- A low-RAM coordinator starts only when requested, observes worker exits without LLM polling, collects each terminal result once, integrates or accepts it once, and advances the next dependency-ready unit while finite resource and no-progress limits permit.
+- Fresh provider and model capability, quota pools, reset horizons, reliability, latency, review cost, RAM, storage, dependencies, and user priority determine worker selection over a configurable planning horizon.
+- Codex CLI is a real work-plane provider and may use shared Codex capacity above the configured reserve, normally 15 percent.
+- Planning observes bounded authoritative project state first. Economical context workers return compact structured artifacts; a capable planning lane turns them into exact acceptance-linked units.
+- Independent work may run concurrently; machine-wide provider, quota, file, worker, RAM, and storage leases prevent oversubscription.
+- Editing workers use isolated Git worktrees unless an exact privately trusted model is eligible for a clean bounded primary write with deterministic verification.
+- No-patch workers run no tests. Read-only artifacts are fingerprinted, accepted once, and never rerun unchanged.
+- Completion requires project-specific acceptance evidence. Worker activity, process health, elapsed time, token usage, dispatch, restart, and installation are not project progress.
+- Material status is read directly from durable state and separates real outcome, runtime, workers, resources, blockers, last evidence, and next owned action.
+- Normal execution never launches or restarts Codex, Classic ChatGPT, provider UIs, or browsers. UI is used only when explicitly required and authorized for real external evidence.
+- Plugin-update restart is a separate explicitly authorized lifecycle that reopens the exact task immediately, verifies the exact runtime once, and never counts as project progress.
+- Public code contains no private paths, credentials, model trust, style, or user profile data. Private preferences live in the ignored local profile.
 
 ## User Intent
 
-Make AI Mobile useful in complicated real projects without turning orchestration into the work. Use available subscriptions productively, preserve a private Codex reserve, keep the user informed through one lightweight visible task, and let capable workers make independently verifiable progress without repeated prompting.
+Make AI Mobile useful in complicated real projects without turning orchestration into the work. Use available subscriptions productively across multiple projects, preserve a private Codex reserve, keep the user informed through one lightweight visible task, and let capable workers make independently verifiable progress without repeated prompting or status spam.
 
 ## Work Map
 
 ### Critical Path
 
-1. Finish the console/work-plane runtime and deterministic integration boundary.
-2. Pass all local lifecycle, routing, portfolio, isolation, restart-order, scanner, and privacy gates.
-3. Publish and install one exact version from this repository for Codex and Claude Code.
-4. Close only OpenAI.Codex, resume this exact persisted task through the official local app-server, and prove the running MCP reports that version on the capable setup model.
-5. Only after proof, start the same task on Luna-low, reconcile the existing Job Vibhu task, and run one bounded deterministic work cycle through real worker completion, collection, integration, and the next acceptance-linked transition before reopening the exact desktop task.
+1. Implement and prove worker-exit to collection, integration or structured artifact acceptance, and next assignment without another visible Codex turn.
+2. Convert default planning to observe first and produce exact bounded implementation units.
+3. Prove dynamic real-provider capacity and routing, including Windows-safe Claude invocation and correct launch, authentication, capacity, timeout, and authorization failure classes.
+4. Prove one real-provider portfolio cycle across two separate projects without quota, file, RAM, storage, or evidence contamination.
+5. Expose one compact material-status view and pass lifecycle, routing, isolation, scanner, privacy, and no-auto-UI gates.
+6. Publish and install one exact version for Codex and Claude Code. Test restart only at a later explicitly authorized upgrade boundary.
 
 ### Add-ons
 
-- Keep public documentation, release metadata, and marketplace scanner compatibility current.
-- Preserve reusable defaults while keeping user-specific model trust and reserve preferences local.
+- Keep public documentation, release metadata, shared-host installation, and marketplace scanner compatibility current.
+- Preserve reusable defaults while keeping user-specific model trust, reserve, style, and provider preferences local.
+- Treat GitHub, browser, APIs, and project-specific tools as capabilities selected only when they materially advance acceptance.
 
 ### Non-goals
 
-- Restarting or reopening Codex during normal project execution; restart is only an explicit plugin-upgrade boundary.
-- Guaranteeing an interview or bypassing truthful-profile, duplicate, authentication, CAPTCHA, document, suitability, or external-receipt gates.
+- A chat-based control room, heartbeat, scheduler, Goal, automation, repeated status poll, or automatic desktop launcher.
+- Guaranteeing interviews or bypassing truthful-profile, duplicate, authentication, CAPTCHA, document, suitability, external-receipt, or irreversible-action gates.
 - Consuming quota merely because it is available.
-- Treating the classic ChatGPT desktop app as a worker without a supported callable interface.
+- Treating Classic ChatGPT or another UI as a worker without a supported callable interface.
 
 ## Verified State
 
-- The 1.2 implementation defines a zero-file visible console and coordinator-generated work-plane units.
-- Codex CLI, Claude Code, Antigravity, and optional Cursor are dynamically ranked work-plane candidates under reserve and machine-wide lease controls.
-- Editing jobs use isolated worktrees, while deterministic integration protects file boundaries and concurrent primary changes and rolls back failed verification.
-- Portfolio, provider/quota lease, storage lifecycle, trusted-primary, and no-auto-UI behavior remain covered by existing regression suites.
-- A prior Luna same-task follow-up was visible, but it ran against stale AI Mobile 1.1.8 after 1.1.10 had been installed. That disproved the previous restart claim and is not accepted as continuity evidence.
-- Release commit df4f0f6 is on origin/main; the complete 18-suite and scanner matrix passed, and both Codex and Claude now report AI Mobile 1.2.1 enabled.
-- The 1.2.2 candidate passed 18 local suites. Its cycle slices at 210 seconds, Codex writers retain workspace-write isolation with noninteractive approval, no-patch workers skip verification, and generated work without exact files and checks remains read-only.
-
+- AI Mobile 1.3.1 source passes 21 local lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy-oriented regression gates in one clean run.
+- Job and coordinator state is cross-process locked, revisioned, and monotonic; a killed worker reconciles without waiting for its deadline, and bounded Windows worktree cleanup cannot silently report success while files remain.
+- Explicit unavailable models and exhausted Antigravity models fail closed; Codex CLI remains usable above reserve, and unsafe symlink/submodule patches are refused.
+- A real authenticated Codex and Claude portfolio completed two independent disposable projects concurrently, integrated project-local evidence, preserved the 15 percent Codex reserve, cleaned all worktrees, and opened no desktop app.
+- Normal run-task-cycle starts or reuses one finite detached event-driven coordinator; the visible console owns no files and does not poll.
+- Read-only observations create fingerprinted exact writer units. Isolated Codex workers return bounded diffs that AI Mobile recounts, path-checks, applies, verifies, and integrates without sandbox bypass.
+- material-status is passive, provider-diagnostics is privacy-safe, and model/capacity routing uses callable capabilities plus measured quota/reset evidence.
 ## Context Pointers
 
 - `.codex/ACCEPTANCE.json`
 - `skills/ai-mobile/SKILL.md`
+- `scripts/core/coordinator.js`
+- `scripts/core/task-cycle.js`
 - `scripts/core/task-orchestrator.js`
+- `scripts/core/worker.js`
+- `scripts/core/capacity.js`
 - `scripts/core/router.js`
-- `scripts/core/patch-integration.js`
+- `scripts/providers/index.js`
 - `scripts/mcp/server.js`
-- `scripts/console-workplane-regression.js`
-- `scripts/integration-regression.js`
 
 ## Assumptions To Test
 
-- Codex app-native task controls can select the lightweight model only after a fresh runtime is visible.
-- Passive CLI probes can discover enough provider/model capacity without opening desktop applications.
-- Coordinator-generated standard verification is sufficient for common repositories and safely degrades to read-only work when no deterministic command exists.
-- One-time deterministic integration can replace routine lower-tier model re-review without weakening acceptance evidence.
+- A low-RAM local coordinator can watch durable worker state and advance finite rounds without an LLM manager turn or desktop UI.
+- Native provider CLIs expose enough model and quota evidence to route safely; unknown capacity remains unknown.
+- Structured observation artifacts can create exact bounded work without a second expensive repository review.
+- Deterministic integration can replace routine lower-tier model re-review without weakening acceptance evidence.
 
 ## Decisions
 
-- Keep the capable setup model active through code, tests, scanner, install, and expected-version recording.
-- Never switch to Luna before the reopened task proves both installed-package and running-runtime versions.
-- The Luna task is a project console, not a fallback implementer or plugin debugger.
-- A rejected worker dispatch is a typed coordinator blocker; it does not transfer project ownership to the console.
-- Integrate deterministic worker evidence once; do not spend a second premium-model pass by default.
+- Preserve verified lower-level components, but require separate production gates when live behavior contradicts synthetic tests.
+- The visible console is never a fallback implementer or plugin debugger.
+- Plan from observed project truth before committing worker ownership.
+- Integrate deterministic evidence once; do not spend a second premium-model pass by default.
+- Restart behavior is outside normal execution and is not the active slice.
 
 ## Failure Memory
 
-- Source edits are not active in an already loaded task; model selection before fresh-runtime verification can place plugin repair on a stale lightweight console.
-- App reopening is not proof that a visible continuation turn was submitted or that the MCP runtime refreshed.
-- A synchronous 15-minute cycle cannot cross the Codex MCP host 300-second deadline. Each call must return within 210 seconds and resume only the same finite worker from a continuationRequired receipt.
-- A root-wide writer contract plus inferred full-suite verification can consume large quota without a patch. Generated work without explicit files and checks is read-only, and no-patch writers stop before verification.
-- Activity is not acceptance progress. Retries, backups, worktrees, and background processes must remain bounded by explicit resource and no-progress limits.
+- Planning before bounded project observation creates durable guesswork; observations must yield fingerprinted, exact next units.
+- Returning `continuationRequired` is not durable execution when another visible Codex turn must collect, integrate, or recover.
+- Root-wide writers, inferred full-suite verification, and repeated premium review can spend more than the accepted change warrants.
+- Worker launch, healthy process, installation, restart, status checks, and test count are lower-level evidence, not user outcome progress.
+- Retries, worktrees, backups, API calls, and processes require finite budgets, monotonic terminal state, retention, idempotency, no-progress stops, and cleanup that passes only when the owned path is actually gone.
 
 ## Current Slice
 
-- Acceptance ID: RESTART_CONTINUITY
-- Goal: publish and install 1.2.2 without restarting this active task, while preserving a future explicit-upgrade handoff that reopens Codex before any long verification and never affects normal project execution.
-- Required proof: the corrected version is installed; a Sol verification turn in this exact persisted task observes that runtime; only then a GPT-5.6 Luna-low turn reconciles Job Vibhu and invokes a bounded deterministic cycle in which a real provider starts, terminates, is collected, and either integrates verified work or returns a correctly classified actionable blocker before OpenAI.Codex reopens this exact task.
-
+- Acceptance ID: PUBLIC_RELEASE
+- Goal: publish and install the exact AI Mobile 1.3.1 source that passed the local and real-provider gates.
+- Required proof: Codex and Claude manifests resolve one shared runtime; scanner, privacy, syntax, diff, and install gates pass; the exact commit is pushed; no private machine or profile data is published.
 ## Next
 
-Install the verified 1.2.2 package without restarting this active Codex task. Then use the currently loaded AI Mobile runtime only for one explicit, bounded Job Vibhu work unit. Prove restart continuity on a later explicitly authorized plugin upgrade; never restart during normal project work.
+Run scanner, manifest, privacy, installation, and Git release gates. Keep RESTART_CONTINUITY failing until a separate explicitly authorized user-visible restart proves the freshly installed runtime in the exact persisted task.

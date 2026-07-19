@@ -12,6 +12,8 @@ const { releaseResourceLease } = require("./resource-leases");
 const { cleanTransientOutputs, rollbackPrimaryWorkspace } = require("./workspace-isolation");
 const { runProvider } = require("../providers");
 const { normalizeModelId } = require("./trusted-models");
+const { artifactFingerprint } = require("./observation-plan");
+const { applyProviderPatch } = require("./provider-patch");
 
 function communicationContract(mode = "smart-compact") {
   if (mode === "detailed") return "Explain the result and material reasoning clearly, without greetings, task repetition, tool narration, waiting commentary, or offers for more work.";
@@ -20,6 +22,7 @@ function communicationContract(mode = "smart-compact") {
 }
 
 function promptFor(contract) {
+  const codexPatchWriter = contract.provider === "codex" && contract.readOnly !== true && contract.skipModelReview !== true;
   const maxWords = Math.max(220, Math.min(1400, Math.floor((contract.maxWorkerOutputTokens || 1000) * 0.7)));
   return [
     "You are one bounded worker in a finite project round. Complete only the assigned unit.",
@@ -32,8 +35,11 @@ function promptFor(contract) {
     `Why this is independent: ${contract.independenceReason}`,
     `Execution workspace: ${contract.executionWorkspace}`,
     `Mode: ${contract.readOnly ? "read-only" : contract.skipModelReview ? "trusted primary writer" : "isolated writer"}`,
+    codexPatchWriter ? "Codex writer transport: read the bounded files, do not call write or shell-mutation tools, and return exactly one complete git-compatible unified diff in a ```diff fence. The coordinator will path-check and apply it only inside the isolated worktree. Include no prose outside the diff; if a safe patch is impossible, return one line beginning BLOCKER:." : "",
+    contract.artifactKind === "work-plan" ? "Return a structured work plan, not general prose. proposedWorkUnits must contain at most three exact, dependency-ready writer units. Every unit requires bounded relevantFiles, non-root expectedFiles, observable acceptanceCriteria, and allowlisted deterministic verificationCommands. If no safe unit exists, return no units and one blocker with owner, recovery trigger, and recovery action." : "",
     contract.relevantFiles?.length ? `Read scope: ${contract.relevantFiles.join(", ")}` : "",
     contract.expectedFiles?.length ? `Only allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
+    contract.requiredCapabilities?.length ? `Required callable capabilities: ${contract.requiredCapabilities.join(", ")}` : "",
     contract.acceptanceCriteria?.length ? `Unit acceptance:\n- ${contract.acceptanceCriteria.join("\n- ")}` : "",
     contract.expectedContribution ? `Required contribution: ${contract.expectedContribution}` : "",
     contract.integrationAction ? `Coordinator integration action: ${contract.integrationAction}` : "",
@@ -45,6 +51,42 @@ function promptFor(contract) {
     communicationContract(contract.communicationMode),
     `Hard summary budget: ${contract.maxWorkerOutputTokens || 1000} output tokens, approximately ${maxWords} words. Code changes belong in files, not the summary.`,
   ].filter(Boolean).join("\n\n");
+}
+
+function parseStructuredValue(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const candidates = [text];
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) candidates.push(fence[1].trim());
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch { /* try the next bounded candidate */ }
+  }
+  return null;
+}
+
+function structuredArtifact(contract, response) {
+  if (contract.artifactKind !== "work-plan") return null;
+  const value = parseStructuredValue(response.artifact) || parseStructuredValue(response.text);
+  if (!value) return null;
+  return {
+    kind: "work-plan",
+    summary: String(value.outcome || value.summary || "").trim().slice(0, 2000),
+    evidence: (Array.isArray(value.evidence) ? value.evidence : []).slice(0, 8).map((item) => String(item).slice(0, 1000)),
+    checks: (Array.isArray(value.checks) ? value.checks : []).slice(0, 8).map((item) => String(item).slice(0, 1000)),
+    blocker: String(value.blocker || "").trim().slice(0, 1200),
+    blockerOwner: String(value.blockerOwner || "").trim().slice(0, 160),
+    recoveryTrigger: String(value.recoveryTrigger || "").trim().slice(0, 800),
+    recoveryAction: String(value.recoveryAction || "").trim().slice(0, 1200),
+    proposedWorkUnits: (Array.isArray(value.proposedWorkUnits) ? value.proposedWorkUnits : []).slice(0, 3),
+  };
 }
 
 function executeWorker(payload) {
@@ -62,6 +104,13 @@ function executeWorker(payload) {
     const providerState = { [contract.provider]: { available: true, authenticated: true, command: contract.providerCommand } };
     const runtimeContract = { ...contract, workspace: executionWorkspace };
     const response = runProvider(providerState, runtimeContract, promptFor(contract));
+    const codexPatchWriter = contract.provider === "codex" && contract.readOnly !== true && contract.skipModelReview !== true;
+    const providerPatch = response.ok && codexPatchWriter
+      ? applyProviderPatch(executionWorkspace, dir, response.text, contract.expectedFiles)
+      : null;
+    if (providerPatch && !providerPatch.applied) response.typedBlocker = response.typedBlocker || providerPatch.blocker;
+    if (providerPatch) writeJson(path.join(dir, "provider-patch-evidence.json"), providerPatch);
+    const artifact = structuredArtifact(contract, response);
     if (!response.ok || response.typedBlocker) clearInventoryCache();
     const resultLimit = Math.max(1600, Math.min(12000, Number(contract.maxWorkerOutputTokens || 1000) * 4));
     fs.writeFileSync(path.join(dir, "provider-output.txt"), redact(bounded(response.text, resultLimit)), "utf8");
@@ -95,6 +144,8 @@ function executeWorker(payload) {
     writeJson(path.join(dir, "usage.json"), usage);
 
     let blocker = response.typedBlocker ? `${response.typedBlocker}: ${bounded(response.text, 500)}` : "";
+    if (!blocker && response.ok && contract.artifactKind === "work-plan" && !artifact) blocker = "structured-work-plan-missing";
+    if (!blocker && response.ok && artifact && !artifact.proposedWorkUnits.length && !artifact.blocker) blocker = "structured-work-plan-has-no-bounded-units-or-blocker";
     const expectedTrustedModel = contract.isolation?.trustedModel || "";
     const actualModel = normalizeModelId(usage.model);
     if (expectedTrustedModel && actualModel !== normalizeModelId(expectedTrustedModel)) {
@@ -123,6 +174,8 @@ function executeWorker(payload) {
       schemaVersion: 1,
       state,
       summary,
+      artifact,
+      artifactFingerprint: artifact ? artifactFingerprint(artifact) : "",
       changedFiles: changed,
       patchAvailable: Boolean(patch),
       patchPath: path.join(dir, "worker.diff"),

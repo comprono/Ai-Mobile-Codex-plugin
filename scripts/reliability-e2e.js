@@ -57,7 +57,7 @@ function toolValue(message) { return JSON.parse(message.result.content[0].text);
   const initialized = await call("initialize", { protocolVersion: "2025-03-26" });
   assert.equal(initialized.result.serverInfo.name, "ai-mobile-local");
   const listed = await call("tools/list");
-  assert.equal(listed.result.tools.length, 13);
+  assert.equal(listed.result.tools.length, 15);
   const started = toolValue(await call("tools/call", { name: "start-task", arguments: { workspace, outcome: "Perform a bounded architecture review.", userRequest: "Fix and ship the verified portable MCP outcome." } }));
   assert.match(started.taskId, /^task-/);
   assert.equal(started.outcome, "Ship the verified portable MCP outcome.");

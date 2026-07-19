@@ -6,6 +6,45 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
+function withDirectoryLock(directory, action, options = {}) {
+  const lockDirectory = path.resolve(String(directory || ""));
+  if (!lockDirectory || lockDirectory === path.parse(lockDirectory).root) throw new Error("A concrete lock directory is required.");
+  const timeoutMs = Math.max(100, Math.min(30000, Number(options.timeoutMs || 5000)));
+  const staleMs = Math.max(1000, Math.min(5 * 60 * 1000, Number(options.staleMs || 30000)));
+  const deadline = Date.now() + timeoutMs;
+  fs.mkdirSync(path.dirname(lockDirectory), { recursive: true });
+  while (true) {
+    try {
+      fs.mkdirSync(lockDirectory);
+      fs.writeFileSync(path.join(lockDirectory, "owner.json"), JSON.stringify({ pid: process.pid, acquiredAt: utcNow() }), "utf8");
+      break;
+    } catch (error) {
+      if (String(error.code || "").toUpperCase() !== "EEXIST") throw error;
+      let owner = null;
+      let ageMs = 0;
+      try {
+        owner = readJson(path.join(lockDirectory, "owner.json"), null);
+        ageMs = Math.max(0, Date.now() - fs.statSync(lockDirectory).mtimeMs);
+      } catch {
+        ageMs = staleMs + 1;
+      }
+      const ownerPid = Number(owner?.pid || 0);
+      const stale = ownerPid > 0 ? !processAlive(ownerPid) : ageMs > staleMs;
+      if (stale) {
+        try { fs.rmSync(lockDirectory, { recursive: true, force: true }); } catch { /* another contender may own cleanup */ }
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for local state lock: ${path.basename(lockDirectory)}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(25, Math.max(1, deadline - Date.now())));
+    }
+  }
+  try {
+    return action();
+  } finally {
+    try { fs.rmSync(lockDirectory, { recursive: true, force: true }); } catch { /* a crashed cleanup is recovered by the next owner */ }
+  }
+}
+
 function utcNow() {
   return new Date().toISOString();
 }
@@ -199,5 +238,6 @@ module.exports = {
   terminateTree,
   utcNow,
   where,
+  withDirectoryLock,
   writeJson,
 };

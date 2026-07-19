@@ -8,6 +8,7 @@ const { route } = require("./router");
 const { cancelTaskJobs, readJob, statusFor, TERMINAL_STATES } = require("./job-store");
 const { resourceLeaseSnapshot } = require("./resource-leases");
 const { integrateJob } = require("./patch-integration");
+const { acceptObservationJob } = require("./observation-plan");
 const {
   compactProjectContext,
   criticalPath,
@@ -43,9 +44,15 @@ function finite(value) {
 
 function compactCapacity(resources) {
   return Object.fromEntries(Object.entries(resources.providers || {}).map(([id, provider]) => [id, {
+    installed: provider.installed === true || Boolean(provider.command),
     available: provider.available === true,
     authenticated: provider.authenticated === true,
     authMode: provider.authMode || "unknown",
+    billingMode: provider.authMode === "api-key" ? "api-or-payg" : ["subscription", "chatgpt", "cli-session"].includes(provider.authMode) ? "subscription-or-cli-session" : "unknown",
+    subscriptionType: provider.subscriptionType || "",
+    headless: provider.headless !== false,
+    surfaces: provider.surfaces || {},
+    capabilities: provider.capabilities || {},
     confidence: provider.confidence || "unknown",
     observedAt: provider.observedAt || null,
     expiresAt: provider.expiresAt || null,
@@ -157,6 +164,7 @@ function normalizeWorkGraph(values) {
       taskKind: String(row.taskKind || "").trim().slice(0, 40),
       complexity: ["small", "medium", "large"].includes(row.complexity) ? row.complexity : "large",
       readOnly: row.readOnly === true,
+      requiredCapabilities: cleanStrings(row.requiredCapabilities, 12, 80).map((value) => value.toLowerCase()),
     };
   });
 }
@@ -185,7 +193,7 @@ function requirementsForStart(args, context, defaultLevel) {
 function graphForStart(args, context, requirements) {
   if (Array.isArray(args.workGraph) && args.workGraph.length) return normalizeWorkGraph(args.workGraph);
   if (context.workGraph.length) return normalizeWorkGraph(context.workGraph);
-  return normalizeWorkGraph(defaultWorkGraph(requirements, context.currentSliceRequirementId));
+  return normalizeWorkGraph(defaultWorkGraph(requirements, context.currentSliceRequirementId).map((node) => ({ ...node, relevantFiles: context.contextPointers || [] })));
 }
 
 function codexPlan(args) {
@@ -212,45 +220,24 @@ function inferTaskKind(goal) {
   return "code";
 }
 
-function hasTestFiles(root, depth = 2) {
-  const queue = [{ dir: root, depth: 0 }];
-  while (queue.length) {
-    const current = queue.shift();
-    let entries = [];
-    try { entries = fs.readdirSync(current.dir, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".venv") continue;
-      if (entry.isFile() && ((entry.name.toLowerCase().startsWith("test_") && entry.name.toLowerCase().endsWith(".py")) || entry.name.toLowerCase().endsWith("_test.py"))) return true;
-      if (entry.isDirectory() && current.depth < depth) queue.push({ dir: path.join(current.dir, entry.name), depth: current.depth + 1 });
-    }
+function boundedObservationFiles(task) {
+  const declared = cleanStrings(task.projectContext?.contextPointers, 24, 500).filter((value) => value !== ".");
+  if (declared.length) return declared;
+  const values = [];
+  for (const relative of [".codex/PROJECT_OUTCOME.md", ".codex/ACCEPTANCE.json", "README.md", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"]) {
+    try { if (fs.existsSync(path.join(task.workspace, relative))) values.push(relative); } catch { /* bounded fallback */ }
   }
-  return false;
+  try {
+    for (const entry of fs.readdirSync(task.workspace, { withFileTypes: true })) {
+      if (values.length >= 24) break;
+      if (!entry.isFile() || !/\.(?:js|ts|mjs|cjs|py|ps1|md|json|toml|ya?ml)$/i.test(entry.name)) continue;
+      const file = path.join(task.workspace, entry.name);
+      if (fs.statSync(file).size <= 128 * 1024 && !values.includes(entry.name)) values.push(entry.name);
+    }
+  } catch { /* no bounded discovery file is available */ }
+  return values.slice(0, 24);
 }
 
-function inferredVerificationCommands(workspace) {
-  const packagePath = path.join(workspace, "package.json");
-  if (fs.existsSync(packagePath)) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-      const script = String(pkg.scripts?.test || "");
-      if (script && !/no test specified/i.test(script)) return [{ name: "project-tests", command: "npm", args: ["test"], timeoutSeconds: 900 }];
-    } catch { /* use other deterministic probes */ }
-  }
-  if (fs.existsSync(path.join(workspace, "scripts", "self-test.js"))) {
-    return [{ name: "project-self-test", command: "node", args: ["scripts/self-test.js"], timeoutSeconds: 900 }];
-  }
-  if (
-    fs.existsSync(path.join(workspace, "pytest.ini"))
-    || fs.existsSync(path.join(workspace, "pyproject.toml"))
-    || fs.existsSync(path.join(workspace, "tests"))
-    || hasTestFiles(workspace)
-  ) return [{ name: "project-tests", command: "python", args: ["-m", "pytest", "-q"], timeoutSeconds: 900 }];
-  const entries = (() => { try { return fs.readdirSync(workspace); } catch { return []; } })();
-  if (entries.some((name) => name.toLowerCase().endsWith(".sln") || name.toLowerCase().endsWith(".csproj"))) return [{ name: "project-tests", command: "dotnet", args: ["test"], timeoutSeconds: 900 }];
-  if (fs.existsSync(path.join(workspace, "go.mod"))) return [{ name: "project-tests", command: "go", args: ["test", "./..."], timeoutSeconds: 900 }];
-  if (fs.existsSync(path.join(workspace, "Cargo.toml"))) return [{ name: "project-tests", command: "cargo", args: ["test"], timeoutSeconds: 900 }];
-  return [];
-}
 function recommendedWorkUnit(task) {
   const plan = nextPlanForTask(task);
   const requirement = (task.requirements || []).find((row) => row.id === plan.requirementId) || null;
@@ -268,19 +255,21 @@ function recommendedWorkUnit(task) {
     ? String(blocker.recoveryAction).trim().slice(0, 5000)
     : plan.goal;
   return {
-    goal: readOnly ? "Inspect the acceptance gap and return exact files plus a deterministic verification command: " + goal : goal,
+    goal: readOnly ? "Observe the bounded acceptance gap, then return a structured plan with exact writer files and deterministic verification: " + goal : goal,
     workGraphNodeId: plan.workGraphNodeId || undefined,
     independenceReason: "The visible project console owns no implementation files; this is the single dependency-ready work-plane unit.",
-    relevantFiles: relevantFiles.length ? relevantFiles : ["."],
+    relevantFiles: relevantFiles.length ? relevantFiles : boundedObservationFiles(task),
     expectedFiles: readOnly ? [] : expectedFiles,
     acceptanceCriteria: node.acceptanceCriteria?.length ? node.acceptanceCriteria : plan.acceptanceCriteria,
     verificationCommands,
     taskKind: node.taskKind || (readOnly ? "repository-scan" : inferTaskKind(goal)),
     complexity: node.complexity || (readOnly ? "medium" : "large"),
     readOnly,
+    artifactKind: readOnly ? "work-plan" : undefined,
     timeoutSeconds: readOnly ? 240 : 600,
     estimatedDirectTokens: readOnly ? 4000 : 12000,
     maxWorkerOutputTokens: readOnly ? 800 : 1600,
+    requiredCapabilities: node.requiredCapabilities || [],
     workPlaneRequired: true,
   };
 }
@@ -1064,6 +1053,13 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
     const mandatedUnit = unit.model && !unit.selectionAuthority ? applyUserModelMandate(readTask(project.taskId), unit) : unit;
     let decision;
     try {
+      const laneHistories = { ...histories };
+      for (const providerId of ["codex", "claude", "antigravity", "cursor"]) {
+        const activeCount = leaseState.active.filter((lease) => lease.provider === providerId).length + jobs.filter((job) => job.provider === providerId).length;
+        if (activeCount >= profile.maxWorkersPerProvider) {
+          laneHistories[providerId] = { ...(laneHistories[providerId] || {}), cooledDown: true, cooldownReason: "provider-worker-capacity-allocated-in-this-portfolio-round" };
+        }
+      }
       decision = route({
         ...mandatedUnit,
         workspace: project.workspace,
@@ -1071,12 +1067,11 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
         goal: unitGoal,
         currentCodexGoal: currentGoal,
         currentCodexFiles: [],
-        currentCodexReserved: false,
         workPlaneRequired: true,
         currentCodexReserved: unit.currentCodexReserved === true,
         horizonHours: args.horizonHours || portfolio.allocationPolicy.horizonHours || 5,
         projectId: project.projectId,
-      }, resources, histories);
+      }, resources, laneHistories);
     } catch (error) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: withMandateNote(error.message, mandatedUnit) }); continue; }
     if (decision.action !== "delegate") { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics || null, considered: decision.considered || [] }); continue; }
     try {
@@ -1268,7 +1263,12 @@ function integrateSingleRound(args) {
   const round = readRound(task.taskId, args.roundId);
   if (round.state === "running" || round.state === "planning") throw new Error("Collect the finite round before integration.");
   if (round.state === "invalidated") throw new Error("An invalidated round cannot be integrated.");
-  const integrations = (round.jobs || []).map((job) => ({ job, result: integrateJob(task.taskId, job.jobId) }));
+  const integrations = (round.jobs || []).map((job) => {
+    const collected = readJob(task.taskId, job.jobId, "compact", 0);
+    if (collected.readOnly !== true) return { job, result: integrateJob(task.taskId, job.jobId) };
+    const observation = acceptObservationJob(task.taskId, job.jobId);
+    return { job, result: { ...observation, observation: true, integrated: observation.accepted === true || observation.blocked === true } };
+  });
   const evidence = integrations.map(({ job, result }) => integrationEvidenceFor(readTask(task.taskId), job, result)).filter(Boolean);
   if (evidence.length) recordTaskEvidence(task.taskId, evidence);
   const failures = integrations.filter(({ result }) => result.integrated !== true && !String(result.blocker || "").startsWith("read-only-worker")).map(({ job, result }) => ({ goal: job.goal, blocker: result.blocker }));
@@ -1281,6 +1281,7 @@ function integrateSingleRound(args) {
     current.workGraph = (current.workGraph || []).map((node) => {
       const row = integrations.find(({ job }) => job.workGraphNodeId === node.id);
       if (!row) return node;
+      if (row.result.observation === true) return node;
       if (evidence.some((item) => item.workGraphNodeId === node.id)) return { ...node, state: "completed", owner: null };
       if (row.result.integrated === true || String(row.result.blocker || "").startsWith("read-only-worker")) return { ...node, state: "awaiting-evidence", owner: null };
       return { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "integration-failed").slice(0, 1000) };
@@ -1305,7 +1306,12 @@ function integratePortfolioRound(args) {
   const round = readPortfolioRound(portfolio.portfolioId, args.roundId);
   if (round.state === "running" || round.state === "planning") throw new Error("Collect the finite portfolio round before integration.");
   if (round.state === "invalidated") throw new Error("An invalidated portfolio round cannot be integrated.");
-  const integrations = (round.jobs || []).map((job) => ({ job, result: integrateJob(job.taskId, job.jobId) }));
+  const integrations = (round.jobs || []).map((job) => {
+    const collected = readJob(job.taskId, job.jobId, "compact", 0);
+    if (collected.readOnly !== true) return { job, result: integrateJob(job.taskId, job.jobId) };
+    const observation = acceptObservationJob(job.taskId, job.jobId);
+    return { job, result: { ...observation, observation: true, integrated: observation.accepted === true || observation.blocked === true } };
+  });
   const acceptedEvidence = [];
   for (const project of portfolio.projects) {
     const task = readTask(project.taskId);
@@ -1319,6 +1325,7 @@ function integratePortfolioRound(args) {
       current.workGraph = (current.workGraph || []).map((node) => {
         const row = owned.find(({ job }) => job.workGraphNodeId === node.id);
         if (!row) return node;
+        if (row.result.observation === true) return node;
         if (evidence.some((item) => item.workGraphNodeId === node.id)) return { ...node, state: "completed", owner: null };
         if (row.result.integrated === true || String(row.result.blocker || "").startsWith("read-only-worker")) return { ...node, state: "awaiting-evidence", owner: null };
         return { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "integration-failed").slice(0, 1000) };

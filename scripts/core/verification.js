@@ -38,6 +38,12 @@ function validate(workspace, entry) {
   return "";
 }
 
+function validateCommands(workspace, commands) {
+  const normalized = normalizeCommands(commands);
+  const errors = normalized.map((entry) => validate(workspace, entry)).filter(Boolean);
+  return { valid: normalized.length > 0 && errors.length === 0, commands: normalized, errors };
+}
+
 function runVerification(workspace, jobDir, commands) {
   const normalized = normalizeCommands(commands);
   const checks = [];
@@ -82,4 +88,4 @@ function runVerification(workspace, jobDir, commands) {
   return evidence;
 }
 
-module.exports = { normalizeCommands, runVerification };
+module.exports = { normalizeCommands, runVerification, validateCommands };

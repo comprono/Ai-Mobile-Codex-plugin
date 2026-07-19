@@ -9,7 +9,7 @@
     {
       "name": "ai-mobile",
       "source": "./",
-      "description": "Use a lightweight project console and bounded deterministic cycle to coordinate capacity-aware Codex CLI, Claude, Antigravity, and optional Cursor workers.",
+      "description": "Coordinate acceptance-linked work through one finite detached coordinator using fresh Codex CLI, Claude, Antigravity, and optional Cursor capacity.",
       "category": "development",
       "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin"
     }

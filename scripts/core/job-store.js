@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { appendJsonl, bounded, processAlive, readJson, readText, terminateTree, utcNow, writeJson } = require("./utils");
+const { appendJsonl, bounded, processAlive, readJson, readText, terminateTree, utcNow, withDirectoryLock, writeJson } = require("./utils");
 const { boundariesOverlap, goalOverlap } = require("./lane-policy");
 const { jobDirectory, listJobIds, listTaskIds, newId, readTask, safeId } = require("./state-store");
 const { acquireResourceLease, bindLeasePid, releaseResourceLease } = require("./resource-leases");
@@ -19,10 +19,20 @@ function statusFile(taskId, jobId) { return path.join(jobDirectory(taskId, jobId
 
 function setStatus(taskId, jobId, patch) {
   const file = statusFile(taskId, jobId);
-  const current = readJson(file, {});
-  const next = { ...current, ...patch, taskId, jobId, updatedAt: utcNow() };
-  writeJson(file, next);
-  return next;
+  return withDirectoryLock(`${file}.lock`, () => {
+    const current = readJson(file, {});
+    const effective = { ...patch };
+    if (TERMINAL_STATES.has(current.state) && effective.state && effective.state !== current.state) {
+      delete effective.state;
+      delete effective.pid;
+      delete effective.startedAt;
+      delete effective.finishedAt;
+      delete effective.blocker;
+    }
+    const next = { ...current, ...effective, taskId, jobId, revision: Number(current.revision || 0) + 1, updatedAt: utcNow() };
+    writeJson(file, next);
+    return next;
+  });
 }
 
 function statusFor(taskId, jobId, reconcile = true) {
@@ -36,8 +46,8 @@ function statusFor(taskId, jobId, reconcile = true) {
     });
     releaseResourceLease(jobId);
     const contract = readJson(path.join(jobDirectory(taskId, jobId), "contract.json"), {});
-    cleanupIsolatedWorkspace(contract.isolation || {});
-    return next;
+    const workspaceCleanup = cleanupIsolatedWorkspace(contract.isolation || {});
+    return setStatus(taskId, jobId, { workspaceCleanup, processLossReconciledAt: utcNow() });
   }
   return status;
 }
@@ -131,8 +141,8 @@ function createJob(contract, entrypoint) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw error;
   }
-  setStatus(taskId, jobId, { state: "running", pid: child.pid, startedAt: utcNow() });
-  return { taskId, jobId, state: "running", provider: stored.provider, model: stored.model || "", isolation: isolation.mode, skipModelReview: stored.skipModelReview };
+  const launchStatus = setStatus(taskId, jobId, { state: "running", pid: child.pid, startedAt: utcNow() });
+  return { taskId, jobId, state: launchStatus.state, provider: stored.provider, model: stored.model || "", isolation: isolation.mode, skipModelReview: stored.skipModelReview };
 }
 
 function waitForTerminal(taskId, jobId, waitSeconds) {

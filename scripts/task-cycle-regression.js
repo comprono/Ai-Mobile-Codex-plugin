@@ -15,15 +15,27 @@ const fakeBin = path.join(root, "bin");
 fs.mkdirSync(workspace, { recursive: true });
 fs.mkdirSync(fakeBin, { recursive: true });
 fs.writeFileSync(path.join(workspace, "verify.js"), 'const fs=require("node:fs"); if(fs.readFileSync("feature.txt","utf8").trim()!=="TASK_CYCLE_OK") process.exit(1);\n', "utf8");
-fs.writeFileSync(path.join(fakeBin, "fake-codex.js"), 'const fs=require("node:fs"); fs.writeFileSync("feature.txt","TASK_CYCLE_OK\\n","utf8"); process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Implemented and verified TASK_CYCLE_OK"}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:100,output_tokens:30}})+"\\n");\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex.js"), [
+  'const patch=["```diff","diff --git a/feature.txt b/feature.txt","new file mode 100644","--- /dev/null","+++ b/feature.txt","@@ -0,0 +1 @@","+TASK_CYCLE_OK","```"].join("\\n");',
+  'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:100,output_tokens:30}})+"\\n");',
+].join("\n") + "\n", "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.js" %*\r\n`, "utf8");
 
 fs.writeFileSync(path.join(workspace, "verify-failover.js"), 'const fs=require("node:fs"); if(fs.readFileSync("failover.txt","utf8").trim()!=="FAILOVER_OK") process.exit(1);\n', "utf8");
-fs.writeFileSync(path.join(fakeBin, "fake-codex-failover.js"), 'const fs=require("node:fs"); fs.writeFileSync("failover.txt","FAILOVER_OK\\n","utf8"); process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Implemented and verified FAILOVER_OK"}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:90,output_tokens:25}})+"\\n");\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-failover.js"), [
+  'const patch=["```diff","diff --git a/failover.txt b/failover.txt","new file mode 100644","--- /dev/null","+++ b/failover.txt","@@ -0,0 +1 @@","+FAILOVER_OK","```"].join("\\n");',
+  'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:90,output_tokens:25}})+"\\n");',
+].join("\n") + "\n", "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-failover.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-failover.js\" %*\r\n", "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-claude-fail.cmd"), '@echo off\r\necho {"is_error":true,"result":"provider-process-failed fixture"}\r\nexit /b 1\r\n', "utf8");
-fs.writeFileSync(path.join(fakeBin, "fake-claude-read.js"), 'process.stdout.write(JSON.stringify({is_error:false,structured_output:{outcome:"Found one exact bounded fact.",evidence:["verify.js exists"],checks:["node verify.js"],blocker:""},usage:{input_tokens:30,output_tokens:12}}));\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-claude-read.js"), 'process.stdout.write(JSON.stringify({is_error:false,structured_output:{outcome:"Found one exact bounded implementation.",evidence:["verify.js exists"],checks:["node verify-inspection.js"],blocker:"",blockerOwner:"",recoveryTrigger:"",recoveryAction:"",proposedWorkUnits:[{goal:"Create inspection.txt containing INSPECTED_OK",relevantFiles:["verify.js","verify-inspection.js","inspection.txt"],expectedFiles:["inspection.txt"],acceptanceCriteria:["node verify-inspection.js exits zero"],verificationCommands:[{name:"verify-inspection",command:"node",args:["verify-inspection.js"],timeoutSeconds:30}],taskKind:"code",complexity:"medium",priority:100,requiredCapabilities:["source","local-files","tests"]}]},usage:{input_tokens:30,output_tokens:12}}));\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-claude-read.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-claude-read.js\" %*\r\n", "utf8");
+fs.writeFileSync(path.join(workspace, "verify-inspection.js"), 'const fs=require("node:fs"); if(fs.readFileSync("inspection.txt","utf8").trim()!=="INSPECTED_OK") process.exit(1);\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-inspection.js"), [
+  'const patch=["```diff","diff --git a/inspection.txt b/inspection.txt","new file mode 100644","--- /dev/null","+++ b/inspection.txt","@@ -0,0 +1 @@","+INSPECTED_OK","```"].join("\\n");',
+  'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:70,output_tokens:22}})+"\\n");',
+].join("\n") + "\n", "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-inspection.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-inspection.js\" %*\r\n", "utf8");
 fs.writeFileSync(path.join(workspace, "verify-noop.js"), 'require("node:fs").writeFileSync("verification-ran.txt","BAD\\n");\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-noop.js"), 'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"No changes were needed."}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:50,output_tokens:10}})+"\\n");\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-noop.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-noop.js\" %*\r\n", "utf8");
@@ -37,6 +49,7 @@ run("git", ["config", "user.name", "AI Mobile Test"]);
 run("git", ["add", "."]);
 run("git", ["commit", "-m", "fixture"]);
 
+const { setStatus, statusFor } = require("./core/job-store");
 const { startTask } = require("./core/task-orchestrator");
 const { runTaskCycle } = require("./core/task-cycle");
 const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
@@ -167,14 +180,17 @@ const resources = {
       consoleEffort: "low",
       codexReservePercent: 15,
     }, readOnlyResources);
+    const readOnlyWriterResources = JSON.parse(JSON.stringify(resources));
+    readOnlyWriterResources.providers.codex.command = path.join(fakeBin, "fake-codex-inspection.cmd");
+    let readOnlyInventoryCalls = 0;
     const readOnly = await runTaskCycle({ taskId: readOnlyTask.taskId, maxRounds: 3, maxMinutes: 2, noProgressLimit: 2 }, entrypoint, {
-      inventory: async () => readOnlyResources,
+      inventory: async () => (++readOnlyInventoryCalls === 1 ? readOnlyResources : readOnlyWriterResources),
       providerHistory: () => ({}),
     });
-    assert.equal(readOnly.stopReason, "read-only-result-ready", JSON.stringify(readOnly));
-    assert.equal(readOnly.startedRounds, 1);
-    assert.equal(readOnly.transitions.filter((row) => row.type === "dispatched").length, 1);
-    assert.match(readOnly.transitions.find((row) => row.type === "read-only-result")?.jobs[0]?.summary || "", /bounded fact/i);
+    assert.equal(readOnly.completionAllowed, true, JSON.stringify(readOnly));
+    assert.equal(readOnly.startedRounds, 2);
+    assert.equal(readOnly.transitions.filter((row) => row.type === "dispatched").length, 2);
+    assert.equal(fs.readFileSync(path.join(workspace, "inspection.txt"), "utf8").trim(), "INSPECTED_OK");
 
     const noPatchResources = JSON.parse(JSON.stringify(resources));
     noPatchResources.providers.codex.command = path.join(fakeBin, "fake-codex-noop.cmd");
@@ -205,7 +221,14 @@ const resources = {
       providerHistory: () => ({}),
     });
     assert.equal(noPatch.completionAllowed, false);
-    assert.match(noPatch.failures[0]?.blocker || "", /no-patch-produced/);
+    assert.match(noPatch.failures[0]?.blocker || "", /provider-unified-diff-missing|no-patch-produced/, JSON.stringify(noPatch));
+    const noPatchJobId = noPatch.transitions.find((row) => row.type === "dispatched")?.workers?.[0]?.jobId;
+    assert.ok(noPatchJobId, JSON.stringify(noPatch));
+    const terminalBeforeLateLaunchWrite = statusFor(noPatchTask.taskId, noPatchJobId);
+    assert.equal(terminalBeforeLateLaunchWrite.state, "failed");
+    const terminalAfterLateLaunchWrite = setStatus(noPatchTask.taskId, noPatchJobId, { state: "running", pid: 999999, startedAt: new Date().toISOString() });
+    assert.equal(terminalAfterLateLaunchWrite.state, "failed", "a late parent launch write must not resurrect a terminal worker");
+    assert.equal(terminalAfterLateLaunchWrite.blocker, terminalBeforeLateLaunchWrite.blocker);
     assert.equal(fs.existsSync(path.join(workspace, "verification-ran.txt")), false, "verification must not run after a no-patch editor");
     process.stdout.write(JSON.stringify({
       ok: true,
@@ -216,6 +239,7 @@ const resources = {
       automaticFailoverProviders: dispatchedProviders,
       readOnlyArtifactRepeated: false,
       noPatchVerificationSkipped: true,
+      terminalWorkerStateMonotonic: true,
       mcpSliceSeconds: result.sliceSeconds,
     }, null, 2) + "\n");
   } finally {

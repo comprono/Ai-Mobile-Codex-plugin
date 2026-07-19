@@ -3,7 +3,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { boundedList, safeWorkspace } = require("./utils");
+const { boundedList, safeRelativePath, safeWorkspace } = require("./utils");
 
 const EVIDENCE_LEVELS = new Set(["activity", "process-health", "focused-test", "integration", "end-to-end", "user-visible"]);
 const METHOD_TERMS = /\b(review|inspect|inspection|analyse|analyze|analysis|audit|diagnose|diagnostic|investigate|investigation|plan|planning|monitor|monitoring|report|scan|assessment|research)\b/i;
@@ -50,6 +50,21 @@ function compactSection(value, maximum = 6000) {
     .filter(Boolean)
     .join(" ")
     .slice(0, maximum);
+}
+
+function contextPointers(markdown, workspace, sourceFiles = []) {
+  const section = markdownSection(markdown, "Context Pointers");
+  const declared = section.split(/\r?\n/).map((line) => line.trim().replace(/^[-*]\s+/, "").replace(/^`|`$/g, "")).filter(Boolean);
+  const conventional = ["README.md", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"];
+  const values = [...declared, ...sourceFiles, ...conventional];
+  const output = [];
+  for (const value of values) {
+    try {
+      const relative = safeRelativePath(workspace, value);
+      if (relative !== "." && fs.existsSync(path.join(workspace, relative)) && !output.includes(relative)) output.push(relative);
+    } catch { /* ignore invalid project-authored pointer */ }
+  }
+  return output.slice(0, 24);
 }
 
 function safeId(value, fallback) {
@@ -120,6 +135,13 @@ function normalizeManifestGraph(values) {
     priority: Math.max(1, Math.min(100, Number(row?.priority || 50))),
     state: ["pending", "running", "awaiting-evidence", "completed", "blocked"].includes(row?.state) ? row.state : "pending",
     acceptanceRequirementId: row?.acceptanceRequirementId ? safeId(row.acceptanceRequirementId) : null,
+    relevantFiles: boundedList(row?.relevantFiles, 80, 500),
+    expectedFiles: boundedList(row?.expectedFiles, 80, 500),
+    acceptanceCriteria: boundedList(row?.acceptanceCriteria, 12, 1000),
+    verificationCommands: Array.isArray(row?.verificationCommands) ? row.verificationCommands.slice(0, 8) : [],
+    taskKind: String(row?.taskKind || "").trim().slice(0, 40),
+    complexity: ["small", "medium", "large"].includes(row?.complexity) ? row.complexity : "large",
+    readOnly: row?.readOnly === true,
   })).filter((row) => row.goal);
 }
 
@@ -160,6 +182,7 @@ function discoverProjectContext(workspaceValue) {
   if (outcomeMarkdown) sources.push(".codex/PROJECT_OUTCOME.md");
   if (acceptance) sources.push(".codex/ACCEPTANCE.json");
   if (manifest) sources.push(path.relative(workspace, manifestFile).replace(/\\/g, "/"));
+  const pointers = contextPointers(outcomeMarkdown, workspace, sources);
   return {
     workspace,
     projectOutcome,
@@ -171,6 +194,7 @@ function discoverProjectContext(workspaceValue) {
     requirements,
     workGraph: manifestGraph,
     diagnostics: normalizeDiagnostics(manifest?.diagnostics),
+    contextPointers: pointers,
     sources,
   };
 }
@@ -307,6 +331,7 @@ function compactProjectContext(context) {
       blocked: context.requirements.filter((row) => row.required !== false && row.status === "blocked").length,
     },
     diagnostics: context.diagnostics,
+    contextPointers: context.contextPointers || [],
   };
 }
 

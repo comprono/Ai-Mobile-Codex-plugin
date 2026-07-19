@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-18T21:58:58Z",
+  "updated_utc": "2026-07-19T02:16:50Z",
   "project_state": "active",
-  "current_slice_requirement_id": "RESTART_CONTINUITY",
+  "current_slice_requirement_id": "PUBLIC_RELEASE",
   "requirements": [
     {
       "id": "TRUSTED_PRIMARY_WRITERS",
@@ -40,23 +40,23 @@
         {
           "level": "integration",
           "ref": "node scripts/shared-host-install-regression.js; scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list; claude plugin validate --strict .",
-          "summary": "Codex and Claude Code both installed ai-mobile@ai-mobile 1.1.3 from the same repository root and shared .mcp.json; strict Claude validation passed and no duplicate Claude orchestration runtime remains in the package.",
-          "verified_utc": "2026-07-18T00:21:17Z"
+          "summary": "Codex and Claude Code both installed ai-mobile@ai-mobile 1.3.1 from the same repository root and shared .mcp.json; strict Claude validation passed, ten critical source/cache hashes matched in both hosts, and no duplicate Claude orchestration runtime remains in the package.",
+          "verified_utc": "2026-07-19T04:22:45Z"
         }
       ],
       "blocker": null
     },
     {
       "id": "RESTART_CONTINUITY",
-      "description": "A schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, proves the fresh running runtime in the exact persisted task, and only afterward uses Luna-low as a lightweight console while a bounded deterministic cycle completes real work before the desktop reopens.",
+      "description": "A schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, immediately reopens the exact persisted task, proves the fresh running runtime there, and only afterward uses Luna-low as a lightweight console that starts one finite detached coordinator.",
       "required": true,
       "status": "failing",
       "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
         "Prove a deterministic app-server regression performs initialize, thread/resume, a capable-model verification turn, and only after exact runtimeVersion evidence a Luna-low turn in the same thread; stale evidence must stop before Luna.",
-        "Commit, push, and install AI Mobile 1.2.2, then prove codex plugin list reports ai-mobile@ai-mobile 1.2.2.",
+        "Commit, push, and install AI Mobile 1.3.1, then prove codex plugin list reports ai-mobile@ai-mobile 1.3.1.",
         "Close only OpenAI.Codex and run the one-shot handoff against this exact task with Sol Ultra verification and GPT-5.6 Luna low continuation; never launch Classic ChatGPT, codex exec resume, a duplicate task, Goal, automation, manager loop, or UI automation.",
-        "On the fresh Luna turn, reconcile the existing Job Vibhu durable task once and invoke one bounded deterministic cycle; Luna must not inspect or patch the plugin or project.",
+        "On the fresh Luna turn, reconcile the existing durable project task once and invoke run-task-cycle exactly once; Luna must not inspect or patch the plugin or project, and the already visible desktop must not wait for coordinator completion.",
         "Prove a real installed provider accepts its structured schema, reaches a terminal state without another user message, is collected once, and either integrates deterministic evidence or emits the correct failure class and recovery transition."
       ],
       "evidence": [
@@ -279,36 +279,36 @@
     },
     {
       "id": "BOUNDED_EXECUTION",
-      "description": "Normal project execution never launches or restarts desktop applications; each MCP cycle call stays below the host deadline, sandboxed Codex writers can edit without interactive approval, generated root-wide writers fail closed, and no-patch workers skip verification.",
+      "description": "Normal execution starts or reuses one finite detached event-driven coordinator, returns promptly, uses sandboxed read-only Codex reasoning plus path-bounded patch application for isolated writers, skips verification after missing patches, and never auto-launches a desktop app.",
       "required": true,
       "status": "passing",
       "minimum_evidence_level": "integration",
       "acceptance_steps": [
-        "Prove run-task-cycle returns within a 240-second maximum slice and emits continuationRequired for a still-running finite worker.",
-        "Prove Codex writer arguments retain workspace-write isolation with noninteractive approval and no dangerous sandbox bypass.",
-        "Prove a successful provider response with no changed files fails before any verification command runs.",
+        "Prove run-task-cycle returns a durable coordinator receipt without a visible-turn polling loop and the coordinator completes finite work after the initiating call returns.",
+        "Prove isolated Codex writers remain read-only, return a unified diff, and AI Mobile recounts, path-checks, applies, verifies, and integrates it without dangerous sandbox bypass.",
+        "Prove a successful provider response with no valid patch fails before any verification command runs.",
         "Prove normal lifecycle and task execution open no desktop application and generated work without explicit files and checks remains read-only."
       ],
       "evidence": [
         {
           "level": "integration",
-          "ref": "node scripts/task-cycle-regression.js; node scripts/self-test.js; node scripts/reliability-e2e.js; 18-suite release matrix",
-          "summary": "The cycle uses 210-second MCP slices, Codex writers use -a never inside workspace-write isolation, no-patch verification is skipped, auto-generated unbounded writers remain read-only, and normal lifecycle tests start no desktop application.",
-          "verified_utc": "2026-07-18T21:58:58Z"
+          "ref": "node scripts/durable-event-regression.js; node scripts/provider-patch-regression.js; node scripts/task-cycle-regression.js; node scripts/reliability-e2e.js",
+          "summary": "A detached coordinator completed after the initiating call, structured observations advanced automatically, malformed hunk counts were safely recounted, out-of-bound patches were rejected, missing patches skipped verification, and no sandbox bypass or desktop launch occurred.",
+          "verified_utc": "2026-07-19T03:00:47Z"
         }
       ],
       "blocker": null
     },
     {
       "id": "PUBLIC_RELEASE",
-      "description": "Version 1.2.2 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
+      "description": "Version 1.3.1 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
       "required": true,
       "status": "failing",
       "minimum_evidence_level": "end-to-end",
       "acceptance_steps": [
         "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
-        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.2.2 runtime.",
-        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.2.2."
+        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.3.1 runtime.",
+        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.3.1."
       ],
       "evidence": [],
       "blocker": null
@@ -352,6 +352,160 @@
           "ref": "node scripts/outcome-recovery-e2e.js; node scripts/reliability-e2e.js; full 14-suite release matrix",
           "summary": "Matching project acceptance contracts override duplicate stale requirement status; a changed acceptance fingerprint refreshes the same durable task, unchanged project files preserve newer recorded task evidence, and explicit unrelated user outcomes remain isolated.",
           "verified_utc": "2026-07-18T03:43:14Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "DURABLE_EVENT_ENGINE",
+      "description": "A finite low-RAM coordinator observes worker termination without an LLM poll, collects each terminal result once, integrates or accepts it once, and advances the next dependency-ready task or portfolio unit without another visible Codex turn.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Launch a finite coordinator for a disposable task and prove the MCP call returns promptly while the coordinator continues independently.",
+        "Prove worker success, failure, and abrupt process loss all leave running state automatically and create one durable material event.",
+        "Prove collection, integration or structured artifact acceptance, and the next dispatch happen exactly once without another visible Codex call.",
+        "Prove time, round, token, no-progress, cancellation, crash, RAM, and storage limits stop and clean the coordinator safely."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "node scripts/durable-event-regression.js",
+          "summary": "A detached deterministic coordinator observed real child-provider termination, collected one terminal result once, accepted or integrated it once, dispatched the dependency-ready successor, and completed acceptance without another visible Codex turn or desktop launch.",
+          "verified_utc": "2026-07-19T02:02:55Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "OBSERVATION_FIRST_PLANNING",
+      "description": "Unfamiliar project work is observed through bounded deterministic context and an economical structured artifact before exact writer ownership or verification is committed.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Start from an acceptance requirement with no trusted file map and prove the first unit is a bounded read-only observation.",
+        "Return a validated compact proposal containing exact files, acceptance criteria, deterministic checks, dependencies, and resource estimates.",
+        "Prove the proposal creates the next exact work-graph unit without a second repository-wide model review.",
+        "Fingerprint the artifact and prove an unchanged observation cannot rerun."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "node scripts/durable-event-regression.js",
+          "summary": "A bounded read-only provider returned a structured work plan; AI Mobile validated exact files and deterministic checks, fingerprinted the observation, created one dependency-ready writer node, and completed the verified implementation without prose handoff or duplicate observation.",
+          "verified_utc": "2026-07-19T02:02:55Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "DYNAMIC_PROVIDER_CAPACITY",
+      "description": "Provider and model selection uses fresh headless evidence for executables, authentication, models, effort tiers, quota pools, reset horizons, billing mode, reliability, RAM, and capability rather than fixed model names or stale availability.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Probe Codex CLI, Claude Code, Antigravity CLI, and optional Cursor without opening desktop applications.",
+        "Prove model-specific and shared quota pools cannot be oversubscribed and reset transitions invalidate stale negative capacity.",
+        "Prove Windows launches prefer native executables and preserve structured JSON arguments.",
+        "Prove launch, transport, timeout, authentication, authorization, capacity, and semantic failures are separately typed."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/provider-capability-regression.js; provider-diagnostics-cli passive inventory; Antigravity disposable canary",
+          "summary": "Routing uses discovered native model metadata, capability tiers, quota pools, reset horizons, billing/auth mode, Codex reserve, and headless CLI authentication. Live inventory proved that available shared and model-specific capacity, reset timing, authenticated headless providers, and unavailable providers affect routing without publishing the private snapshot.",
+          "verified_utc": "2026-07-19T02:16:50Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "REAL_PROVIDER_PORTFOLIO",
+      "description": "One portfolio request coordinates two separate nontrivial projects with real headless providers, independent acceptance, concurrent disjoint work, machine-wide leases, fair capacity allocation, and project-local completion evidence.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "end-to-end",
+      "acceptance_steps": [
+        "Create two disposable Git projects with independent outcomes, requirements, work graphs, and deterministic checks.",
+        "Use at least two installed real headless provider adapters across the portfolio when fresh capacity permits.",
+        "Prove useful disjoint work overlaps, one blocked project does not stall the other, and shared quota or file ownership cannot be double leased.",
+        "Prove each project and the portfolio complete only from their own accepted evidence with no desktop launch."
+      ],
+      "evidence": [
+        {
+          "level": "end-to-end",
+          "ref": "node scripts/real-provider-portfolio-canary.js",
+          "summary": "A real Codex and Claude portfolio completed two concurrent disposable projects from isolated project-local acceptance evidence, preserved the 15% Codex reserve, prevented cross-project writes, cleaned all worktrees within storage limits, and opened no desktop applications.",
+          "verified_utc": "2026-07-19T02:48:24Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "MATERIAL_STATUS_VIEW",
+      "description": "One compact token-efficient status surface reads durable state directly and separates real outcome, plugin runtime, workers, resources, blockers, evidence, and next owned action without a heartbeat or status loop.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Return one material status for a task and a portfolio with no repository scan or provider launch.",
+        "Show last accepted evidence, active worker and model with routing reason, quota/reset state, blocker owner and recovery, and next already-owned action.",
+        "Prove unchanged reads create no events, workers, tasks, model turns, UIs, or progress claims.",
+        "Prove status never reports worker existence, process health, or elapsed time as project completion."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/durable-event-regression.js",
+          "summary": "material-status read one bounded coordinator record and deduplicated event journal, separated outcome/progress/workers/resources/blockers/evidence/next, and proved no provider probe, project scan, state mutation, heartbeat, or UI launch.",
+          "verified_utc": "2026-07-19T02:16:50Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "PROVIDER_DIAGNOSTICS",
+      "description": "A privacy-safe diagnostic identifies provider clients, model and endpoint configuration, subscription versus API access, config sources, secret reachability, and the smallest safe canary without exposing credentials.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Inspect provider configuration paths and environment-variable names without returning secret values.",
+        "Distinguish subscription authentication from API-key billing and report unknown states honestly.",
+        "Run the smallest explicitly requested headless canary and record provider, model, category, latency, config source, and quota or rate-limit class.",
+        "Prove diagnostics never open a provider UI or print a credential."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/provider-capability-regression.js; provider-diagnostics-cli Antigravity canary",
+          "summary": "Diagnostics reported executable/authentication/billing/model/quota/capability/config-presence evidence without secret values, then an explicitly requested disposable Antigravity read-only canary returned its exact marker with no desktop UI.",
+          "verified_utc": "2026-07-19T02:16:50Z"
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "id": "CAPABILITY_ORCHESTRATION",
+      "description": "Work units can require source, GitHub, browser, API, local-file, or project-specific capabilities; the coordinator assigns only callable authorized surfaces and returns an explicit user decision when a UI or irreversible action is genuinely required.",
+      "required": true,
+      "status": "passing",
+      "minimum_evidence_level": "integration",
+      "acceptance_steps": [
+        "Route source work to headless workers and deterministic local tools before any UI.",
+        "Represent GitHub, browser, API, and project-specific tool requirements in the work-unit contract and reject unavailable capabilities before launch.",
+        "Prove authentication-sensitive or irreversible UI actions require explicit authorization and cannot be silently simulated.",
+        "Prove normal task and portfolio execution launches no desktop application."
+      ],
+      "evidence": [
+        {
+          "level": "integration",
+          "ref": "node scripts/provider-capability-regression.js",
+          "summary": "Capability routing selected only a provider with the required callable browser surface, rejected GitHub when no worker surface exposed it, protected Codex reserve, separated installation from CLI authentication, and produced explicit typed reasons without auto-launching UI.",
+          "verified_utc": "2026-07-19T02:16:50Z"
         }
       ],
       "blocker": null

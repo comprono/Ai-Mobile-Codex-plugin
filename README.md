@@ -11,14 +11,14 @@ The objective is practical: finish more verified work without spending more toke
 1. start-task reads the bounded project outcome and acceptance gap and captures one fresh capacity snapshot.
 2. The visible Codex task becomes a lightweight project console. It owns no project files and performs no bulk reading, planning, coding, or expensive review.
 3. The deterministic coordinator returns the highest-value dependency-ready work-plane unit.
-4. run-task-cycle starts one bounded execution window for the dependency-ready gap.
+4. run-task-cycle starts or reuses one finite detached event-driven coordinator and returns a durable receipt promptly.
 5. dispatch-round selects an actual Codex CLI, Claude, Antigravity, or Cursor worker from task fit, quota pools, reset horizon, reliability, RAM, storage, cost, and user priority.
 6. Machine-wide leases protect provider slots, shared quota, the Codex reserve, file ownership, and worktree storage across projects.
-7. The cycle waits locally without repeated model turns, collects each finite worker once, and refuses an unchanged failed-provider retry.
+7. The coordinator waits on worker state changes without visible-model polling, collects each finite worker once, and refuses an unchanged failed-provider retry.
 8. integrate-round applies an isolated patch exactly once only after boundary checks and declared deterministic primary-workspace verification. Concurrent user changes and unverified patches are refused.
 9. record-evidence advances only the named project requirement. complete-task refuses completion until every required acceptance item has sufficient evidence.
 
-AI Mobile starts no desktop application, Goal, automation, heartbeat, LLM manager process, schedule, hidden Codex continuation, or recurring status loop. Its bounded deterministic cycle uses no repeated model-turn polling.
+AI Mobile starts no desktop application, Goal, automation, heartbeat, LLM manager process, schedule, hidden Codex continuation, or recurring status loop. Its finite detached coordinator advances only on durable worker transitions and uses no repeated model-turn polling.
 
 The console reports only accepted evidence, real assignments, typed blockers, resource choices, and the next action already assigned. Activity is not progress.
 
@@ -90,7 +90,8 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 | start-task | Recover bounded intent, create one durable project or portfolio task, capture capacity, and return console plus work-plane plans. |
 | reconcile-task | Apply the latest correction to the same task, migrate legacy state, invalidate stale work, and preserve matching evidence. |
 | dispatch-round | Allocate dependency-ready units to real work-plane workers; omitted units use the coordinator recommendation. |
-| run-task-cycle | Default bounded path: dispatch, wait locally, collect once, integrate verified work, and advance only on evidence or changed recovery state. |
+| run-task-cycle | Start or reuse one finite detached event-driven coordinator and return a durable receipt without visible-model polling. |
+| material-status | Passively report material events, acceptance, assignments, blockers, evidence, and next action without probing providers or scanning projects. |
 | collect-round | Collect one bounded round and clean editing worktrees. |
 | integrate-round | Apply verified isolated patches once without a model review; protect concurrent changes and roll back failed verification. |
 | record-evidence | Attach verified evidence to one task or named portfolio project. |
@@ -98,6 +99,7 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 | complete-task | Complete only from sufficient project-local acceptance evidence. |
 | cancel-task | Stop owned workers, release leases, and clean owned worktrees. |
 | resource-inventory | Passively inspect current provider, model, quota, lease, RAM, and storage evidence. |
+| provider-diagnostics | Report privacy-safe executable, authentication, billing, model, quota/reset, and callable-surface evidence; run a minimal canary only when explicitly requested. |
 | orchestrator-profile | Read or update private local routing and resource preferences. |
 | prepare-restart-handoff | Persist one authorized exact-package and exact-task restart boundary for a schema upgrade. |
 
@@ -111,7 +113,7 @@ Runtime state lives under `%LOCALAPPDATA%\AI Mobile\v1`, outside managed reposit
 - Verified trusted Fable 5 and Sonnet 5 changes receive no second model review.
 - Isolated patches are integrated deterministically, not reimplemented by Luna.
 - A failed worker is retried only after a classified transient failure and changed evidence.
-- A successful read-only artifact is returned once; the same inspection is not repeated or sent through a redundant premium review.
+- A successful read-only plan is accepted once, converted into exact dependency-ready writer units, and never repeated or sent through a redundant premium review.
 - Worker activity, process health, elapsed time, and token usage are never reported as outcome progress.
 
 The default communication mode is smart-compact: answer first, preserve exact evidence and caveats, and remove low-value narration without reducing reasoning quality.
@@ -140,8 +142,8 @@ Existing host sessions keep the schema they loaded at startup. A schema or runti
 3. prepare-restart-handoff closes only OpenAI.Codex and refreshes the canonical AI Mobile plugin. Classic ChatGPT is never a fallback.
 4. Immediately after refresh, the launcher reopens the exact OpenAI.Codex task so the desktop cannot remain hidden behind verification or worker execution.
 5. With that task visible, the official local Codex app-server resumes the exact persisted task. A bounded capable-model turn calls AI Mobile resource-inventory once and must observe the expected runtimeVersion.
-6. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and invokes the bounded run-task-cycle.
-7. Each MCP slice waits at most 210 seconds. A continuationRequired receipt resumes the same finite worker without another task, status poll, or replanning; a hard launcher timeout stops only stale continuation children while the desktop remains open.
+6. Only after that evidence, a second turn in the same task selects the lightweight console model and low effort, reconciles the existing durable task once, and invokes run-task-cycle exactly once.
+7. The detached coordinator continues finite worker, integration, and recovery transitions after the visible turn returns. Later explicit status requests use material-status once; the console never polls or creates another task.
 
 This path never uses codex exec resume, a duplicate task, a Goal, an automation, an LLM manager loop, or UI automation. Normal continuation does not restart the app. Today the private console preference is GPT-5.6 Luna at low effort; future models are selected by role and live evidence rather than a permanent product name.
 
@@ -164,6 +166,10 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scr
 # One explicit evidence summary
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" task-summary -TaskId "<task-id>"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" task-summary -PortfolioId "<portfolio-id>"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" material-status -TaskId "<task-id>"
+
+# Privacy-safe provider details; add -ContractFile only for an explicitly requested canary
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\plugins\ai-mobile\scripts\antigravity.ps1" provider-diagnostics
 ```
 
 ## Privacy And Safety
@@ -178,21 +184,31 @@ Run all release gates before publishing:
 
 ```powershell
 node .\scripts\self-test.js
-node .\scripts\task-cycle-regression.js
-node .\scripts\outcome-recovery-e2e.js
+node .\scripts\reliability-e2e.js
 node .\scripts\continuation-regression.js
-node .\scripts\state-capacity-regression.js
-node .\scripts\orchestration-regression.js
-node .\scripts\economic-regression.js
-node .\scripts\worker-isolation-regression.js
-node .\scripts\portfolio-e2e.js
-node .\scripts\global-resource-regression.js
+node .\scripts\task-cycle-regression.js
+node .\scripts\console-workplane-regression.js
+node .\scripts\durable-event-regression.js
+node .\scripts\provider-capability-regression.js
+node .\scripts\provider-patch-regression.js
+node .\scripts\app-server-resume-regression.js
+node .\scripts\fable-routing-regression.js
 node .\scripts\trusted-primary-regression.js
 node .\scripts\shared-host-install-regression.js
+node .\scripts\outcome-recovery-e2e.js
+node .\scripts\orchestration-regression.js
+node .\scripts\state-capacity-regression.js
+node .\scripts\worker-isolation-regression.js
+node .\scripts\integration-regression.js
+node .\scripts\portfolio-e2e.js
+node .\scripts\global-resource-regression.js
 node .\scripts\storage-lifecycle-regression.js
-node .\scripts\reliability-e2e.js
-# Manual authenticated release canary; consumes one small provider request
+node .\scripts\economic-regression.js
+
+# Manual authenticated release canaries; consume bounded provider requests
 node .\scripts\installed-provider-canary.js
+node .\scripts\real-provider-portfolio-canary.js
+
 powershell -ExecutionPolicy Bypass -File .\scripts\antigravity.ps1 self-test
 powershell -ExecutionPolicy Bypass -File .\scripts\antigravity.ps1 privacy
 git diff --check
@@ -201,7 +217,7 @@ pipx run plugin-scanner verify .
 pipx run plugin-scanner scan . --format json
 ```
 
-Scanner 2.0.1114 scores the repository `100/100` with zero findings. Its standalone `verify` command intentionally classifies every local stdio MCP launch as `safety-skip` and exits nonzero; use the executed `self-test` and `reliability-e2e` gates as the manual runtime evidence alongside that scanner result.
+Scanner 2.0.1116 scores the repository `100/100` with zero findings. Its standalone `verify` command intentionally classifies every local stdio MCP launch as `safety-skip` and exits nonzero; use the executed `self-test` and `reliability-e2e` gates as the manual runtime evidence alongside that scanner result.
 See [Capacity-Aware Resource Orchestration](docs/CAPACITY_ORCHESTRATION.md) for decision rules and [Implementation Report](docs/IMPLEMENTATION_REPORT.md) for the v1 architecture and falsifiable gates.
 
 ## License

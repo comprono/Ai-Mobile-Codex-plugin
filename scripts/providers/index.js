@@ -14,6 +14,32 @@ const PROVIDER_CAPABILITIES = {
   cursor: { architecture: 70, browser: 55, code: 82, debug: 78, docs: 68, generic: 70, "live-state": 50, "repository-scan": 72, research: 62, review: 72, tests: 75 },
 };
 
+const PROVIDER_SURFACES = {
+  codex: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
+  claude: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
+  antigravity: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: true, github: false, api: false, "project-tools": false },
+  cursor: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
+};
+
+function inferModelTier(row = {}) {
+  const identity = `${row.id || ""} ${row.displayName || ""}`.toLowerCase();
+  const text = `${identity} ${row.description || ""}`.toLowerCase();
+  if (/\b(spark|mini|lite|haiku)\b/.test(identity) || /\bflash[- ]?low\b/.test(identity)) return "efficient";
+  if (/\b(fable|opus|ultra)\b/.test(identity)) return "frontier";
+  if (/\b(frontier|maximum|most capable|advanced|ultra)\b/.test(text)) return "frontier";
+  if (/\b(fast|efficient|affordable|small|mini|lite|low|haiku)\b/.test(text)) return "efficient";
+  if (/\b(balanced|general|strong|medium|sonnet|flash)\b/.test(text)) return "balanced";
+  return "unknown";
+}
+
+function enrichModel(row = {}) {
+  return { ...row, capabilityTier: row.capabilityTier || inferModelTier(row) };
+}
+
+function enrichModels(rows = []) {
+  return rows.map(enrichModel);
+}
+
 function version(command) {
   if (!command) return "";
   const result = commandResult(command, ["--version"], { timeout: 6000 });
@@ -59,7 +85,7 @@ function discoverCodex() {
       isDefault: row.isDefault === true,
       defaultReasoningEffort: row.defaultReasoningEffort || "",
       supportedReasoningEfforts: (row.supportedReasoningEfforts || []).map((item) => item.reasoningEffort || item).filter(Boolean),
-    })).filter((row) => row.id),
+    })).filter((row) => row.id).map(enrichModel),
     capacity: windows.length
       ? { windows, effectiveRemainingPercent: Math.min(...effectiveWindows.map((item) => item.remainingPercent)), availableResetCredits: native?.rateLimits?.rateLimitResetCredits?.availableCount ?? null, source: "codex-app-server", confidence: "high" }
       : { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: "Exact shared Codex capacity is unavailable; the configured reserve remains protected." },
@@ -87,7 +113,7 @@ function discoverClaude() {
   return provider("claude", authenticated, {
     command: cli.command, version: cli.version, authMode: auth.authMode, subscriptionType: auth.subscriptionType,
     confidence: authenticated ? "high" : "medium",
-    models: help.status === 0 ? parseClaudeModels(help.stdout) : [],
+    models: help.status === 0 ? enrichModels(parseClaudeModels(help.stdout)) : [],
     capacity: windows.length
       ? { windows, remainingPercent: shared.length ? Math.min(...shared.map((window) => window.remainingPercent)) : null, resetAt: [...shared].sort((a, b) => a.remainingPercent - b.remainingPercent)[0]?.resetAt || null, source: "claude-slash-usage", confidence: "high", note: "Built-in subscription usage; model-specific windows apply only to matching model families." }
       : { remainingPercent: null, resetAt: null, source: "native-cli-auth", note: usageProbe.status === 0 ? "Claude usage output contained no parseable windows." : "Claude built-in usage is unavailable; quota remains unknown." },
@@ -139,24 +165,46 @@ function antigravityLimits() {
 function discoverAntigravity() {
   const cli = resolveCommand("agy", []);
   if (!cli.found) return provider("antigravity", false, { reason: "Antigravity CLI (agy) not found." });
+  const roster = commandResult(cli.command, ["models"], { timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
+  if (roster.status !== 0) {
+    const output = bounded(`${roster.stdout}\n${roster.stderr}`, 1200);
+    const failure = classifyFailure(output, roster.status || 1);
+    const authFailure = failure === "authentication-required" || /sign in|not logged in/i.test(output);
+    return provider("antigravity", false, {
+      installed: true,
+      command: cli.command,
+      version: cli.version,
+      authMode: authFailure ? "none" : "unknown",
+      confidence: "high",
+      reason: authFailure
+        ? "Antigravity CLI is installed but its headless session is not authenticated; desktop-app login does not prove CLI authentication."
+        : `${failure}: ${bounded(output, 500)}`,
+      diagnostic: { failureClass: authFailure ? "authentication-required" : failure, canary: "agy models" },
+    });
+  }
   const limits = antigravityLimits();
-  // The helper already supplies the visible, quota-qualified roster. Avoid a
-  // second CLI scan when it is available; that removed several seconds from
-  // cold inventory on the user's machine.
-  const roster = limits.checked ? null : commandResult(cli.command, ["models"], { timeout: 7000 });
+  const measured = limits.models;
+  const rosterModels = roster.stdout.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(fetching|available models?:)/i.test(line) && !/^[IEW]\d/.test(line))
+    .slice(0, 100)
+    .map((displayName) => ({ id: modelId(displayName), displayName }));
   const models = limits.checked
     ? limits.models.map((row) => ({ id: row.id, displayName: row.displayName }))
-    : (roster.status === 0 ? roster.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 50).map((displayName) => ({ id: modelId(displayName), displayName })) : []);
-  const measured = limits.models;
-  const enriched = models.map((model) => ({ ...model, quota: measured.find((row) => row.id === model.id || modelId(row.displayName) === model.id) || null }));
+    : rosterModels;
+  const enriched = models.map((model) => enrichModel({ ...model, quota: measured.find((row) => row.id === model.id || modelId(row.displayName) === model.id) || null }));
   return provider("antigravity", true, {
-    command: cli.command, version: cli.version, authMode: "cli-session", confidence: limits.checked ? "high" : "medium", models: enriched,
+    installed: true,
+    command: cli.command,
+    version: cli.version,
+    authMode: "cli-session",
+    confidence: limits.checked ? "high" : "medium",
+    models: enriched,
     capacity: limits.checked
-      ? { models: measured, remainingPercent: antigravityRemaining(measured), resetAt: null, source: limits.source, generatedAt: limits.generatedAt, note: "Per-model quota from an already-installed local Antigravity helper; unknown percentages remain unknown; no desktop app was started." }
-      : { remainingPercent: null, resetAt: null, source: "native-cli", note: "Availability is verified; exact model quota is unknown unless an optional local helper exposes it." },
+      ? { models: measured, remainingPercent: antigravityRemaining(measured), resetAt: null, source: limits.source, generatedAt: limits.generatedAt, note: "Per-model quota from an installed local Antigravity helper after independent CLI-authentication proof; unknown percentages remain unknown; no desktop app was started." }
+      : { remainingPercent: null, resetAt: null, source: "native-cli", note: "Headless CLI authentication is verified; exact model quota is unknown unless an optional local helper exposes it." },
   });
 }
-
 function discoverCursor() {
   const cli = resolveCommand("cursor-agent", []);
   return cli.found
@@ -169,7 +217,7 @@ function unknownCapacity(source) {
 }
 
 function provider(id, available, extra = {}) {
-  return { id, available, authenticated: available, confidence: available ? "medium" : "high", models: [], capabilities: PROVIDER_CAPABILITIES[id] || {}, ...extra };
+  return { id, installed: Boolean(extra.command), available, authenticated: available, headless: true, confidence: available ? "medium" : "high", models: [], capabilities: PROVIDER_CAPABILITIES[id] || {}, surfaces: PROVIDER_SURFACES[id] || { headless: true }, ...extra };
 }
 
 function classifyFailure(value, exitCode) {
@@ -186,7 +234,8 @@ function classifyFailure(value, exitCode) {
 function runCodex(providerState, contract, prompt) {
   const model = contract.model;
   if (!model) return { ok: false, typedBlocker: "model-unavailable", text: "No allowed Codex model was selected from the native catalog." };
-  const args = buildCodexExecArgs({ workspace: contract.workspace, model, effort: contract.effort || "medium", readOnly: contract.readOnly });
+  const patchOutputWriter = contract.readOnly !== true && contract.skipModelReview !== true;
+  const args = buildCodexExecArgs({ workspace: contract.workspace, model, effort: contract.effort || "medium", readOnly: patchOutputWriter ? true : contract.readOnly });
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, input: prompt, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
   const parsed = parseCodexJsonl(result.stdout);
   const text = parsed.resultText || result.stderr;
@@ -196,28 +245,60 @@ function runCodex(providerState, contract, prompt) {
 
 const CLAUDE_SYSTEM_PROMPT = "You are a bounded project worker. Follow the supplied lane contract exactly. Never broaden scope, delegate, or interact with the visible project console. Use only the enabled local file tools. For read-only lanes do not edit. Stop when the requested evidence is sufficient and return only the required JSON.";
 
-function claudeResultSchema(maxOutputTokens = 1200) {
+function claudeResultSchema(contractOrTokens = 1200) {
+  const contract = typeof contractOrTokens === "object" ? contractOrTokens : {};
+  const maxOutputTokens = typeof contractOrTokens === "object" ? contractOrTokens.maxWorkerOutputTokens : contractOrTokens;
   const characterBudget = Math.max(1200, Math.min(12000, Math.floor(Number(maxOutputTokens || 1200) * 3)));
+  const commandSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      name: { type: "string", maxLength: 80 },
+      command: { type: "string", maxLength: 260 },
+      args: { type: "array", maxItems: 30, items: { type: "string", maxLength: 500 } },
+      timeoutSeconds: { type: "number", minimum: 1, maximum: 900 },
+    },
+    required: ["name", "command", "args", "timeoutSeconds"],
+  };
+  const workUnitSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      goal: { type: "string", maxLength: 2000 },
+      relevantFiles: { type: "array", minItems: 1, maxItems: 60, items: { type: "string", maxLength: 500 } },
+      expectedFiles: { type: "array", minItems: 1, maxItems: 40, items: { type: "string", maxLength: 500 } },
+      acceptanceCriteria: { type: "array", minItems: 1, maxItems: 12, items: { type: "string", maxLength: 1000 } },
+      verificationCommands: { type: "array", minItems: 1, maxItems: 8, items: commandSchema },
+      taskKind: { type: "string", maxLength: 40 },
+      complexity: { type: "string", enum: ["small", "medium", "large"] },
+      priority: { type: "number", minimum: 1, maximum: 100 },
+      requiredCapabilities: { type: "array", maxItems: 12, items: { type: "string", maxLength: 80 } },
+    },
+    required: ["goal", "relevantFiles", "expectedFiles", "acceptanceCriteria", "verificationCommands", "taskKind", "complexity", "priority", "requiredCapabilities"],
+  };
   return JSON.stringify({
     type: "object",
     additionalProperties: false,
     properties: {
-      outcome: { type: "string", maxLength: Math.floor(characterBudget * 0.4) },
-      evidence: { type: "array", maxItems: 5, items: { type: "string", maxLength: Math.floor(characterBudget * 0.07) } },
-      checks: { type: "array", maxItems: 4, items: { type: "string", maxLength: Math.floor(characterBudget * 0.0375) } },
+      outcome: { type: "string", maxLength: Math.floor(characterBudget * 0.3) },
+      evidence: { type: "array", maxItems: 8, items: { type: "string", maxLength: Math.floor(characterBudget * 0.05) } },
+      checks: { type: "array", maxItems: 8, items: { type: "string", maxLength: Math.floor(characterBudget * 0.04) } },
       blocker: { type: "string", maxLength: Math.floor(characterBudget * 0.1) },
+      blockerOwner: { type: "string", maxLength: 160 },
+      recoveryTrigger: { type: "string", maxLength: 800 },
+      recoveryAction: { type: "string", maxLength: 1200 },
+      proposedWorkUnits: { type: "array", maxItems: contract.artifactKind === "work-plan" ? 3 : 0, items: workUnitSchema },
     },
-    required: ["outcome", "evidence", "checks", "blocker"],
+    required: ["outcome", "evidence", "checks", "blocker", "blockerOwner", "recoveryTrigger", "recoveryAction", "proposedWorkUnits"],
   });
 }
-
 function buildClaudeArgs(contract, prompt) {
   const args = [
     "-p", "--output-format", "json", "--no-session-persistence", "--safe-mode", "--no-chrome",
     "--disable-slash-commands", "--prompt-suggestions", "false", "--exclude-dynamic-system-prompt-sections",
     "--system-prompt", CLAUDE_SYSTEM_PROMPT,
     "--permission-mode", contract.readOnly ? "plan" : "acceptEdits",
-    "--json-schema", claudeResultSchema(contract.maxWorkerOutputTokens),
+    "--json-schema", claudeResultSchema(contract),
     "--tools", contract.readOnly ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write",
   ];
   if (contract.model) args.push("--model", contract.model);
@@ -259,7 +340,7 @@ function runClaude(providerState, contract, prompt) {
   try { body = JSON.parse(result.stdout); } catch { /* retain plain output */ }
   const text = structuredClaudeText(body) || result.stdout || result.stderr;
   const ok = result.status === 0 && !body?.is_error;
-  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, usage: normalizeClaudeUsage(body, contract.model), exitCode: result.status };
+  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, artifact: body?.structured_output || body?.structuredOutput || null, usage: normalizeClaudeUsage(body, contract.model), exitCode: result.status };
 }
 
 function buildAntigravityArgs(contract, prompt) {
@@ -306,4 +387,4 @@ function discoverProvider(id) {
   return provider(id || "unknown", false, { reason: "Unknown provider." });
 }
 
-module.exports = { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, discoverProvider, normalizeClaudeUsage, numericOrNull, runProvider };
+module.exports = { antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeResultSchema, classifyFailure, discoverAll, discoverProvider, enrichModel, inferModelTier, normalizeClaudeUsage, numericOrNull, runProvider };

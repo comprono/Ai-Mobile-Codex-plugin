@@ -3,7 +3,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { localDataFile, readJson, safeWorkspace, utcNow, writeJson } = require("./utils");
+const { localDataFile, readJson, safeWorkspace, utcNow, withDirectoryLock, writeJson } = require("./utils");
 
 const ID_PATTERN = /^(portfolio|task|round|job)-[A-Za-z0-9._-]{8,100}$/;
 
@@ -126,29 +126,8 @@ function lockDirectory(taskId) {
   return path.join(taskDirectory(taskId), ".lock");
 }
 
-function acquireLock(taskId) {
-  const dir = lockDirectory(taskId);
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      fs.mkdirSync(dir);
-      writeJson(path.join(dir, "owner.json"), { pid: process.pid, acquiredAt: utcNow() });
-      return dir;
-    } catch (error) {
-      if (String(error.code || "") !== "EEXIST") throw error;
-      let stale = false;
-      try { stale = Date.now() - fs.statSync(dir).mtimeMs > 2 * 60 * 1000; } catch { stale = true; }
-      if (!stale) throw new Error(`AI Mobile task is busy: ${taskId}`);
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
-  throw new Error(`Unable to lock AI Mobile task: ${taskId}`);
-}
-
 function withTaskLock(taskId, action) {
-  const dir = acquireLock(taskId);
-  try { return action(); }
-  finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  return withDirectoryLock(lockDirectory(taskId), action, { timeoutMs: 5000, staleMs: 30000 });
 }
 
 function portfolioLockDirectory(portfolioId) {
@@ -156,25 +135,8 @@ function portfolioLockDirectory(portfolioId) {
 }
 
 function withPortfolioLock(portfolioId, action) {
-  const dir = portfolioLockDirectory(portfolioId);
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      fs.mkdirSync(dir);
-      writeJson(path.join(dir, "owner.json"), { pid: process.pid, acquiredAt: utcNow() });
-      break;
-    } catch (error) {
-      if (String(error.code || "") !== "EEXIST") throw error;
-      let stale = false;
-      try { stale = Date.now() - fs.statSync(dir).mtimeMs > 2 * 60 * 1000; } catch { stale = true; }
-      if (!stale || attempt === 1) throw new Error(`AI Mobile portfolio is busy: ${portfolioId}`);
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
-  try { return action(); }
-  finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  return withDirectoryLock(portfolioLockDirectory(portfolioId), action, { timeoutMs: 5000, staleMs: 30000 });
 }
-
 function updateTask(taskId, mutator) {
   return withTaskLock(taskId, () => {
     const record = readTask(taskId);

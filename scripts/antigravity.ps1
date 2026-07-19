@@ -1,5 +1,5 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','provider-diagnostics','start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','material-status','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
   [string]$ContractFile = '',
   [string]$TaskId = '',
   [string]$PortfolioId = '',
@@ -35,12 +35,17 @@ switch ($Command) {
       PluginRoot = $Root
       StartupBehavior = 'passive; no provider desktop application is opened'
       StateRoot = '%LOCALAPPDATA%\AI Mobile\v1'
-      Tools = @('start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','complete-task','cancel-task','resource-inventory','orchestrator-profile','prepare-restart-handoff')
+      Tools = @('start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','material-status','complete-task','cancel-task','resource-inventory','provider-diagnostics','orchestrator-profile','prepare-restart-handoff')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
     $args = @('resource-inventory-cli')
     if ($Refresh) { $args += '--refresh' }
+    Invoke-Node $args
+  }
+  'provider-diagnostics' {
+    $args = @('provider-diagnostics-cli')
+    if ($ContractFile) { $args += @('--json-file',(Require-Contract)) }
     Invoke-Node $args
   }
   'start-task' { Invoke-Node @('start-task-cli','--json-file',(Require-Contract)) }
@@ -51,6 +56,7 @@ switch ($Command) {
   'integrate-round' { Invoke-Node @('integrate-round-cli','--json-file',(Require-Contract)) }
   'record-evidence' { Invoke-Node @('record-evidence-cli','--json-file',(Require-Contract)) }
   'task-summary' { Invoke-Node (@('task-summary-cli') + (Get-StateArguments)) }
+  'material-status' { Invoke-Node (@('coordinator-status-cli') + (Get-StateArguments)) }
   'complete-task' { Invoke-Node (@('complete-task-cli') + (Get-StateArguments)) }
   'cancel-task' { Invoke-Node (@('cancel-task-cli') + (Get-StateArguments)) }
   'orchestrator-profile' { Invoke-Node @('orchestrator-profile-cli') }

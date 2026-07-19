@@ -5,6 +5,7 @@ const { createJob } = require("./job-store");
 const { providerHistory } = require("./provider-history");
 const { collectRound, completeTask, dispatchRound, integrateRound, taskSummary } = require("./task-orchestrator");
 const { utcNow } = require("./utils");
+const { startCoordinator } = require("./coordinator");
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -24,7 +25,7 @@ function compactFailure(result) {
   };
 }
 
-async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
+async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
   const taskId = String(args.taskId || "").trim();
   if (!taskId) throw new Error("run-task-cycle requires taskId.");
   const maxRounds = boundedInteger(args.maxRounds, 3, 1, 5);
@@ -73,8 +74,6 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
 
       const terminalFailures = (collected.results || []).filter((row) => row.terminal && row.state !== "completed");
       const terminalCompleted = (collected.results || []).filter((row) => row.terminal && row.state === "completed");
-      const readOnlyCompleted = terminalCompleted.filter((row) => row.readOnly === true);
-      const writerCompleted = terminalCompleted.filter((row) => row.readOnly !== true);
       transitions.push({
         type: "collected",
         roundId: latest.roundId,
@@ -91,7 +90,7 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
       failures.push(...terminalFailures.map(compactFailure));
       for (const failure of terminalFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
 
-      const needsIntegration = collected.state === "ready-for-integration" && writerCompleted.length > 0;
+      const needsIntegration = collected.state === "ready-for-integration" && terminalCompleted.length > 0;
       if (needsIntegration) {
         const integrated = integrateRound({ taskId, roundId: latest.roundId });
         const integrationFailures = (integrated.integrations || []).filter((row) => row.integrated !== true).map((row) => ({
@@ -107,24 +106,9 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
           roundId: latest.roundId,
           state: integrated.state,
           acceptedEvidence: (integrated.acceptedEvidence || []).map((row) => ({ requirementId: row.requirementId, level: row.level, ref: row.ref })),
+          observations: (integrated.integrations || []).filter((row) => row.observation === true && row.integrated === true).map((row) => ({ jobId: row.jobId, createdWorkGraphNodeIds: row.createdWorkGraphNodeIds || [] })),
           failures: integrationFailures,
         });
-      }
-
-      if (readOnlyCompleted.length && !writerCompleted.length && !terminalFailures.length) {
-        transitions.push({
-          type: "read-only-result",
-          jobs: readOnlyCompleted.map((row) => ({
-            jobId: row.jobId,
-            provider: row.provider,
-            model: row.model,
-            summary: String(row.handoff?.summary || row.result || "").slice(0, 1200),
-            evidence: (row.handoff?.changedFiles || []).slice(0, 20),
-          })),
-          rule: "The compact artifact is returned once. The unchanged read-only lane is not repeated or sent through a redundant premium review.",
-        });
-        stopReason = "read-only-result-ready";
-        break;
       }
 
       summary = taskSummary({ taskId });
@@ -215,4 +199,11 @@ async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
   };
 }
 
-module.exports = { runTaskCycle };
+async function runTaskCycle(args = {}, entrypoint, dependencies = {}) {
+  if (Object.keys(dependencies || {}).length || args.inline === true) {
+    return runTaskCycleInline(args, entrypoint, dependencies);
+  }
+  return startCoordinator(args, entrypoint);
+}
+
+module.exports = { runTaskCycle, runTaskCycleInline };

@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { PassThrough, Writable } = require("node:stream");
 const { runContinuation } = require("./codex-app-server-resume");
+const { pluginVersion } = require("./lib/version");
 
 function fakeAppServer(runtimeVersion, observed) {
   return function spawnFake(command, args) {
@@ -90,13 +91,14 @@ function fakeAppServer(runtimeVersion, observed) {
 }
 
 async function main() {
+  const version = pluginVersion();
   const handoff = {
     oneShot: true,
     userAuthorized: true,
     consumedAt: new Date().toISOString(),
     threadId: "01234567-89ab-cdef-0123-456789abcdef",
     workspace: process.cwd(),
-    expectedRuntimeVersion: "1.2.2",
+    expectedRuntimeVersion: version,
     verificationModel: "gpt-5.6-sol",
     verificationEffort: "ultra",
     resumeModel: "gpt-5.6-luna",
@@ -106,11 +108,11 @@ async function main() {
 
   const observed = {};
   const result = await runContinuation(handoff, {
-    spawnAppServer: fakeAppServer("1.2.2", observed),
+    spawnAppServer: fakeAppServer(version, observed),
     verificationTimeoutMs: 1000,
     continuationTimeoutMs: 1000,
   });
-  assert.equal(result.runtimeVersion, "1.2.2");
+  assert.equal(result.runtimeVersion, version);
   assert.equal(result.resumeModel, "gpt-5.6-luna");
   assert.equal(observed.args.join(" "), "app-server --stdio");
   assert.equal(observed.resume.threadId, handoff.threadId);

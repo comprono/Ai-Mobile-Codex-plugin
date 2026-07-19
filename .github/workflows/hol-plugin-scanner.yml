@@ -26,6 +26,24 @@ jobs:
       - name: Bounded task-cycle regression
         run: node scripts/task-cycle-regression.js
 
+      - name: Console and work-plane contract
+        run: node scripts/console-workplane-regression.js
+
+      - name: Durable event-driven coordinator
+        run: node scripts/durable-event-regression.js
+
+      - name: Provider capability and quota routing
+        run: node scripts/provider-capability-regression.js
+
+      - name: Path-bounded provider patch transport
+        run: node scripts/provider-patch-regression.js
+
+      - name: App-server restart ordering
+        run: node scripts/app-server-resume-regression.js
+
+      - name: Deterministic integration regression
+        run: node scripts/integration-regression.js
+
       - name: Fable routing regression
         run: node scripts/fable-routing-regression.js
 

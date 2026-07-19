@@ -202,17 +202,40 @@ function cleanTransientOutputs(isolation = {}) {
   return { cleaned: result.status === 0, paths: TRANSIENT_PATHS };
 }
 
+function removeTreeWithRetry(target, attempts = 8) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      if (!fs.existsSync(target)) return { removed: true, attempts: attempt + 1 };
+    } catch (error) {
+      lastError = error;
+      if (!["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"].includes(String(error.code || "").toUpperCase())) break;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+  }
+  return { removed: !fs.existsSync(target), attempts, error: String(lastError?.message || "").slice(0, 300) };
+}
+
 function cleanupIsolatedWorkspace(isolation = {}) {
   if (!isolation.cleanupRequired || !isolation.executionWorkspace || !isolation.sourceWorkspace) return { cleaned: false, reason: "not-required" };
+  const root = normalized(worktreeRoot());
+  const target = normalized(isolation.executionWorkspace);
+  if (!target.startsWith(`${root}/`)) return { cleaned: false, reason: "worktree-cleanup-boundary-refused" };
+
   const result = commandResult("git", ["-C", isolation.sourceWorkspace, "worktree", "remove", "--force", isolation.executionWorkspace], { timeout: 30000, maxBuffer: 1024 * 1024 });
-  if (result.status !== 0) {
-    fs.rmSync(isolation.executionWorkspace, { recursive: true, force: true });
+  const removal = fs.existsSync(isolation.executionWorkspace)
+    ? removeTreeWithRetry(isolation.executionWorkspace)
+    : { removed: true, attempts: 0 };
+  if (result.status !== 0 || !removal.removed) {
     commandResult("git", ["-C", isolation.sourceWorkspace, "worktree", "prune"], { timeout: 10000 });
   }
-  try { fs.rmSync(isolation.metadataFile || metadataFile(isolation.jobId), { force: true }); } catch { /* no-op */ }
-  return result.status === 0
-    ? { cleaned: true }
-    : { cleaned: true, warning: String(result.stderr || result.stdout).trim().slice(0, 300) };
+  const cleaned = removal.removed && !fs.existsSync(isolation.executionWorkspace);
+  if (cleaned) {
+    try { fs.rmSync(isolation.metadataFile || metadataFile(isolation.jobId), { force: true }); } catch { /* startup cleanup can remove stale metadata */ }
+  }
+  const warning = [String(result.stderr || result.stdout).trim(), removal.error].filter(Boolean).join(" | ").slice(0, 500);
+  return { cleaned, attempts: removal.attempts, ...(warning ? { warning } : {}), ...(cleaned ? {} : { recoveryAction: "Keep the worktree metadata and retry cleanup during startup or cancellation recovery." }) };
 }
 
 function jobStatusFor(meta) {

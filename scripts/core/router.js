@@ -4,16 +4,23 @@ const { boundedList, safeRelativePath } = require("./utils");
 const { boundariesOverlap, economicEstimate, goalOverlap, laneKey } = require("./lane-policy");
 const { readProfile } = require("../lib/orchestrator-profile");
 const { normalizeRequestedModel } = require("./trusted-models");
+const { inferModelTier } = require("../providers");
 
 const PROVIDERS = new Set(["auto", "codex", "claude", "antigravity", "cursor"]);
+const DEFAULT_SURFACES = {
+  codex: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
+  claude: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
+  antigravity: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: true, github: false, api: false, "project-tools": false },
+  cursor: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
+};
 const TASK_KINDS = new Set(["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"]);
 const SELECTION_AUTHORITIES = new Set(["router", "user"]);
 const CANONICAL_MODEL_FAMILIES = [
   ["claude", /(^|[^a-z])(claude|fable|mythos|opus|sonnet|haiku)([^a-z]|$)/i],
   ["codex", /(^|[^a-z])(gpt|codex)([^a-z]|$)/i],
-  ["antigravity", /(^|[^a-z])gemini([^a-z]|$)/i],
+  ["antigravity", /(^|[^a-z])(gemini|flash)([^a-z]|$)/i],
 ];
-const CANONICAL_BINDING_HINT = "Fable/Opus/Sonnet/Haiku are Claude models, GPT models are Codex, Gemini models are Antigravity";
+const CANONICAL_BINDING_HINT = "Fable/Opus/Sonnet/Haiku are Claude models, GPT models are Codex, and Gemini/Flash models are Antigravity";
 
 function canonicalModelProvider(model) {
   const value = String(model || "").trim();
@@ -95,6 +102,8 @@ function normalizeRequest(input = {}) {
     // never a blanket bypass: only disjoint, read-only external evidence lanes qualify.
     currentCodexReserved: input.currentCodexReserved === true,
     workPlaneRequired: input.workPlaneRequired === true,
+    artifactKind: input.artifactKind === "work-plan" ? "work-plan" : "",
+    requiredCapabilities: boundedList(input.requiredCapabilities, 12, 80).map((value) => value.toLowerCase()),
     expectedFiles,
     verificationCommands: Array.isArray(input.verificationCommands) ? input.verificationCommands : [],
     timeoutSeconds: clamp(input.timeoutSeconds, 30, 3600, 900),
@@ -118,6 +127,10 @@ function normalizeRequest(input = {}) {
     maxApiBudgetUsd: clamp(input.maxApiBudgetUsd ?? input.maxEquivalentUsd, 0.01, 5, complexity === "large" ? 0.75 : 0.35),
     minimumSavingsPercent: clamp(input.minimumSavingsPercent, 10, 70, 20),
   };
+  const inferredCapabilities = ["source", "local-files"];
+  if (request.taskKind === "browser") inferredCapabilities.push("browser");
+  if (request.verificationCommands.length || request.taskKind === "tests") inferredCapabilities.push("tests");
+  request.requiredCapabilities = [...new Set([...request.requiredCapabilities, ...inferredCapabilities])];
   request.laneKey = laneKey(request);
   return request;
 }
@@ -131,7 +144,7 @@ function modelAllowed(pattern, model) {
 }
 
 function modelFamily(value) {
-  return String(value || "").toLowerCase().replace(/^claude-/, "").replace(/[^a-z]+/g, " ").trim().split(/\s+/)[0] || "";
+  return String(value || "").toLowerCase().replace(/^claude(?:[-_\s]+|$)/, "").replace(/[^a-z]+/g, " ").trim().split(/\s+/)[0] || "";
 }
 
 function normalizedModelId(value) {
@@ -139,6 +152,25 @@ function normalizedModelId(value) {
     .replace(/[()]/g, " ")
     .replace(/[^a-z0-9.]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function modelRecord(state, requested, provider) {
+  const wanted = normalizedModelId(requested);
+  const rows = Array.isArray(state.models) ? state.models : [];
+  const exact = rows.find((row) => [row.id, row.displayName].some((value) => normalizedModelId(value) === wanted));
+  if (exact) return exact;
+  if (provider === "antigravity") {
+    const ignored = new Set(["antigravity", "gemini", "google", "model"]);
+    const wantedTokens = normalizedModelId(requested).split("-").filter((token) => token && !ignored.has(token));
+    if (!wantedTokens.length) return null;
+    return rows.find((row) => [row.id, row.displayName].some((value) => {
+      const tokens = new Set(normalizedModelId(value).split("-").filter((token) => token && !ignored.has(token)));
+      return wantedTokens.every((token) => tokens.has(token));
+    })) || null;
+  }
+  if (provider !== "claude") return null;
+  const family = modelFamily(requested);
+  return family ? rows.find((row) => [row.id, row.displayName].some((value) => modelFamily(value) === family)) || null : null;
 }
 
 function windowApplies(window, model) {
@@ -153,9 +185,8 @@ function antigravityModel(request, state) {
   const printable = (row) => row?.displayName || row?.id || "";
   const models = (state.models || []).filter((item) => item.quota?.status !== "exhausted" && Number(item.quota?.remainingPercent ?? 1) > 0);
   if (request.model) {
-    const requested = normalizedModelId(request.model);
-    const matched = models.find((item) => normalizedModelId(item.id) === requested || normalizedModelId(item.displayName) === requested);
-    return matched ? printable(matched) : request.model;
+    const matched = modelRecord({ models }, request.model, "antigravity");
+    return matched ? printable(matched) : "";
   }
   const wanted = request.taskKind === "browser" || request.complexity === "large"
     ? [/gemini.*flash.*high/i, /gemini.*flash.*medium/i, /flash/i]
@@ -176,6 +207,10 @@ function codexModelScore(row, request, profile) {
   const text = `${row.id || ""} ${row.displayName || ""} ${row.description || ""}`.toLowerCase();
   const has = (pattern) => pattern.test(text);
   let score = row.isDefault ? 1 : 0;
+  const tier = String(row.capabilityTier || "unknown");
+  if (request.complexity === "small") score += tier === "efficient" ? 30 : tier === "balanced" ? 12 : tier === "frontier" ? -6 : 0;
+  if (request.complexity === "medium") score += tier === "balanced" ? 30 : tier === "frontier" ? 12 : tier === "efficient" ? 4 : 0;
+  if (request.complexity === "large") score += tier === "frontier" ? 30 : tier === "balanced" ? 18 : tier === "efficient" ? -8 : 0;
   // These are capability descriptions, not model-name assumptions. New catalog
   // rows participate as soon as their native descriptions are exposed.
   if (request.complexity === "small") {
@@ -195,7 +230,12 @@ function codexModelScore(row, request, profile) {
 }
 
 function codexModel(request, state, profile) {
-  if (request.model) return modelAllowed(profile.codexModelAllowPattern, request.model) ? request.model : "";
+  if (request.model) {
+    const record = modelRecord(state, request.model, "codex");
+    return record && modelAllowed(profile.codexModelAllowPattern, record.id || record.displayName)
+      ? record.id || record.displayName
+      : "";
+  }
   const rows = (state.models || []).filter((row) => modelAllowed(profile.codexModelAllowPattern, row.id || row.displayName));
   return rows
     .map((row, index) => ({ row, score: codexModelScore(row, request, profile), index }))
@@ -213,6 +253,27 @@ function codexEffort(request, record, profile) {
   return supported[0] || desired;
 }
 
+function claudeDedicatedResetScore(model, request, state) {
+  const windows = (state.capacity?.windows || []).filter((window) => window.scope !== "all" && windowApplies(window, model));
+  const eligible = windows.filter((window) => {
+    const resetAt = Date.parse(window.resetAt || "");
+    return Number(window.remainingPercent) >= 10 && Number.isFinite(resetAt) && resetAt > Date.now() && resetAt <= Date.now() + request.horizonHours * 60 * 60 * 1000;
+  });
+  return eligible.length ? 30 : 0;
+}
+
+function claudeModelScore(row, request, state, profile) {
+  const tier = String(row.capabilityTier || "unknown");
+  let score = 0;
+  if (request.complexity === "small") score += tier === "efficient" ? 50 : tier === "balanced" ? 25 : tier === "frontier" ? -15 : 0;
+  else if (request.complexity === "medium") score += tier === "balanced" ? 50 : tier === "frontier" ? 20 : tier === "efficient" ? 5 : 0;
+  else score += tier === "frontier" ? 50 : tier === "balanced" ? 35 : tier === "efficient" ? -10 : 0;
+  if (["architecture", "debug", "review"].includes(request.taskKind) && tier === "frontier") score += 15;
+  if (match(profile.claudePreferredModelPattern, `${row.id || ""} ${row.displayName || ""}`)) score += 100;
+  if (profile.useExpiringPremiumCapacity) score += claudeDedicatedResetScore(row.id || row.displayName, request, state);
+  return score;
+}
+
 function providerModel(id, request, state, profile) {
   const requestedFamily = canonicalModelProvider(request.model);
   if (request.model && requestedFamily && requestedFamily !== id && ["codex", "claude", "antigravity"].includes(id)) return "";
@@ -220,19 +281,29 @@ function providerModel(id, request, state, profile) {
     return codexModel(request, state, profile);
   }
   if (id === "claude") {
-    const available = (state.models || []).map((item) => item.id).filter((model) => modelAllowed(profile.claudeModelAllowPattern, model));
-    const preferred = available.find((model) => match(profile.claudePreferredModelPattern, model));
-    let model = request.model || preferred || available.find((item) => /sonnet/i.test(item)) || "sonnet";
-    if (!request.model && profile.useExpiringPremiumCapacity && request.complexity === "large" && ["architecture", "debug", "review"].includes(request.taskKind)) {
-      const dedicated = (state.capacity?.windows || []).find((window) => modelFamily(window.scope) === "fable");
-      const resetAt = Date.parse(dedicated?.resetAt || "");
-      const withinHorizon = Number.isFinite(resetAt) && resetAt > Date.now() && resetAt <= Date.now() + request.horizonHours * 60 * 60 * 1000;
-      if (withinHorizon && Number(dedicated.remainingPercent) >= 10 && state.models?.some((item) => /fable/i.test(item.id))) model = "fable";
+    if (request.model) {
+      if (!modelAllowed(profile.claudeModelAllowPattern, request.model)) return "";
+      const record = modelRecord(state, request.model, "claude");
+      if (!record) return "";
+      const tier = record.capabilityTier || inferModelTier(record, "claude");
+      const premiumAllowed = tier !== "frontier"
+        || request.selectionAuthority === "user"
+        || request.allowPremiumModel
+        || (profile.useExpiringPremiumCapacity && claudeDedicatedResetScore(request.model, request, state) > 0);
+      return premiumAllowed ? record.id || record.displayName : "";
     }
-    if (!modelAllowed(profile.claudeModelAllowPattern, model)) return "";
-    const userMandatedModel = request.selectionAuthority === "user" && Boolean(request.model);
-    if (!request.allowPremiumModel && !profile.useExpiringPremiumCapacity && !userMandatedModel && /fable|opus/i.test(model)) return "";
-    return model;
+    const rows = (state.models || []).filter((row) => modelAllowed(profile.claudeModelAllowPattern, row.id || row.displayName));
+    const eligible = rows.filter((row) => {
+      if (String(row.capabilityTier || "") !== "frontier") return true;
+      if (request.allowPremiumModel) return true;
+      return profile.useExpiringPremiumCapacity && claudeDedicatedResetScore(row.id || row.displayName, request, state) > 0;
+    });
+    const selected = eligible
+      .map((row, index) => ({ row, index, score: claudeModelScore(row, request, state, profile) }))
+      .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.row;
+    if (selected) return selected.id || selected.displayName;
+    const balanced = rows.find((row) => row.capabilityTier === "balanced");
+    return balanced?.id || balanced?.displayName || (rows.length ? rows[0].id || rows[0].displayName : "sonnet");
   }
   if (id === "antigravity") return antigravityModel(request, state);
   return request.model || "";
@@ -270,6 +341,10 @@ function providerEligibility(id, request, inventory, profile, history) {
   if (!state.available) return { eligible: false, reason: state.reason || "not installed" };
   if (!state.authenticated) return { eligible: false, reason: "not authenticated" };
   if (request.needsUi) return { eligible: false, reason: "visible UI is required; CLI dispatch is intentionally refused" };
+  const surfaces = state.surfaces || DEFAULT_SURFACES[id] || {};
+  if (state.headless === false || surfaces.headless === false) return { eligible: false, reason: "provider has no verified headless execution surface" };
+  const missingCapabilities = request.requiredCapabilities.filter((capability) => surfaces[capability] !== true);
+  if (missingCapabilities.length) return { eligible: false, reason: `missing callable capabilities: ${missingCapabilities.join(", ")}` };
   if (id === "antigravity" && !request.allowAntigravity) return { eligible: false, reason: "Antigravity CLI was not authorized for this lane" };
   if (id === "claude" && profile.subscriptionOnlyClaude !== false && state.authMode === "api-key" && !request.allowPaidApi) {
     return { eligible: false, reason: "Claude would use API/PAYG billing; explicit allowPaidApi is required" };
@@ -277,16 +352,24 @@ function providerEligibility(id, request, inventory, profile, history) {
   const model = providerModel(id, request, state, profile);
   if (["codex", "claude", "antigravity"].includes(id) && !model) {
     const requestedFamily = canonicalModelProvider(request.model);
+    const roster = Array.isArray(state.models) ? state.models : [];
+    const rosterMatch = request.model ? modelRecord(state, request.model, id) : null;
+    const exhausted = id === "antigravity" && rosterMatch
+      && (rosterMatch.quota?.status === "exhausted" || Number(rosterMatch.quota?.remainingPercent ?? 1) <= 0);
     const reason = !request.model
       ? "no policy-allowed model is available"
       : requestedFamily && requestedFamily !== id
         ? `model "${request.model}" is a ${requestedFamily} model and never dispatches through ${id} (${CANONICAL_BINDING_HINT})`
-        : `requested model "${request.model}" is not policy-enabled for ${id} (model allow pattern, or premium gate without allowPremiumModel or an explicit user mandate)`;
+        : !roster.length
+          ? `the live ${id} model roster is unavailable; requested model "${request.model}" cannot be verified`
+          : !rosterMatch || exhausted
+            ? `requested model "${request.model}" is not currently available in the live ${id} roster or its quota is exhausted`
+            : `requested model "${request.model}" is not policy-enabled for ${id} (model allow pattern, or premium gate without allowPremiumModel or an explicit user mandate)`;
     return { eligible: false, reason };
   }
   const capacity = capacityFor(id, state, model);
-  const modelRecord = id === "codex" ? codexModelRecord(state, model) : null;
-  const effort = id === "codex" ? codexEffort(request, modelRecord, profile) : request.effort;
+  const codexRecord = id === "codex" ? codexModelRecord(state, model) : null;
+  const effort = id === "codex" ? codexEffort(request, codexRecord, profile) : request.effort;
   if (id === "codex" && !effort) return { eligible: false, reason: `requested effort "${request.effort}" is not supported by selected model "${model}"` };
   const remaining = capacity.remainingPercent;
   if (remaining !== null && remaining <= (id === "codex" ? profile.codexReservePercent : 2)) {
@@ -312,7 +395,7 @@ function providerScore(id, request, profile, history, gate, state) {
   if (id === "antigravity" && match(profile.antigravityPreferredTaskPattern, `${request.taskKind} ${request.goal}`)) factors.preference += 8;
   if (id === "claude" && match(profile.claudePreferredModelPattern, gate.model)) factors.preference += 4;
   if (id === "claude" && request.readOnly && ["research", "repository-scan", "docs"].includes(request.taskKind)) factors.preference -= 8;
-  if (id === "codex") factors.sharedPool = -8; // A separate Codex worker consumes the same shared pool.
+  if (id === "codex") factors.sharedPool = gate.remainingPercent === null ? -8 : -2;
   return { score: Object.values(factors).reduce((sum, value) => sum + value, 0), factors };
 }
 
@@ -361,6 +444,9 @@ function route(input, inventory, histories = {}) {
   if (input.minimumSavingsPercent === undefined) request.minimumSavingsPercent = profile.minimumDelegationSavingsPercent || 20;
   applyProfileAuthorization(request, profile);
   if (!request.goal) throw new Error("A bounded worker goal is required.");
+  if (request.artifactKind === "work-plan" && (!request.readOnly || !request.relevantFiles.length || request.relevantFiles.includes("."))) {
+    throw new Error("Structured work-plan observations require a bounded, non-root relevantFiles list and must be read-only.");
+  }
   const userMandated = request.selectionAuthority === "user";
   const warnings = request.selectionCorrection ? [request.selectionCorrection] : [];
   if (request.currentCodexReserved && request.readOnly && ["architecture", "docs", "repository-scan", "research", "review", "tests"].includes(request.taskKind) && request.relevantFiles.length && !request.relevantFiles.includes(".") && goalOverlap(request.goal, request.currentCodexGoal).overlaps) {

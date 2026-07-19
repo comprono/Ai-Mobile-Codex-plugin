@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
-  "version": "1.2.2",
-  "description": "A finite local AI work orchestrator with a lightweight Codex console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
+  "version": "1.3.1",
+  "description": "A finite event-driven local AI resource orchestrator with a lightweight Codex console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "license": "MIT",
@@ -27,8 +27,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AI Mobile",
-    "shortDescription": "Coordinate local AI workers without turning the Codex chat into the worker.",
-    "longDescription": "AI Mobile installs one shared MCP runtime into Codex and Claude Code. The visible Codex task is a lightweight zero-file project console, while a deterministic coordinator assigns acceptance-linked work to authenticated Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers using fresh capacity, quota, reset, reliability, RAM, storage, and cost evidence. Isolated patches are integrated exactly once with boundary and deterministic verification gates. Normal startup opens no desktop UI and creates no LLM manager loop, Goal, heartbeat, automation, hidden continuation, or repeated poll. One bounded deterministic cycle waits locally, collects once, and advances only on evidence.",
+    "shortDescription": "Coordinate local AI workers with durable evidence, not chat polling.",
+    "longDescription": "AI Mobile installs one shared MCP runtime into Codex and Claude Code. The visible Codex task is a lightweight zero-file project console, while a finite detached event-driven coordinator assigns acceptance-linked work to authenticated Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers using fresh capability, quota, reset, reliability, RAM, storage, priority, and total-cost evidence. Structured observations become exact writer units. Isolated patches are integrated exactly once with boundary and deterministic verification gates; isolated Codex writers return validated diffs without sandbox bypass. Passive material status and privacy-safe provider diagnostics provide visibility without provider probes, repeated model turns, Goals, automations, hidden continuations, or desktop launches.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -64,7 +64,13 @@
       "Passive CLI-first provider discovery",
       "Exact OpenAI.Codex package and task restart",
       "Restart-version-model ordering guard",
-      "No automatic desktop application launch"
+      "No automatic desktop application launch",
+      "Detached event-driven coordinator",
+      "Structured observation-to-writer planning",
+      "Path-bounded Codex diff transport without sandbox bypass",
+      "Passive material status view",
+      "Privacy-safe provider diagnostics",
+      "Real multi-provider portfolio execution"
     ],
     "defaultPrompt": [
       "Use AI Mobile to finish this project outcome with the visible task as a lightweight console and separate work-plane workers",

@@ -89,7 +89,7 @@ function createRestartHandoff(args = {}) {
       task?.outcome ? "Outcome: " + task.outcome : "",
       priorities.length ? "Priorities: " + priorities.join(" | ") : "",
       "Start now: " + nextAction,
-      "Invoke run-task-cycle for this task with maxRounds 3, maxMinutes 15, sliceSeconds 210, noProgressLimit 2, and horizonHours 5. If it returns continuationRequired true, invoke the same tool again immediately for the same task without replanning or a status call, up to four slices. End after a terminal material result or the fourth bounded slice, then report one compact Done / Active / Blocked / Resources / Next update.",
+      "Invoke run-task-cycle exactly once for this task with maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5. It starts or reuses one finite detached event-driven coordinator. Do not poll or call it again in this turn. Report the returned durable execution receipt as one compact Done / Active / Blocked / Resources / Next update; later user status requests use material-status once.",
     ].filter(Boolean).join("\n"),
   };
   const root = path.join(stateRoot(), "restart-handoffs");

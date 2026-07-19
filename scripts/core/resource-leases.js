@@ -1,9 +1,8 @@
 "use strict";
 
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { processAlive, readJson, utcNow, writeJson } = require("./utils");
+const { processAlive, readJson, utcNow, withDirectoryLock, writeJson } = require("./utils");
 const { stateRoot } = require("./state-store");
 const { readProfile } = require("../lib/orchestrator-profile");
 
@@ -11,24 +10,7 @@ function leaseFile() { return path.join(stateRoot(), "resource-leases.json"); }
 function lockDirectory() { return path.join(stateRoot(), ".resource-leases-lock"); }
 
 function withLeaseLock(action) {
-  const dir = lockDirectory();
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      fs.mkdirSync(dir);
-      writeJson(path.join(dir, "owner.json"), { pid: process.pid, acquiredAt: utcNow() });
-      try { return action(); }
-      finally { fs.rmSync(dir, { recursive: true, force: true }); }
-    } catch (error) {
-      if (String(error.code || "") !== "EEXIST") throw error;
-      let stale = false;
-      try { stale = Date.now() - fs.statSync(dir).mtimeMs > 2 * 60 * 1000; } catch { stale = true; }
-      if (stale) fs.rmSync(dir, { recursive: true, force: true });
-      else if (attempt === 2) throw new Error("AI Mobile machine resource allocation is busy; retry this finite dispatch once.");
-      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
-    }
-  }
-  throw new Error("Unable to lock AI Mobile machine resources.");
+  return withDirectoryLock(lockDirectory(), action, { timeoutMs: 5000, staleMs: 30000 });
 }
 
 function emptyRecord() {

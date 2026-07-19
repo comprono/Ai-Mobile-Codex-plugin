@@ -18,28 +18,47 @@ Contributions must preserve these invariants:
 - cached negative provider evidence is refreshed before dispatch rejection;
 - completion requires acceptance evidence;
 - startup and discovery never open desktop applications;
-- no LLM manager loop, Goal, heartbeat, automation, repeated model-turn poll, or premium review chain is added; one bounded deterministic cycle may wait locally and advance only on evidence.
+- no LLM manager loop, Goal, heartbeat, automation, repeated model-turn poll, or premium review chain is added; one finite detached coordinator may advance only on durable transitions and acceptance evidence.
 
 ## Development Checks
 
+Run the complete deterministic release matrix:
+
 ```powershell
 node .\scripts\self-test.js
-node .\scripts\task-cycle-regression.js
-node .\scripts\outcome-recovery-e2e.js
+node .\scripts\reliability-e2e.js
 node .\scripts\continuation-regression.js
-node .\scripts\state-capacity-regression.js
+node .\scripts\task-cycle-regression.js
+node .\scripts\console-workplane-regression.js
+node .\scripts\durable-event-regression.js
+node .\scripts\provider-capability-regression.js
+node .\scripts\provider-patch-regression.js
+node .\scripts\app-server-resume-regression.js
+node .\scripts\fable-routing-regression.js
+node .\scripts\trusted-primary-regression.js
+node .\scripts\shared-host-install-regression.js
+node .\scripts\outcome-recovery-e2e.js
 node .\scripts\orchestration-regression.js
-node .\scripts\economic-regression.js
+node .\scripts\state-capacity-regression.js
 node .\scripts\worker-isolation-regression.js
+node .\scripts\integration-regression.js
 node .\scripts\portfolio-e2e.js
 node .\scripts\global-resource-regression.js
 node .\scripts\storage-lifecycle-regression.js
-node .\scripts\reliability-e2e.js
+node .\scripts\economic-regression.js
+
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
 git diff --check
 pipx run plugin-scanner lint . --profile public-marketplace
 pipx run plugin-scanner lint . --profile strict-security
 pipx run plugin-scanner verify . --format json
+```
+
+The authenticated real-provider canaries consume bounded provider requests and are required for a release that changes provider launch, routing, patch transport, portfolio allocation, or integration:
+
+```powershell
+node .\scripts\installed-provider-canary.js
+node .\scripts\real-provider-portfolio-canary.js
 ```
 
 The scanner may request manual review for a local executable stdio MCP entry. Document that result rather than weakening the MCP behavior.

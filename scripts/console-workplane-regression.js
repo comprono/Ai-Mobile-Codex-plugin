@@ -11,6 +11,7 @@ process.env.AI_MOBILE_DATA_ROOT = path.join(root, "state");
 process.env.LOCALAPPDATA = path.join(root, "local");
 const workspace = path.join(root, "workspace");
 fs.mkdirSync(workspace, { recursive: true });
+fs.writeFileSync(path.join(workspace, "README.md"), "# Console work-plane fixture\n", "utf8");
 
 const { dispatchRound, startTask } = require("./core/task-orchestrator");
 
@@ -81,6 +82,7 @@ try {
   assert.equal(task.execution.mustStartNow, false);
   assert.equal(task.workPlane.recommendedWorkUnits.length, 1);
   assert.equal(task.workPlane.recommendedWorkUnits[0].workPlaneRequired, true);
+  assert.deepEqual(task.workPlane.recommendedWorkUnits[0].relevantFiles, ["README.md"]);
 
   const round = dispatchRound({ taskId: task.taskId }, resources, {}, fakeCreate);
   assert.equal(round.state, "running");

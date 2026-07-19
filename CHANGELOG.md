@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.1 - 2026-07-19
+
+- Replaces visible-turn continuation slices with one finite detached event-driven coordinator that watches durable worker state, collects and integrates each result once, and stops on acceptance, typed decisions, deadlines, or no progress.
+- Makes job, coordinator, and material-event state cross-process locked, revisioned, and monotonic so a late launcher write cannot resurrect terminal work; lost worker processes reconcile without waiting for their original deadline.
+- Converts bounded read-only observations into fingerprinted exact writer units instead of returning general prose as progress.
+- Adds dynamic provider capability surfaces, live-roster model validation, model tiers, authentication/billing separation, quota/reset-horizon routing, premium-model gates, active Codex use above reserve, and privacy-safe provider diagnostics.
+- Adds passive material status reporting with no provider probe, project scan, heartbeat, or desktop launch.
+- Makes isolated Codex CLI writers return path-bounded unified diffs; AI Mobile recounts, rejects unsafe symlink/submodule modes, applies, tests, and integrates them without bypassing the Windows sandbox.
+- Completes accepted portfolio projects before redispatch so a finished project cannot starve another project's failover, and retries only bounded transient Windows worktree cleanup while preserving truthful failure evidence.
+- Proves a real Codex and Claude portfolio completes two concurrent isolated projects with independent evidence, a protected Codex reserve, bounded storage, and zero desktop launches.
+- Exposes material-status and provider-diagnostics through MCP and the shared PowerShell helper, and expands release CI with durable-event, capability, and patch-safety gates.
 ## 1.2.2 - 2026-07-19
 
 - Reopens the exact OpenAI.Codex task immediately after plugin refresh, before any potentially long app-server verification or worker cycle.
