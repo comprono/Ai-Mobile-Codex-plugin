@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-19T07:55:51Z
+Updated: 2026-07-19T07:59:18Z
 
 ## North Star
 
@@ -56,15 +56,14 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Verified State
 
-- AI Mobile 1.3.2 focused regressions prove persistent Luna-low thread settings, structured CLI work-plan output, child-state preservation, exact-task foregrounding, and fresh no-progress accounting after stale rounds.
-- AI Mobile 1.3.1 source passes 21 local lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy-oriented regression gates in one clean run.
+- AI Mobile 1.3.2 passes 21 lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy regressions, including persistent Luna-low thread settings, structured CLI work plans, child-state preservation, exact-task foregrounding, and fresh no-progress accounting after stale rounds.
 - Job and coordinator state is cross-process locked, revisioned, and monotonic; a killed worker reconciles without waiting for its deadline, and bounded Windows worktree cleanup cannot silently report success while files remain.
 - Explicit unavailable models and exhausted Antigravity models fail closed; Codex CLI remains usable above reserve, and unsafe symlink/submodule patches are refused.
 - A real authenticated Codex and Claude portfolio completed two independent disposable projects concurrently, integrated project-local evidence, preserved the 15 percent Codex reserve, cleaned all worktrees, and opened no desktop app.
 - Normal run-task-cycle starts or reuses one finite detached event-driven coordinator; the visible console owns no files and does not poll.
 - Read-only observations create fingerprinted exact writer units. Isolated Codex workers return bounded diffs that AI Mobile recounts, path-checks, applies, verifies, and integrates without sandbox bypass.
 - material-status is passive, provider-diagnostics is privacy-safe, and model/capacity routing uses callable capabilities plus measured quota/reset evidence.
-- AI Mobile 1.3.1 release commit `4ac7fbe` is installed for Codex and Claude Code and pushed to `origin/main`; public release gates pass without publishing private quota or machine data.
+- AI Mobile 1.3.2 release commit `f19313e` is installed for Codex and Claude Code and pushed to `origin/main`; scanner grade A and both 100-point lint profiles pass without publishing private quota or machine data.
 ## Context Pointers
 
 - `.codex/ACCEPTANCE.json`
