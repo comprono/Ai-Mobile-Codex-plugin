@@ -16,6 +16,15 @@ function passingCount(summary) {
   return Number(summary?.progress?.passing || 0);
 }
 
+function progressSignature(summary) {
+  return JSON.stringify({
+    state: summary?.state || "",
+    passing: passingCount(summary),
+    graph: (summary?.workGraph || []).map((node) => [node.id, node.state]),
+    evidence: (summary?.requirements || []).reduce((total, row) => total + Number(row.evidenceCount || 0), 0),
+  });
+}
+
 function compactFailure(result) {
   return {
     jobId: result.jobId,
@@ -42,7 +51,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
   const failedProviders = new Set();
   let roundsStarted = 0;
   let noProgressCount = 0;
-  let lastPassing = passingCount(taskSummary({ taskId }));
+  let lastProgressSignature = progressSignature(taskSummary({ taskId }));
   let stopReason = "time-limit";
 
   while (Date.now() < deadline) {
@@ -112,9 +121,9 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
       }
 
       summary = taskSummary({ taskId });
-      const nowPassing = passingCount(summary);
-      if (nowPassing > lastPassing) {
-        lastPassing = nowPassing;
+      const currentProgressSignature = progressSignature(summary);
+      if (currentProgressSignature !== lastProgressSignature) {
+        lastProgressSignature = currentProgressSignature;
         noProgressCount = 0;
       } else {
         noProgressCount += 1;

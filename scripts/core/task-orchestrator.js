@@ -1281,7 +1281,11 @@ function integrateSingleRound(args) {
     current.workGraph = (current.workGraph || []).map((node) => {
       const row = integrations.find(({ job }) => job.workGraphNodeId === node.id);
       if (!row) return node;
-      if (row.result.observation === true) return node;
+      if (row.result.observation === true) {
+        return row.result.integrated === true
+          ? node
+          : { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "structured-observation-rejected").slice(0, 1000) };
+      }
       if (evidence.some((item) => item.workGraphNodeId === node.id)) return { ...node, state: "completed", owner: null };
       if (row.result.integrated === true || String(row.result.blocker || "").startsWith("read-only-worker")) return { ...node, state: "awaiting-evidence", owner: null };
       return { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "integration-failed").slice(0, 1000) };
@@ -1325,7 +1329,11 @@ function integratePortfolioRound(args) {
       current.workGraph = (current.workGraph || []).map((node) => {
         const row = owned.find(({ job }) => job.workGraphNodeId === node.id);
         if (!row) return node;
-        if (row.result.observation === true) return node;
+        if (row.result.observation === true) {
+          return row.result.integrated === true
+            ? node
+            : { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "structured-observation-rejected").slice(0, 1000) };
+        }
         if (evidence.some((item) => item.workGraphNodeId === node.id)) return { ...node, state: "completed", owner: null };
         if (row.result.integrated === true || String(row.result.blocker || "").startsWith("read-only-worker")) return { ...node, state: "awaiting-evidence", owner: null };
         return { ...node, state: "pending", owner: null, lastFailure: String(row.result.blocker || "integration-failed").slice(0, 1000) };

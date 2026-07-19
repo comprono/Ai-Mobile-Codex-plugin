@@ -39,6 +39,20 @@ fs.writeFileSync(path.join(fakeBin, "fake-codex-inspection.cmd"), "@echo off\r\n
 fs.writeFileSync(path.join(workspace, "verify-noop.js"), 'require("node:fs").writeFileSync("verification-ran.txt","BAD\\n");\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-noop.js"), 'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"No changes were needed."}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:50,output_tokens:10}})+"\\n");\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-noop.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-noop.js\" %*\r\n", "utf8");
+const invalidObservationPlan = { outcome: "Invalid bounded plan", evidence: ["claimed scan"], checks: ["node missing-verifier.js"], blocker: "", blockerOwner: "", recoveryTrigger: "", recoveryAction: "", proposedWorkUnits: [{ goal: "Write a file from an invalid plan", relevantFiles: ["missing-source.js", "hallucinated/result.txt"], expectedFiles: ["hallucinated/result.txt"], acceptanceCriteria: ["node missing-verifier.js exits zero"], verificationCommands: [{ name: "missing-verifier", command: "node", args: ["missing-verifier.js"], timeoutSeconds: 30 }], taskKind: "code", complexity: "medium", priority: 100, requiredCapabilities: ["source", "local-files", "tests"] }] };
+const invalidObservationOutput = JSON.stringify({ is_error: false, structured_output: invalidObservationPlan, usage: { input_tokens: 24, output_tokens: 10 } });
+fs.writeFileSync(path.join(fakeBin, "fake-claude-invalid-observation.js"), "process.stdout.write(" + JSON.stringify(invalidObservationOutput) + ");\n", "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-claude-invalid-observation.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-claude-invalid-observation.js\" %*\r\n", "utf8");
+const validObservationPlan = { outcome: "One valid bounded implementation", evidence: ["verify.js and verify-observation.js exist"], checks: ["node verify-observation.js"], blocker: "", blockerOwner: "", recoveryTrigger: "", recoveryAction: "", proposedWorkUnits: [{ goal: "Create validated.txt containing VALIDATED_OK", relevantFiles: ["verify.js", "verify-observation.js", "validated.txt"], expectedFiles: ["validated.txt"], acceptanceCriteria: ["node verify-observation.js exits zero"], verificationCommands: [{ name: "verify-observation", command: "node", args: ["verify-observation.js"], timeoutSeconds: 30 }], taskKind: "code", complexity: "medium", priority: 100, requiredCapabilities: ["source", "local-files", "tests"] }] };
+const validObservationOutput = JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(validObservationPlan) } }) + "\n" + JSON.stringify({ type: "turn.completed", usage: { input_tokens: 28, output_tokens: 11 } }) + "\n";
+fs.writeFileSync(path.join(fakeBin, "fake-codex-valid-observation.js"), "process.stdout.write(" + JSON.stringify(validObservationOutput) + ");\n", "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-valid-observation.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-valid-observation.js\" %*\r\n", "utf8");
+fs.writeFileSync(path.join(workspace, "verify-observation.js"), 'const fs=require("node:fs"); if(fs.readFileSync("validated.txt","utf8").trim()!=="VALIDATED_OK") process.exit(1);\n', "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-valid-writer.js"), [
+  'const patch=["```diff","diff --git a/validated.txt b/validated.txt","new file mode 100644","--- /dev/null","+++ b/validated.txt","@@ -0,0 +1 @@","+VALIDATED_OK","```"].join("\\n");',
+  'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:65,output_tokens:20}})+"\\n");',
+].join("\n") + "\n", "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-codex-valid-writer.cmd"), "@echo off\r\n\"" + process.execPath + "\" \"%~dp0fake-codex-valid-writer.js\" %*\r\n", "utf8");
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: workspace, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -51,6 +65,7 @@ run("git", ["commit", "-m", "fixture"]);
 
 const { setStatus, statusFor } = require("./core/job-store");
 const { startTask } = require("./core/task-orchestrator");
+const { jobDirectory, readRound, readTask } = require("./core/state-store");
 const { runTaskCycle } = require("./core/task-cycle");
 const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
 const resources = {
@@ -191,6 +206,69 @@ const resources = {
     assert.equal(readOnly.startedRounds, 2);
     assert.equal(readOnly.transitions.filter((row) => row.type === "dispatched").length, 2);
     assert.equal(fs.readFileSync(path.join(workspace, "inspection.txt"), "utf8").trim(), "INSPECTED_OK");
+    const invalidObservationResources = JSON.parse(JSON.stringify(resources));
+    invalidObservationResources.providers.codex.available = false;
+    invalidObservationResources.providers.codex.authenticated = false;
+    invalidObservationResources.providers.claude = {
+      id: "claude", available: true, authenticated: true, authMode: "subscription",
+      command: path.join(fakeBin, "fake-claude-invalid-observation.cmd"),
+      models: [{ id: "sonnet" }], capacity: { remainingPercent: 90 }, quotaPools: [{ id: "claude", remainingPercent: 90 }],
+    };
+    const invalidObservationTask = startTask({
+      workspace,
+      outcome: "Reject invented paths, inspect again with another provider, and finish only the valid plan",
+      outcomeAuthority: "user",
+      acceptanceEvidence: [{ description: "validated.txt is created only from a workspace-validated observation", minimumEvidenceLevel: "integration" }],
+      workGraph: [{
+        id: "W-invalid-observation",
+        goal: "Inspect verify.js and return one exact implementation plan",
+        state: "pending",
+        priority: 100,
+        acceptanceRequirementId: "A1",
+        relevantFiles: ["verify.js"],
+        expectedFiles: [],
+        acceptanceCriteria: ["Return an exact workspace-grounded implementation plan"],
+        verificationCommands: [],
+        readOnly: true,
+        taskKind: "repository-scan",
+        complexity: "medium",
+      }],
+      consoleModel: "gpt-5.6-luna",
+      consoleEffort: "low",
+      codexReservePercent: 15,
+    }, invalidObservationResources);
+    const validObservationResources = JSON.parse(JSON.stringify(invalidObservationResources));
+    validObservationResources.providers.codex.available = true;
+    validObservationResources.providers.codex.authenticated = true;
+    validObservationResources.providers.codex.command = path.join(fakeBin, "fake-codex-valid-observation.cmd");
+    const validWriterResources = JSON.parse(JSON.stringify(validObservationResources));
+    validWriterResources.providers.codex.command = path.join(fakeBin, "fake-codex-valid-writer.cmd");
+    let invalidObservationInventoryCalls = 0;
+    const invalidObservationFailover = await runTaskCycle({
+      taskId: invalidObservationTask.taskId, maxRounds: 3, maxMinutes: 2, noProgressLimit: 2,
+    }, entrypoint, {
+      inventory: async () => {
+        invalidObservationInventoryCalls += 1;
+        if (invalidObservationInventoryCalls === 1) return invalidObservationResources;
+        if (invalidObservationInventoryCalls === 2) return validObservationResources;
+        return validWriterResources;
+      },
+      providerHistory: () => ({}),
+    });
+    const invalidObservationProviders = invalidObservationFailover.transitions
+      .filter((row) => row.type === "dispatched")
+      .flatMap((row) => row.workers.map((worker) => worker.provider));
+    assert.deepEqual(invalidObservationProviders, ["claude", "codex", "codex"], JSON.stringify(invalidObservationFailover));
+    assert.ok(invalidObservationFailover.transitions.some((row) => row.type === "integrated" && (row.failures || []).some((failure) => /structured-work-plan-path-invalid/.test(failure.blocker || ""))));
+    assert.equal(invalidObservationFailover.completionAllowed, true, JSON.stringify(invalidObservationFailover));
+    assert.equal(fs.readFileSync(path.join(workspace, "validated.txt"), "utf8").trim(), "VALIDATED_OK");
+    const invalidObservationFinalTask = readTask(invalidObservationTask.taskId);
+    const invalidObservationContracts = (invalidObservationFinalTask.rounds || []).flatMap((roundRef) => {
+      const round = readRound(invalidObservationTask.taskId, roundRef.roundId);
+      return (round.jobs || []).map((job) => JSON.parse(fs.readFileSync(path.join(jobDirectory(invalidObservationTask.taskId, job.jobId), "contract.json"), "utf8")));
+    });
+    assert.equal(invalidObservationContracts.some((contract) => (contract.expectedFiles || []).includes("hallucinated/result.txt")), false);
+    assert.equal(invalidObservationContracts.filter((contract) => contract.readOnly !== true).length, 1);
 
     const noPatchResources = JSON.parse(JSON.stringify(resources));
     noPatchResources.providers.codex.command = path.join(fakeBin, "fake-codex-noop.cmd");

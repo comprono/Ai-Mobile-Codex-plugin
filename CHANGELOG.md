@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3 - 2026-07-19
+
+- Rejects structured work plans before writer dispatch when source paths, write parents, or directly named verification files are not present in the real workspace.
+- Returns rejected observation nodes to pending, cools down the failed provider, and permits one materially different provider to inspect the authoritative repository.
+- Counts accepted work-graph and evidence transitions as progress while keeping activity-only rounds subject to the finite no-progress limit.
+- Refreshes the exact Codex task after an explicit restart handoff through supported deep-link routes so the persisted continuation is reloaded without another model turn.
+- Stabilizes detached Windows coordinator verification by waiting for the coordinator process to exit before fixture cleanup.
 ## 1.3.2 - 2026-07-19
 
 - Persists the lightweight console model with the official Codex app-server thread settings method and foregrounds the exact task after continuation.

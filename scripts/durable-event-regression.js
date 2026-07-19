@@ -72,7 +72,7 @@ const { createJob, statusFor } = require("./core/job-store");
 const { coordinatorStatus, runCoordinator, startCoordinator } = require("./core/coordinator");
 const { readMaterialEvents } = require("./core/material-events");
 const { dispatchRound, startTask, taskSummary } = require("./core/task-orchestrator");
-const { terminateTree } = require("./core/utils");
+const { processAlive, terminateTree } = require("./core/utils");
 const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
 
 function resources(provider) {
@@ -169,6 +169,11 @@ function resources(provider) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       status = coordinatorStatus({ taskId: detached.taskId, maxEvents: 20 });
     }
+    const detachedExitDeadline = Date.now() + 5000;
+    while (processAlive(receipt.pid) && Date.now() < detachedExitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(processAlive(receipt.pid), false, "detached coordinator must exit before fixture cleanup");
     assert.equal(status.execution.state, "completed", JSON.stringify(status));
     assert.equal(fs.readFileSync(path.join(detachedWorkspace, "durable.txt"), "utf8").trim(), "DURABLE_OK");
     assert.equal(status.material.events.filter((event) => event.type === "round.collected").length, 1);
@@ -252,7 +257,7 @@ function resources(provider) {
     });
     await new Promise((resolve) => setTimeout(resolve, 250));
     const terminated = terminateTree(lostPid);
-    assert.equal(terminated.ok, true, JSON.stringify(terminated));
+    assert.ok(terminated.ok || !processAlive(lostPid), JSON.stringify(terminated));
     const lostResult = await lostRun;
     assert.notEqual(lostResult.state, "completed");
     assert.ok(Date.now() - lostStarted < 10000, JSON.stringify(lostResult));

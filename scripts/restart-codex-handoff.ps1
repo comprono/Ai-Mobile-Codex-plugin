@@ -146,6 +146,22 @@ function Wait-CodexDesktop {
     }
     return $processes
 }
+function Refresh-CodexDesktopThread {
+    param([Parameter(Mandatory = $true)][string]$ThreadId)
+
+    $explorerPath = (Get-Command explorer.exe -ErrorAction Stop).Source
+    $threadDeepLink = "codex://threads/$ThreadId"
+    $reviewDeepLink = "{0}?view=review&diffFilter=last-turn" -f $threadDeepLink
+    Start-Process -FilePath $explorerPath -ArgumentList $reviewDeepLink | Out-Null
+    Start-Sleep -Milliseconds 400
+    Start-Process -FilePath $explorerPath -ArgumentList $threadDeepLink | Out-Null
+    Start-Sleep -Milliseconds 800
+    Start-Process -FilePath $explorerPath -ArgumentList $threadDeepLink | Out-Null
+    return [pscustomobject]@{
+        ThreadDeepLink = $threadDeepLink
+        RefreshMethod = "supported last-turn route bounce followed by exact task foreground"
+    }
+}
 
 function Stop-ProcessTree {
     param([Parameter(Mandatory = $true)][int]$RootProcessId)
@@ -371,12 +387,13 @@ try {
     }
 
     # The app-server turn can finish while the desktop still displays its
-    # pre-restart snapshot. Re-open the exact deep link after completion so the
-    # user's visible task foregrounds the newly completed lightweight turn.
-    $explorerPath = (Get-Command explorer.exe -ErrorAction Stop).Source
-    Start-Process -FilePath $explorerPath -ArgumentList "codex://threads/$([string]$handoff.threadId)" | Out-Null
+    # pre-restart snapshot. Bounce through the supported last-turn route before
+    # returning to the exact task so the persisted continuation is reloaded.
+    $desktopRefresh = Refresh-CodexDesktopThread -ThreadId ([string]$handoff.threadId)
+    $handoff | Add-Member -NotePropertyName desktopRefreshMethod -NotePropertyValue $desktopRefresh.RefreshMethod -Force
     $handoff | Add-Member -NotePropertyName desktopForegroundedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
-    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex task was foregrounded after the fresh runtime proof and lightweight continuation completed."
+    $handoff | Add-Member -NotePropertyName desktopVisibleContinuationRequestedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
+    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex task was refreshed and foregrounded after the fresh runtime proof and lightweight continuation completed."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message

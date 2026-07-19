@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-19T07:59:18Z
+Updated: 2026-07-19T09:28:50Z
 
 ## North Star
 
@@ -56,14 +56,14 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Verified State
 
-- AI Mobile 1.3.2 passes 21 lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy regressions, including persistent Luna-low thread settings, structured CLI work plans, child-state preservation, exact-task foregrounding, and fresh no-progress accounting after stale rounds.
+- AI Mobile 1.3.3 passes 21 lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy regressions. Structured plans are now workspace-grounded before writer dispatch, rejected plans return to provider failover, and accepted graph transitions reset the finite no-progress budget without treating activity as progress.
 - Job and coordinator state is cross-process locked, revisioned, and monotonic; a killed worker reconciles without waiting for its deadline, and bounded Windows worktree cleanup cannot silently report success while files remain.
 - Explicit unavailable models and exhausted Antigravity models fail closed; Codex CLI remains usable above reserve, and unsafe symlink/submodule patches are refused.
 - A real authenticated Codex and Claude portfolio completed two independent disposable projects concurrently, integrated project-local evidence, preserved the 15 percent Codex reserve, cleaned all worktrees, and opened no desktop app.
 - Normal run-task-cycle starts or reuses one finite detached event-driven coordinator; the visible console owns no files and does not poll.
 - Read-only observations create fingerprinted exact writer units. Isolated Codex workers return bounded diffs that AI Mobile recounts, path-checks, applies, verifies, and integrates without sandbox bypass.
 - material-status is passive, provider-diagnostics is privacy-safe, and model/capacity routing uses callable capabilities plus measured quota/reset evidence.
-- AI Mobile 1.3.2 release commit `f19313e` is installed for Codex and Claude Code and pushed to `origin/main`; scanner grade A and both 100-point lint profiles pass without publishing private quota or machine data.
+- AI Mobile 1.3.3 is installed for Codex and Claude Code from this checkout; the complete 21-test matrix, privacy gate, scanner grade A, and both 100-point lint profiles pass without publishing private quota or machine data. Commit and push remain the current release action.
 ## Context Pointers
 
 - `.codex/ACCEPTANCE.json`
@@ -103,8 +103,8 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 ## Current Slice
 
 - Acceptance ID: RESTART_CONTINUITY
-- Goal: prove this explicitly authorized plugin-upgrade restart reopens and foregrounds the exact persisted Codex task, verifies the freshly loaded 1.3.2 runtime on a capable setup model, persists Luna-low through thread settings, and resumes useful work through a separate worker.
+- Goal: prove this explicitly authorized plugin-upgrade restart reopens and visibly refreshes the exact persisted Codex task, verifies the freshly loaded 1.3.3 runtime on a capable setup model, persists Luna-low through thread settings, and resumes useful work through a separate worker.
 - Required proof: user-visible evidence from the exact restarted task; installation, process launch, model selection, or synthetic restart tests alone do not pass this gate.
 ## Next
 
-Finish the 1.3.2 release gates, install the exact package for Codex and Claude, then use the already authorized one-shot restart to foreground this exact task, verify runtimeVersion 1.3.2 once on a capable setup model, persist Luna-low, and dispatch the next Job Vibhu worker. Do not restart during normal project execution.
+Commit and push the verified 1.3.3 release. At the next explicitly authorized upgrade restart, prove the supported route refresh visibly surfaces the same-task continuation before reconciling and resuming Job Vibhu. Do not restart during normal project execution.

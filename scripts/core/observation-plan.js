@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { setStatus, statusFor } = require("./job-store");
 const { jobDirectory, readTask, safeId, updatePortfolio, updateTask } = require("./state-store");
-const { bounded, readJson, safeRelativePath, utcNow, writeJson } = require("./utils");
+const { bounded, isInside, readJson, safeRelativePath, utcNow, writeJson } = require("./utils");
 const { validateCommands } = require("./verification");
 
 const TASK_KINDS = new Set(["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"]);
@@ -25,6 +25,78 @@ function uniqueNodeId(nodes, sourceId, index) {
   throw new Error("Unable to allocate a unique observation-derived work node id.");
 }
 
+function invalidPlanPath(message) {
+  const error = new Error(message);
+  error.code = "STRUCTURED_WORK_PLAN_PATH_INVALID";
+  throw error;
+}
+
+function assertExistingWorkspacePath(workspace, relative, label) {
+  const absolute = path.resolve(workspace, relative);
+  if (!fs.existsSync(absolute)) invalidPlanPath(`${label} does not exist in the workspace: ${relative}`);
+  const realWorkspace = fs.realpathSync(workspace);
+  const realCandidate = fs.realpathSync(absolute);
+  if (!isInside(realWorkspace, realCandidate)) invalidPlanPath(`${label} resolves outside the workspace: ${relative}`);
+}
+
+function assertExpectedWorkspacePath(workspace, relative) {
+  const absolute = path.resolve(workspace, relative);
+  if (fs.existsSync(absolute)) {
+    if (fs.statSync(absolute).isDirectory()) {
+      invalidPlanPath(`expectedFiles must name a file, not a directory: ${relative}`);
+    }
+    const realWorkspace = fs.realpathSync(workspace);
+    const realCandidate = fs.realpathSync(absolute);
+    if (!isInside(realWorkspace, realCandidate)) invalidPlanPath(`expectedFiles resolves outside the workspace: ${relative}`);
+    return;
+  }
+  const parent = path.dirname(absolute);
+  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) invalidPlanPath(`expectedFiles parent directory does not exist: ${relative}`);
+  const realWorkspace = fs.realpathSync(workspace);
+  const realParent = fs.realpathSync(parent);
+  if (!isInside(realWorkspace, realParent)) invalidPlanPath(`expectedFiles resolves through a parent outside the workspace: ${relative}`);
+}
+
+function looksLikeProjectReference(value) {
+  const reference = String(value || "").split("::", 1)[0].trim();
+  if (!reference || /^https?:/i.test(reference) || /[?*\[\]]/.test(reference)) return false;
+  return reference === "." || /[\\/]/.test(reference) || /\.(?:[cm]?[jt]sx?|py|ps1|rb|php|go|rs|java|cs|fs|sh|bat|cmd)$/i.test(reference);
+}
+
+function verificationFileReferences(command) {
+  const executable = path.basename(String(command.command || "")).toLowerCase();
+  const args = command.args || [];
+  if (/^node(?:\.exe)?$/.test(executable)) {
+    return args.filter((arg) => !String(arg).startsWith("-") && looksLikeProjectReference(arg)).slice(0, 1);
+  }
+  if (/^(?:python|python3|py)(?:\.exe)?$/.test(executable)) {
+    if (String(args[0] || "").toLowerCase() === "-m") return [];
+    return args.filter((arg) => !String(arg).startsWith("-") && looksLikeProjectReference(arg)).slice(0, 1);
+  }
+  if (/^pytest(?:\.exe)?$/.test(executable)) {
+    return args.filter((arg) => !String(arg).startsWith("-") && looksLikeProjectReference(arg));
+  }
+  return [];
+}
+
+function validateWorkspacePaths(task, rawRelevantFiles, expectedFiles, commands, index) {
+  const expected = new Set(expectedFiles);
+  for (const file of expectedFiles) assertExpectedWorkspacePath(task.workspace, file);
+  for (const file of rawRelevantFiles) {
+    if (expected.has(file)) assertExpectedWorkspacePath(task.workspace, file);
+    else assertExistingWorkspacePath(task.workspace, file, `proposedWorkUnits[${index}].relevantFiles`);
+  }
+  for (const command of commands) {
+    for (const rawReference of verificationFileReferences(command)) {
+      const reference = String(rawReference || "").split("::", 1)[0].trim();
+      if (!reference || reference === ".") continue;
+      const relative = safeRelativePath(task.workspace, reference);
+      if (expected.has(relative)) assertExpectedWorkspacePath(task.workspace, relative);
+      else assertExistingWorkspacePath(task.workspace, relative, `proposedWorkUnits[${index}].verificationCommands`);
+    }
+  }
+}
+
 function normalizeUnit(task, sourceNode, row, index, currentNodes) {
   const goal = String(row?.goal || "").trim().slice(0, 2000);
   if (!goal) throw new Error(`proposedWorkUnits[${index}] requires a bounded goal.`);
@@ -32,9 +104,10 @@ function normalizeUnit(task, sourceNode, row, index, currentNodes) {
     .map((value) => safeRelativePath(task.workspace, value))
     .filter((value) => value && value !== "."))].slice(0, 40);
   if (!expectedFiles.length) throw new Error(`proposedWorkUnits[${index}] requires exact expectedFiles; repository-root ownership is refused.`);
-  const relevantFiles = [...new Set([...(Array.isArray(row?.relevantFiles) ? row.relevantFiles : []), ...expectedFiles]
+  const declaredRelevantFiles = [...new Set((Array.isArray(row?.relevantFiles) ? row.relevantFiles : [])
     .map((value) => safeRelativePath(task.workspace, value))
     .filter((value) => value && value !== "."))].slice(0, 60);
+  const relevantFiles = [...new Set([...declaredRelevantFiles, ...expectedFiles])].slice(0, 60);
   const validation = validateCommands(task.workspace, row?.verificationCommands);
   if (!validation.valid) {
     throw new Error(`proposedWorkUnits[${index}] requires allowlisted deterministic verification: ${validation.errors.join("; ") || "no command supplied"}`);
@@ -43,6 +116,7 @@ function normalizeUnit(task, sourceNode, row, index, currentNodes) {
     .map((value) => String(value || "").trim().slice(0, 1000))
     .filter(Boolean))].slice(0, 12);
   if (!acceptanceCriteria.length) throw new Error(`proposedWorkUnits[${index}] requires observable acceptanceCriteria.`);
+  validateWorkspacePaths(task, declaredRelevantFiles, expectedFiles, validation.commands, index);
   return {
     id: uniqueNodeId(currentNodes, sourceNode.id, index),
     goal,
@@ -82,7 +156,7 @@ function acceptObservationJob(taskIdValue, jobIdValue) {
   const contract = readJson(path.join(dir, "contract.json"), null);
   const handoff = readJson(path.join(dir, "handoff.json"), null);
   const existing = readJson(path.join(dir, "observation-evidence.json"), null);
-  if (existing?.accepted === true || existing?.blocked === true) return { ...existing, alreadyAccepted: true };
+  if (existing?.accepted === true || existing?.blocked === true || existing?.rejected === true) return { ...existing, alreadyEvaluated: true };
   if (!contract || contract.readOnly !== true) return { taskId, jobId, accepted: false, blocker: "observation-contract-missing-or-not-read-only" };
   if (status.state !== "completed") return { taskId, jobId, accepted: false, blocker: `worker-not-completed: ${status.state}` };
   if (contract.artifactKind !== "work-plan") return { taskId, jobId, accepted: false, blocker: "read-only-worker-result-requires-explicit-artifact-kind" };
@@ -147,7 +221,13 @@ function acceptObservationJob(taskIdValue, jobIdValue) {
       return current;
     });
   } catch (error) {
-    return { taskId, jobId, accepted: false, blocker: `invalid-structured-work-plan: ${bounded(error.message, 800)}` };
+    const blocker = error.code === "STRUCTURED_WORK_PLAN_PATH_INVALID"
+      ? `structured-work-plan-path-invalid: ${bounded(error.message, 800)}`
+      : `invalid-structured-work-plan: ${bounded(error.message, 800)}`;
+    const rejected = { taskId, jobId, accepted: false, blocked: false, rejected: true, fingerprint, blocker, generatedAt: utcNow() };
+    writeJson(path.join(dir, "observation-evidence.json"), rejected);
+    setStatus(taskId, jobId, { observationRejectedAt: rejected.generatedAt, integrationState: "observation-rejected" });
+    return rejected;
   }
   synchronizePortfolio(contract, updated);
   const evidence = {
