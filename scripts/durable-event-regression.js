@@ -52,17 +52,19 @@ function workspace(name, verificationName, targetFile, expectedText) {
 const observationWorkspace = workspace("observation", "verify-planned.js", "planned.txt", "PLANNED_OK");
 const detachedWorkspace = workspace("detached", "verify-durable.js", "durable.txt", "DURABLE_OK");
 const lostWorkspace = workspace("lost-worker", "verify-lost.js", "lost.txt", "NEVER_WRITTEN");
+const staleWorkspace = workspace("stale-round", "verify-stale.js", "stale.txt", "STALE_OK");
 
 fs.writeFileSync(path.join(fakeBin, "fake-claude.js"), `process.stdout.write(JSON.stringify({is_error:false,structured_output:{outcome:"Observed the bounded gap and produced one exact implementation unit.",evidence:["context.md identifies the fixture"],checks:["node verify-planned.js"],blocker:"",blockerOwner:"",recoveryTrigger:"",recoveryAction:"",proposedWorkUnits:[{goal:"Create planned.txt containing PLANNED_OK",relevantFiles:["context.md","verify-planned.js","planned.txt"],expectedFiles:["planned.txt"],acceptanceCriteria:["node verify-planned.js exits zero"],verificationCommands:[{name:"verify-planned",command:"node",args:["verify-planned.js"],timeoutSeconds:30}],taskKind:"code",complexity:"medium",priority:100}]},usage:{input_tokens:40,output_tokens:20}}));\n`, "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-claude.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-claude.js" %*\r\n`, "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex.js"), [
-  'const fs=require("node:fs"); const durable=fs.existsSync("verify-durable.js"); const file=durable?"durable.txt":"planned.txt"; const value=durable?"DURABLE_OK":"PLANNED_OK";',
+  'const fs=require("node:fs"); const fixture=fs.existsSync("verify-durable.js")?["durable.txt","DURABLE_OK"]:fs.existsSync("verify-stale.js")?["stale.txt","STALE_OK"]:["planned.txt","PLANNED_OK"]; const [file,value]=fixture;',
   'const patch=["```diff",`diff --git a/${file} b/${file}`,"new file mode 100644","--- /dev/null",`+++ b/${file}`,"@@ -0,0 +1 @@",`+${value}`,"```"].join("\\n");',
   'process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:patch}})+"\\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:60,output_tokens:18}})+"\\n");',
 ].join("\n") + "\n", "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.js" %*\r\n`, "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-slow.js"), 'setTimeout(() => process.stdout.write(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:0}})+"\\n"), 30000);\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex-slow.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-codex-slow.js" %*\r\n`, "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-claude-fail.cmd"), '@echo off\r\necho {"is_error":true,"result":"stale provider failure fixture"}\r\nexit /b 1\r\n', "utf8");
 
 const { inventory: unusedInventory } = require("./core/capacity");
 void unusedInventory;
@@ -176,6 +178,45 @@ function resources(provider) {
     assert.equal(status.noProviderProbe, true);
     assert.equal(status.noProjectScan, true);
 
+    const staleFailureResources = resources("claude");
+    staleFailureResources.providers.claude.command = path.join(fakeBin, "fake-claude-fail.cmd");
+    const stale = startTask({
+      workspace: staleWorkspace,
+      outcome: "Finish after collecting a failed round from before this coordinator execution",
+      outcomeAuthority: "user",
+      acceptanceEvidence: [{ description: "The primary workspace contains verified STALE_OK", minimumEvidenceLevel: "integration" }],
+      workGraph: [{
+        id: "WRITE_STALE",
+        goal: "Create stale.txt containing STALE_OK",
+        state: "pending",
+        priority: 100,
+        acceptanceRequirementId: "A1",
+        relevantFiles: ["stale.txt", "verify-stale.js"],
+        expectedFiles: ["stale.txt"],
+        acceptanceCriteria: ["node verify-stale.js exits zero"],
+        verificationCommands: [{ name: "verify-stale", command: "node", args: ["verify-stale.js"], timeoutSeconds: 30 }],
+        taskKind: "code",
+        complexity: "large",
+      }],
+      consoleModel: "gpt-console",
+      consoleEffort: "low",
+      codexReservePercent: 15,
+    }, staleFailureResources);
+    const staleRound = dispatchRound({ taskId: stale.taskId, horizonHours: 5 }, staleFailureResources, {}, (contract) => createJob(contract, entrypoint));
+    const staleJob = staleRound.workers[0];
+    const staleDeadline = Date.now() + 10000;
+    while (!["completed", "failed", "blocked", "cancelled"].includes(statusFor(stale.taskId, staleJob.jobId).state) && Date.now() < staleDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(statusFor(stale.taskId, staleJob.jobId).state, "failed");
+    const staleResult = await runCoordinator({ taskId: stale.taskId, executionId: "execution-stale-round-test", config: { maxRounds: 1, maxMinutes: 2, noProgressLimit: 1, horizonHours: 5 } }, entrypoint, {
+      inventory: async () => resources("codex"),
+      providerHistory: () => ({}),
+    });
+    assert.equal(staleResult.state, "completed", JSON.stringify(staleResult));
+    assert.equal(fs.readFileSync(path.join(staleWorkspace, "stale.txt"), "utf8").trim(), "STALE_OK");
+    assert.equal(readMaterialEvents({ taskId: stale.taskId, maxEvents: 50 }).events.some((event) => event.blocker === "no-progress-limit"), false);
+
     const lostResources = resources("codex");
     lostResources.providers.codex.command = path.join(fakeBin, "fake-codex-slow.cmd");
     const lost = startTask({
@@ -225,6 +266,7 @@ function resources(provider) {
       detachedContinuation: true,
       oneTimeCollection: true,
       oneTimeIntegration: true,
+      staleRoundDoesNotConsumeNewExecutionBudget: true,
       lostWorkerReconciledWithoutDeadlineWait: true,
       visibleConsoleFileOwnership: 0,
       automaticDesktopLaunches: 0,

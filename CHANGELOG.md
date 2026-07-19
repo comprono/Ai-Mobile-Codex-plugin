@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2 - 2026-07-19
+
+- Persists the lightweight console model with the official Codex app-server thread settings method and foregrounds the exact task after continuation.
+- Preserves child-written runtime and model proof, waits for a stable child exit, and trusts a matching structured success receipt.
+- Requires exact JSON work plans from CLI providers that do not enforce an output schema natively.
+- Counts no-progress only for rounds dispatched by the current coordinator execution, allowing bounded failover after stale failures.
+- Adds regressions for visible model persistence, structured plan prompts, preserved restart state, and stale-round failover accounting.
+
 ## 1.3.1 - 2026-07-19
 
 - Replaces visible-turn continuation slices with one finite detached event-driven coordinator that watches durable worker state, collects and integrates each result once, and stops on acceptance, typed decisions, deadlines, or no progress.

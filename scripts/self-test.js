@@ -97,6 +97,11 @@ async function run() {
 
     const contract = { projectGoal: "ship", goal: "Review UI", currentCodexGoal: "Implement API", independenceReason: "Separate ownership", executionWorkspace: workspace, readOnly: true, relevantFiles: ["src/ui"], expectedFiles: [], acceptanceCriteria: ["Find issue"], maxWorkerOutputTokens: 800, communicationMode: "smart-compact" };
     assert.match(promptFor(contract), /bounded worker/);
+    const workPlanPrompt = promptFor({ ...contract, artifactKind: "work-plan" });
+    assert.match(workPlanPrompt, /Return exactly one JSON object and nothing else/);
+    assert.match(workPlanPrompt, /"verificationCommands":\[\{"name":"string","command":"executable","args":\["argument"\],"timeoutSeconds":30\}\]/);
+    assert.match(workPlanPrompt, /Verification commands must be structured objects, never shell strings/);
+    assert.match(workPlanPrompt, /no Markdown, code fences, commentary, or file URLs/);
     assert.match(communicationContract(), /communicate compactly/);
     const verification = runVerification(workspace, root, [{ name: "node-version", command: "node", args: ["--version"] }]);
     assert.equal(verification.passed, true, JSON.stringify(verification));
@@ -109,7 +114,7 @@ async function run() {
       assert.equal(serverSource.includes(forbidden), false);
       assert.equal(skillSource.includes(forbidden), false);
     }
-    return { ok: true, assertions: 51, durationMs: Date.now() - started, tools: TOOLS.length };
+    return { ok: true, assertions: 55, durationMs: Date.now() - started, tools: TOOLS.length };
   } finally {
     if (savedDataRoot === undefined) delete process.env.AI_MOBILE_DATA_ROOT; else process.env.AI_MOBILE_DATA_ROOT = savedDataRoot;
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocalAppData;

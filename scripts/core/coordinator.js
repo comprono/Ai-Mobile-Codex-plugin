@@ -147,6 +147,7 @@ function startCoordinator(input = {}, entrypoint) {
     finishedAt: null,
     stopReason: "",
     roundsStarted: 0,
+    lastRoundId: null,
     config,
   });
   let child;
@@ -287,6 +288,9 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
   let state = writeCoordinator(args, { executionId: payload.executionId, state: "running", pid: process.pid, config, startedAt: current?.startedAt || utcNow() });
   let roundsStarted = Number(state.roundsStarted || 0);
   let noProgress = 0;
+  const executionRoundIds = new Set(
+    current?.executionId === payload.executionId && current.lastRoundId ? [current.lastRoundId] : [],
+  );
   let summary = taskSummary(args);
   let signature = progressSignature(summary);
   const failedProviders = new Set();
@@ -367,8 +371,13 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
 
         summary = taskSummary(args);
         const nextSignature = progressSignature(summary);
-        if (nextSignature === signature) noProgress += 1;
-        else { noProgress = 0; signature = nextSignature; }
+        const belongsToCurrentExecution = executionRoundIds.has(latest.roundId);
+        if (nextSignature !== signature) {
+          noProgress = 0;
+          signature = nextSignature;
+        } else if (belongsToCurrentExecution) {
+          noProgress += 1;
+        }
         if (noProgress >= config.noProgressLimit) {
           stopReason = "no-progress-limit";
           material(args, state, {
@@ -423,6 +432,7 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
         return createJobFn(contract);
       });
       roundsStarted += 1;
+      executionRoundIds.add(dispatched.roundId);
       state = writeCoordinator(args, { executionId: payload.executionId, roundsStarted, lastRoundId: dispatched.roundId });
       material(args, state, {
         type: "round.dispatched",

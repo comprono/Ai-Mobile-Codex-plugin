@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-19T04:33:13Z",
+  "updated_utc": "2026-07-19T07:54:07Z",
   "project_state": "active",
   "current_slice_requirement_id": "RESTART_CONTINUITY",
   "requirements": [
@@ -39,22 +39,22 @@
       "evidence": [
         {
           "level": "integration",
-          "ref": "node scripts/shared-host-install-regression.js; scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list; claude plugin validate --strict .",
-          "summary": "Codex and Claude Code both installed ai-mobile@ai-mobile 1.3.1 from the same repository root and shared .mcp.json; strict Claude validation passed, ten critical source/cache hashes matched in both hosts, and no duplicate Claude orchestration runtime remains in the package.",
-          "verified_utc": "2026-07-19T04:22:45Z"
+          "ref": "scripts/install-ai-mobile.ps1; codex plugin list --json; claude plugin list",
+          "summary": "Codex and Claude Code both resolve ai-mobile@ai-mobile 1.3.2 from the same repository source and shared MCP runtime after strict manifest validation.",
+          "verified_utc": "2026-07-19T07:54:07Z"
         }
       ],
       "blocker": null
     },
     {
       "id": "RESTART_CONTINUITY",
-      "description": "A schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, immediately reopens the exact persisted task, proves the fresh running runtime there, and only afterward uses Luna-low as a lightweight console that starts one finite detached coordinator.",
+      "description": "An authorized schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, immediately reopens the exact persisted task, proves the fresh runtime, persists the lightweight console model through thread settings, foregrounds the completed continuation, and resumes useful work through separate workers.",
       "required": true,
       "status": "failing",
       "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
-        "Prove a deterministic app-server regression performs initialize, thread/resume, a capable-model verification turn, and only after exact runtimeVersion evidence a Luna-low turn in the same thread; stale evidence must stop before Luna.",
-        "Commit, push, and install AI Mobile 1.3.1, then prove codex plugin list reports ai-mobile@ai-mobile 1.3.1.",
+        "Prove a deterministic app-server regression performs initialize, thread/resume, a capable-model verification turn, persistent thread/settings/update, and only after exact runtimeVersion evidence a Luna-low turn in the same thread; stale evidence must stop before Luna.",
+        "Commit, push, and install AI Mobile 1.3.2, then prove codex plugin list reports ai-mobile@ai-mobile 1.3.2.",
         "Close only OpenAI.Codex and run the one-shot handoff against this exact task with Sol Ultra verification and GPT-5.6 Luna low continuation; never launch Classic ChatGPT, codex exec resume, a duplicate task, Goal, automation, manager loop, or UI automation.",
         "On the fresh Luna turn, reconcile the existing durable project task once and invoke run-task-cycle exactly once; Luna must not inspect or patch the plugin or project, and the already visible desktop must not wait for coordinator completion.",
         "Prove a real installed provider accepts its structured schema, reaches a terminal state without another user message, is collected once, and either integrates deterministic evidence or emits the correct failure class and recovery transition."
@@ -65,6 +65,12 @@
           "ref": "Prior stale-runtime failure in this exact Codex task",
           "summary": "A Luna-low follow-up appeared in the same task before the upgraded runtime was loaded. It then diagnosed and attempted to repair the stale plugin. This is negative evidence that establishes the required ordering but does not pass the requirement.",
           "verified_utc": "2026-07-18T08:36:00Z"
+        },
+        {
+          "level": "integration",
+          "ref": "node scripts/app-server-resume-regression.js; node scripts/trusted-primary-regression.js",
+          "summary": "Focused regressions prove runtime-before-Luna ordering, persistent Luna-low thread settings, structured child success handling, child-state preservation, and final exact-task foregrounding. User-visible restart proof is still required.",
+          "verified_utc": "2026-07-19T07:54:07Z"
         }
       ],
       "blocker": null
@@ -301,21 +307,21 @@
     },
     {
       "id": "PUBLIC_RELEASE",
-      "description": "Version 1.3.1 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
+      "description": "Version 1.3.2 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
       "required": true,
-      "status": "passing",
+      "status": "failing",
       "minimum_evidence_level": "end-to-end",
       "acceptance_steps": [
         "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
-        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.3.1 runtime.",
-        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.3.1."
+        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.3.2 runtime.",
+        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.3.2."
       ],
       "evidence": [
         {
-          "level": "end-to-end",
-          "ref": "git commit 4ac7fbefcd2d5bfc4ab4d90e75319d8fcc4dff19; git push origin main; 21-test deterministic matrix; real-provider portfolio canary; plugin-scanner 2.0.1116; shared-host 1.3.1 install",
-          "summary": "AI Mobile 1.3.1 passed all 21 deterministic release gates, a real concurrent Codex and Claude two-project portfolio canary, Codex and Claude manifest/install validation, syntax and privacy checks, and public-marketplace plus strict-security scanner profiles at 100 with zero findings. The exact release commit was pushed to origin/main and both hosts resolve the shared 1.3.1 runtime.",
-          "verified_utc": "2026-07-19T04:33:13Z"
+          "level": "integration",
+          "ref": "21-test deterministic matrix; plugin-scanner 2.0.1116; shared-host 1.3.2 install",
+          "summary": "All deterministic tests, manifest checks, privacy checks, and scanner profiles pass; commit and push evidence remain pending.",
+          "verified_utc": "2026-07-19T07:54:07Z"
         }
       ],
       "blocker": null

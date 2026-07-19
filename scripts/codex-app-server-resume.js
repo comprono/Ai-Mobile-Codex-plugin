@@ -270,6 +270,12 @@ async function runContinuation(handoff, options = {}) {
       throw new Error("Fresh AI Mobile runtime proof was not observed; the lightweight console turn was not started.");
     }
 
+    await client.request("thread/settings/update", {
+      threadId: handoff.threadId,
+      model: handoff.resumeModel,
+      effort: handoff.resumeEffort || "low",
+    }, 30000);
+
     const continuationParams = {
       threadId: handoff.threadId,
       cwd: handoff.workspace,
@@ -287,6 +293,7 @@ async function runContinuation(handoff, options = {}) {
       verificationTurnId: verification.turnId,
       resumeModel: handoff.resumeModel,
       resumeEffort: handoff.resumeEffort || "low",
+      threadSettingsUpdated: true,
       continuationTurnId: continuation.turnId,
       visibleAfterDesktopReopen: true,
     };

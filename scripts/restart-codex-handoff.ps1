@@ -22,6 +22,16 @@ function Save-RestartState {
         [Parameter(Mandatory = $true)][string]$Message,
         [string]$ErrorText = ""
     )
+    # The app-server resume helper updates this file in another process. Merge
+    # fields missing from its latest record instead of overwriting its proof
+    # with the launcher's older in-memory copy.
+    $latest = Get-Content -Raw -LiteralPath $script:handoffPath | ConvertFrom-Json
+    foreach ($property in $script:handoff.PSObject.Properties) {
+        if (-not $latest.PSObject.Properties[$property.Name]) {
+            $latest | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+        }
+    }
+    $script:handoff = $latest
     $now = [DateTime]::UtcNow.ToString("o")
     $entry = [pscustomobject]@{ At = $now; State = $State; Message = $Message }
     $log = @($script:handoff.restartLog) + @($entry)
@@ -336,21 +346,37 @@ try {
         Stop-ProcessTree -RootProcessId $resumeProcess.Id
         throw "Same-task app-server continuation exceeded its 20-minute bounded timeout; the Codex desktop remains open."
     }
+    $resumeProcess.WaitForExit()
     $resumeProcess.Refresh()
-    $resumeOutput = @(
-        if (Test-Path -LiteralPath $resumeStdout) { Get-Content -Raw -LiteralPath $resumeStdout }
-        if (Test-Path -LiteralPath $resumeStderr) { Get-Content -Raw -LiteralPath $resumeStderr }
-    ) -join [Environment]::NewLine
+    $resumeStdoutText = if (Test-Path -LiteralPath $resumeStdout) { Get-Content -Raw -LiteralPath $resumeStdout } else { "" }
+    $resumeStderrText = if (Test-Path -LiteralPath $resumeStderr) { Get-Content -Raw -LiteralPath $resumeStderr } else { "" }
+    $resumeResult = $null
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($resumeStdoutText)) {
+            $resumeResult = $resumeStdoutText | ConvertFrom-Json
+        }
+    } catch {
+        $resumeResult = $null
+    }
     Remove-Item -LiteralPath $resumeStdout, $resumeStderr -Force -ErrorAction SilentlyContinue
-    if ($resumeProcess.ExitCode -ne 0) {
-        throw "Same-task app-server continuation failed: $($resumeOutput.Trim())"
+    $structuredResumeSucceeded = $resumeResult -and $resumeResult.ok -eq $true -and `
+        [string]$resumeResult.runtimeVersion -eq [string]$handoff.expectedRuntimeVersion
+    if (-not $structuredResumeSucceeded) {
+        $resumeOutput = @($resumeStdoutText, $resumeStderrText) -join [Environment]::NewLine
+        throw "Same-task app-server continuation failed with exit code $($resumeProcess.ExitCode): $($resumeOutput.Trim())"
     }
     $handoff = Get-Content -Raw -LiteralPath $handoffPath | ConvertFrom-Json
     if ($handoff.modelSwitchVerified -ne $true -or [string]$handoff.runningRuntimeVersion -ne [string]$handoff.expectedRuntimeVersion) {
         throw "The same-task continuation did not prove the fresh runtime and post-proof model switch."
     }
 
-    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex task remained visible while the fresh runtime was verified and the same task completed its requested lightweight continuation."
+    # The app-server turn can finish while the desktop still displays its
+    # pre-restart snapshot. Re-open the exact deep link after completion so the
+    # user's visible task foregrounds the newly completed lightweight turn.
+    $explorerPath = (Get-Command explorer.exe -ErrorAction Stop).Source
+    Start-Process -FilePath $explorerPath -ArgumentList "codex://threads/$([string]$handoff.threadId)" | Out-Null
+    $handoff | Add-Member -NotePropertyName desktopForegroundedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
+    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex task was foregrounded after the fresh runtime proof and lightweight continuation completed."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message

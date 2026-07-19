@@ -33,6 +33,11 @@ function fakeAppServer(runtimeVersion, observed) {
         send({ id: message.id, result: { thread: { id: message.params.threadId, turns: [], status: { type: "idle" } } } });
         return;
       }
+      if (message.method === "thread/settings/update") {
+        observed.settings = message.params;
+        send({ id: message.id, result: { thread: { id: message.params.threadId, turns: [], status: { type: "idle" } } } });
+        return;
+      }
       if (message.method !== "turn/start") return;
       turnCount += 1;
       const turnId = "turn-" + turnCount;
@@ -121,6 +126,10 @@ async function main() {
   assert.equal(observed.turns[0].effort, "ultra");
   assert.equal(observed.turns[1].model, "gpt-5.6-luna");
   assert.equal(observed.turns[1].effort, "low");
+  assert.equal(observed.settings.threadId, handoff.threadId);
+  assert.equal(observed.settings.model, "gpt-5.6-luna");
+  assert.equal(observed.settings.effort, "low");
+  assert.equal(result.threadSettingsUpdated, true);
 
   const staleObserved = {};
   await assert.rejects(
@@ -136,6 +145,7 @@ async function main() {
   process.stdout.write(JSON.stringify({
     ok: true,
     freshRuntimeRequiredBeforeLuna: true,
+    persistentThreadModelUpdated: true,
     sameThreadTurns: observed.turns.length,
     hiddenCodexExecUsed: false,
     staleRuntimeFailsClosed: true,

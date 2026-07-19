@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-19T04:33:13Z
+Updated: 2026-07-19T07:55:51Z
 
 ## North Star
 
@@ -56,6 +56,7 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Verified State
 
+- AI Mobile 1.3.2 focused regressions prove persistent Luna-low thread settings, structured CLI work-plan output, child-state preservation, exact-task foregrounding, and fresh no-progress accounting after stale rounds.
 - AI Mobile 1.3.1 source passes 21 local lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy-oriented regression gates in one clean run.
 - Job and coordinator state is cross-process locked, revisioned, and monotonic; a killed worker reconciles without waiting for its deadline, and bounded Windows worktree cleanup cannot silently report success while files remain.
 - Explicit unavailable models and exhausted Antigravity models fail closed; Codex CLI remains usable above reserve, and unsafe symlink/submodule patches are refused.
@@ -97,14 +98,14 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 - Planning before bounded project observation creates durable guesswork; observations must yield fingerprinted, exact next units.
 - Returning `continuationRequired` is not durable execution when another visible Codex turn must collect, integrate, or recover.
 - Root-wide writers, inferred full-suite verification, and repeated premium review can spend more than the accepted change warrants.
-- Worker launch, healthy process, installation, restart, status checks, and test count are lower-level evidence, not user outcome progress.
+- A per-turn model override is not a persistent visible model switch; restart success requires thread settings, preserved structured child proof, and exact-task foregrounding.
 - Retries, worktrees, backups, API calls, and processes require finite budgets, monotonic terminal state, retention, idempotency, no-progress stops, and cleanup that passes only when the owned path is actually gone.
 
 ## Current Slice
 
 - Acceptance ID: RESTART_CONTINUITY
-- Goal: prove a later explicitly authorized plugin-upgrade restart reopens the exact persisted Codex task, verifies the freshly loaded 1.3.1 runtime on a capable setup model, and only then uses a lightweight console model.
+- Goal: prove this explicitly authorized plugin-upgrade restart reopens and foregrounds the exact persisted Codex task, verifies the freshly loaded 1.3.2 runtime on a capable setup model, persists Luna-low through thread settings, and resumes useful work through a separate worker.
 - Required proof: user-visible evidence from the exact restarted task; installation, process launch, model selection, or synthetic restart tests alone do not pass this gate.
 ## Next
 
-At the next explicitly authorized upgrade boundary, close only OpenAI.Codex, reopen this exact task, verify runtimeVersion 1.3.1 once on a capable setup model, then switch the same task to the lightweight console. Do not restart during normal project execution.
+Finish the 1.3.2 release gates, install the exact package for Codex and Claude, then use the already authorized one-shot restart to foreground this exact task, verify runtimeVersion 1.3.2 once on a capable setup model, persist Luna-low, and dispatch the next Job Vibhu worker. Do not restart during normal project execution.

@@ -260,6 +260,10 @@ assert.equal(restartSource.includes("codex-already-stopped"), true);
 assert.equal(restartSource.includes("verifiedDesktopProcessIds"), true);
 assert.equal(restartSource.includes("resume-codex-thread.ps1"), true);
 assert.equal(restartSource.includes("$resumeProcess"), true);
+assert.equal(restartSource.includes("$resumeProcess.WaitForExit()"), true);
+assert.equal(restartSource.includes("$structuredResumeSucceeded"), true);
+assert.equal(restartSource.includes("desktopForegroundedAt"), true);
+assert.equal(restartSource.includes("foreach ($property in $script:handoff.PSObject.Properties)"), true);
 assert.equal(restartSource.includes("Stop-ProcessTree"), true);
 assert.equal(restartSource.includes("& codex @codexArgs"), false);
 
@@ -271,6 +275,7 @@ assert.equal(resumeSource.includes("codex exec resume"), false);
 const appServerSource = fs.readFileSync(path.join(__dirname, "codex-app-server-resume.js"), "utf8");
 assert.equal(appServerSource.includes('["app-server", "--stdio"]'), true);
 assert.equal(appServerSource.includes('"thread/resume"'), true);
+assert.equal(appServerSource.includes('"thread/settings/update"'), true);
 assert.equal((appServerSource.match(/"turn\/start"/g) || []).length >= 1, true);
 assert.equal(appServerSource.includes("Fresh AI Mobile runtime proof was not observed"), true);
 

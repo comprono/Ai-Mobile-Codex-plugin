@@ -24,6 +24,9 @@ function communicationContract(mode = "smart-compact") {
 function promptFor(contract) {
   const codexPatchWriter = contract.provider === "codex" && contract.readOnly !== true && contract.skipModelReview !== true;
   const maxWords = Math.max(220, Math.min(1400, Math.floor((contract.maxWorkerOutputTokens || 1000) * 0.7)));
+  const workPlanContract = contract.artifactKind === "work-plan"
+    ? 'Return exactly one JSON object and nothing else: no Markdown, code fences, commentary, or file URLs. Include every top-level key in this schema: {"outcome":"string","evidence":["string"],"checks":["string"],"blocker":"string","blockerOwner":"string","recoveryTrigger":"string","recoveryAction":"string","proposedWorkUnits":[{"goal":"string","relevantFiles":["relative/path"],"expectedFiles":["relative/path"],"acceptanceCriteria":["observable result"],"verificationCommands":[{"name":"string","command":"executable","args":["argument"],"timeoutSeconds":30}],"taskKind":"code|test|review|repository-scan","complexity":"small|medium|large","priority":100,"requiredCapabilities":["source","local-files","tests"]}]}. proposedWorkUnits must contain at most three exact dependency-ready units. Paths must be bounded and relative; expectedFiles cannot be root-wide. Verification commands must be structured objects, never shell strings. If no safe unit exists, return an empty proposedWorkUnits array and fill blocker, blockerOwner, recoveryTrigger, and recoveryAction.'
+    : "";
   return [
     "You are one bounded worker in a finite project round. Complete only the assigned unit.",
     contract.taskContext?.latestUserRequest ? `Latest user request: ${contract.taskContext.latestUserRequest}` : "",
@@ -36,7 +39,7 @@ function promptFor(contract) {
     `Execution workspace: ${contract.executionWorkspace}`,
     `Mode: ${contract.readOnly ? "read-only" : contract.skipModelReview ? "trusted primary writer" : "isolated writer"}`,
     codexPatchWriter ? "Codex writer transport: read the bounded files, do not call write or shell-mutation tools, and return exactly one complete git-compatible unified diff in a ```diff fence. The coordinator will path-check and apply it only inside the isolated worktree. Include no prose outside the diff; if a safe patch is impossible, return one line beginning BLOCKER:." : "",
-    contract.artifactKind === "work-plan" ? "Return a structured work plan, not general prose. proposedWorkUnits must contain at most three exact, dependency-ready writer units. Every unit requires bounded relevantFiles, non-root expectedFiles, observable acceptanceCriteria, and allowlisted deterministic verificationCommands. If no safe unit exists, return no units and one blocker with owner, recovery trigger, and recovery action." : "",
+    workPlanContract,
     contract.relevantFiles?.length ? `Read scope: ${contract.relevantFiles.join(", ")}` : "",
     contract.expectedFiles?.length ? `Only allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",
     contract.requiredCapabilities?.length ? `Required callable capabilities: ${contract.requiredCapabilities.join(", ")}` : "",
