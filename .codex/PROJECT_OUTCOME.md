@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-19T00:00:00Z
+Updated: 2026-07-19T04:33:13Z
 
 ## North Star
 
@@ -63,6 +63,7 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 - Normal run-task-cycle starts or reuses one finite detached event-driven coordinator; the visible console owns no files and does not poll.
 - Read-only observations create fingerprinted exact writer units. Isolated Codex workers return bounded diffs that AI Mobile recounts, path-checks, applies, verifies, and integrates without sandbox bypass.
 - material-status is passive, provider-diagnostics is privacy-safe, and model/capacity routing uses callable capabilities plus measured quota/reset evidence.
+- AI Mobile 1.3.1 release commit `4ac7fbe` is installed for Codex and Claude Code and pushed to `origin/main`; public release gates pass without publishing private quota or machine data.
 ## Context Pointers
 
 - `.codex/ACCEPTANCE.json`
@@ -101,9 +102,9 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Current Slice
 
-- Acceptance ID: PUBLIC_RELEASE
-- Goal: publish and install the exact AI Mobile 1.3.1 source that passed the local and real-provider gates.
-- Required proof: Codex and Claude manifests resolve one shared runtime; scanner, privacy, syntax, diff, and install gates pass; the exact commit is pushed; no private machine or profile data is published.
+- Acceptance ID: RESTART_CONTINUITY
+- Goal: prove a later explicitly authorized plugin-upgrade restart reopens the exact persisted Codex task, verifies the freshly loaded 1.3.1 runtime on a capable setup model, and only then uses a lightweight console model.
+- Required proof: user-visible evidence from the exact restarted task; installation, process launch, model selection, or synthetic restart tests alone do not pass this gate.
 ## Next
 
-Run scanner, manifest, privacy, installation, and Git release gates. Keep RESTART_CONTINUITY failing until a separate explicitly authorized user-visible restart proves the freshly installed runtime in the exact persisted task.
+At the next explicitly authorized upgrade boundary, close only OpenAI.Codex, reopen this exact task, verify runtimeVersion 1.3.1 once on a capable setup model, then switch the same task to the lightweight console. Do not restart during normal project execution.
