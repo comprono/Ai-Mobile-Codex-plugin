@@ -14,6 +14,10 @@ const workspace = path.join(root, "workspace");
 const fakeBin = path.join(root, "bin");
 fs.mkdirSync(workspace, { recursive: true });
 fs.mkdirSync(fakeBin, { recursive: true });
+fs.mkdirSync(path.join(workspace, "Jobs Harness", "workflow"), { recursive: true });
+fs.writeFileSync(path.join(workspace, "Jobs Harness", "workflow", "controls_to_questions.py"), "# bounded discovery fixture\n", "utf8");
+fs.mkdirSync(path.join(workspace, ".claude", "worktrees", "stale", "Jobs Harness", "workflow"), { recursive: true });
+fs.writeFileSync(path.join(workspace, ".claude", "worktrees", "stale", "Jobs Harness", "workflow", "controls_to_questions.py"), "# stale worktree fixture\n", "utf8");
 fs.writeFileSync(path.join(workspace, "verify.js"), 'const fs=require("node:fs"); if(fs.readFileSync("feature.txt","utf8").trim()!=="TASK_CYCLE_OK") process.exit(1);\n', "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex.js"), [
   'const patch=["```diff","diff --git a/feature.txt b/feature.txt","new file mode 100644","--- /dev/null","+++ b/feature.txt","@@ -0,0 +1 @@","+TASK_CYCLE_OK","```"].join("\\n");',
@@ -71,7 +75,7 @@ run("git", ["add", "."]);
 run("git", ["commit", "-m", "fixture"]);
 
 const { createJob, setStatus, statusFor } = require("./core/job-store");
-const { dispatchRound, startTask } = require("./core/task-orchestrator");
+const { dispatchRound, startTask, taskSummary } = require("./core/task-orchestrator");
 const { jobDirectory, readRound, readTask } = require("./core/state-store");
 const { runTaskCycle } = require("./core/task-cycle");
 const { promptFor } = require("./core/worker");
@@ -97,6 +101,41 @@ const resources = {
 
 (async () => {
   try {
+    const blockedRecoveryTask = startTask({
+      workspace,
+      outcome: "Recover one blocked parser acceptance item without orphan work",
+      outcomeAuthority: "user",
+      acceptanceEvidence: [{
+        id: "REQ-BLOCKED",
+        description: "Repeated option controls become one explicit question group",
+        minimumEvidenceLevel: "integration",
+        status: "blocked",
+        blocker: {
+          owner: "coordinator",
+          reason: "Exact parser paths are not yet identified.",
+          recoveryTrigger: "A bounded filename scan identifies the parser and test fixture.",
+          recoveryAction: "Inspect controls_to_questions and its fixture, then return exact writer files and checks.",
+        },
+      }],
+      workGraph: [{
+        id: "R-REQ-BLOCKED",
+        goal: "Recover repeated option control parsing",
+        state: "blocked",
+        priority: 100,
+        acceptanceRequirementId: "REQ-BLOCKED",
+      }],
+      consoleModel: "gpt-5.6-luna",
+      consoleEffort: "low",
+      codexReservePercent: 15,
+    }, resources);
+    const blockedRecoverySummary = taskSummary({ taskId: blockedRecoveryTask.taskId });
+    const blockedRecoveryUnit = blockedRecoverySummary.workPlane.recommendedWorkUnits[0];
+    assert.equal(blockedRecoverySummary.execution.workGraphNodeId, "R-REQ-BLOCKED");
+    assert.equal(blockedRecoverySummary.execution.mustDispatchNow, true);
+    assert.equal(blockedRecoveryUnit.workGraphNodeId, "R-REQ-BLOCKED");
+    assert.ok(blockedRecoveryUnit.relevantFiles.includes("Jobs Harness/workflow/controls_to_questions.py"), JSON.stringify(blockedRecoveryUnit));
+    assert.equal(blockedRecoveryUnit.relevantFiles.some((file) => file.startsWith(".claude/")), false, JSON.stringify(blockedRecoveryUnit));
+
     const task = startTask({
       workspace,
       outcome: "Prove a bounded cycle reaches accepted project evidence",

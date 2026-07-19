@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-07-19T09:28:50Z",
+  "updated_utc": "2026-07-19T11:17:07Z",
   "project_state": "active",
-  "current_slice_requirement_id": "RESTART_CONTINUITY",
+  "current_slice_requirement_id": "PUBLIC_RELEASE",
   "requirements": [
     {
       "id": "TRUSTED_PRIMARY_WRITERS",
@@ -48,15 +48,15 @@
     },
     {
       "id": "RESTART_CONTINUITY",
-      "description": "An authorized schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, immediately reopens the exact persisted task, proves the fresh runtime, persists the lightweight console model through thread settings, foregrounds the completed continuation, and resumes useful work through separate workers.",
+      "description": "An authorized schema upgrade remains on a capable setup model through validation and installation, then closes only OpenAI.Codex, immediately reopens the exact persisted task, proves the fresh runtime, persists the lightweight console model through thread settings, and performs one finite package-owned reload after the continuation so the desktop visibly resumes useful work.",
       "required": true,
       "status": "failing",
       "minimum_evidence_level": "user-visible",
       "acceptance_steps": [
         "Prove a deterministic app-server regression performs initialize, thread/resume, a capable-model verification turn, persistent thread/settings/update, and only after exact runtimeVersion evidence a Luna-low turn in the same thread; stale evidence must stop before Luna.",
-        "Commit, push, and install AI Mobile 1.3.3, then prove codex plugin list reports ai-mobile@ai-mobile 1.3.3.",
+        "Commit, push, and install AI Mobile 1.3.4, then prove codex plugin list reports ai-mobile@ai-mobile 1.3.4.",
         "Close only OpenAI.Codex and run the one-shot handoff against this exact task with Sol Ultra verification and GPT-5.6 Luna low continuation; never launch Classic ChatGPT, codex exec resume, a duplicate task, Goal, automation, manager loop, or UI automation.",
-        "On the fresh Luna turn, reconcile the existing durable project task once and invoke run-task-cycle exactly once; Luna must not inspect or patch the plugin or project, and the already visible desktop must not wait for coordinator completion.",
+        "On the fresh Luna turn, reconcile the existing durable project task once and invoke run-task-cycle exactly once; after that turn persists, reload only the package-owned OpenAI.Codex processes once so the continuation is visible, while Luna owns no files and the desktop does not wait for coordinator completion.",
         "Prove a real installed provider accepts its structured schema, reaches a terminal state without another user message, is collected once, and either integrates deterministic evidence or emits the correct failure class and recovery transition."
       ],
       "evidence": [
@@ -69,8 +69,8 @@
         {
           "level": "integration",
           "ref": "node scripts/app-server-resume-regression.js; node scripts/trusted-primary-regression.js",
-          "summary": "Focused regressions prove runtime-before-Luna ordering, persistent Luna-low thread settings, structured child success handling, and a supported last-turn route refresh followed by exact-task foregrounding. User-visible restart proof is still required.",
-          "verified_utc": "2026-07-19T09:28:50Z"
+          "summary": "Focused regressions prove runtime-before-Luna ordering, persistent Luna-low thread settings, structured child success handling, and a bounded package-owned OpenAI.Codex reload after continuation. User-visible restart proof is still required.",
+          "verified_utc": "2026-07-19T11:17:07Z"
         },
         {
           "level": "user-visible",
@@ -313,24 +313,29 @@
     },
     {
       "id": "PUBLIC_RELEASE",
-      "description": "Version 1.3.3 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
+      "description": "Version 1.3.5 is documented, privacy-safe, scanner compliant, validated for Codex and Claude Code, committed, pushed, and installed from this repository.",
       "required": true,
       "status": "failing",
       "minimum_evidence_level": "end-to-end",
       "acceptance_steps": [
         "Run every lifecycle, routing, portfolio, integration, isolation, restart-order, reliability, scanner, and privacy gate.",
-        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.3.3 runtime.",
-        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.3.3."
+        "Validate the Codex and Claude Code plugin manifests and prove both hosts resolve one shared 1.3.5 runtime.",
+        "Commit and push the exact verified release, install it locally, and prove codex plugin list reports ai-mobile@ai-mobile 1.3.5."
       ],
       "evidence": [
         {
           "level": "integration",
-          "ref": "21-test deterministic matrix; plugin-scanner 2.0.1116; Codex and Claude 1.3.3 local install",
-          "summary": "AI Mobile 1.3.3 passes all 21 deterministic gates, privacy validation, marketplace and strict-security lint at 100, and full scanner grade A with zero findings. Codex and Claude resolve version 1.3.3 locally; commit and push are still required.",
-          "verified_utc": "2026-07-19T09:28:50Z"
+          "ref": "20-test deterministic matrix plus MCP self-test; plugin-scanner 2.0.1116",
+          "summary": "AI Mobile 1.3.5 passes the full deterministic matrix, MCP self-test, strict manifest and privacy validation, both 100-point lint profiles, and scanner grade A with zero findings. Commit, push, and exact shared-host installation remain required.",
+          "verified_utc": "2026-07-19T12:53:26Z"
         }
       ],
-      "blocker": null
+      "blocker": {
+        "owner": "current Codex",
+        "reason": "The verified 1.3.5 tree has not yet been committed, pushed, and installed for both hosts.",
+        "recovery_trigger": "The exact verified commit is on origin/main and both hosts resolve version 1.3.5.",
+        "recovery_action": "Commit, push, install, and record exact package evidence."
+      }
     },
     {
       "id": "EXECUTION_CONTINUITY",

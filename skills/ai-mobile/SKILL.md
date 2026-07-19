@@ -14,7 +14,7 @@ AI Mobile exists to finish the user's measurable outcome with the best total use
 3. Actual reading, planning, implementation, debugging, and expensive verification run in separate work-plane workers. Codex CLI is a real worker and may consume shared Codex capacity above the private reserve.
 4. The deterministic coordinator selects workers from fresh capability, dependency, quota-pool, reset-horizon, reliability, cost, RAM, storage, and user-priority evidence.
 5. Activity is not progress. Only accepted outcome evidence reduces the gap.
-6. No LLM manager loop, heartbeat, Goal, automation, repeated chat polling, hidden CLI continuation, or automatic desktop launch is created. One finite detached deterministic coordinator may observe finite workers, collect each result once, integrate verified evidence once, and advance only while acceptance progress or a materially changed recovery path exists.
+6. No LLM manager loop, Goal, repeated chat polling, hidden CLI continuation, or automatic desktop launch is created. One finite detached deterministic coordinator may observe finite workers, collect each result once, integrate verified evidence once, and advance only while acceptance progress or a materially changed recovery path exists. A passive task heartbeat is permitted only when the user explicitly requests periodic reporting; it calls material-status once per interval and never performs project work or recovery.
 
 If a method succeeds but the user-visible outcome is unchanged, that method is not completion.
 
@@ -31,7 +31,7 @@ Set consoleModel and consoleEffort from the visible task when known. Under the c
 After start-task or reconcile-task:
 
 1. Read the returned workPlane.recommendedWorkUnits; do not inspect the repository to reinvent them.
-2. If execution.mustDispatchNow is true, call run-task-cycle exactly once in the same turn with maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5 unless a stricter project contract applies.
+2. If execution.mustDispatchNow is true, call run-task-cycle exactly once in the same turn with maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5 unless a stricter project contract applies. When the user explicitly requests unattended work while away or asleep, use one finite maxRounds 20, maxMinutes 300 cycle with the same noProgressLimit 2; this is still one deterministic coordinator, not a recurring manager loop.
 3. run-task-cycle starts or reuses one finite detached event-driven coordinator and returns a durable receipt promptly. Do not poll it, repeat the call, create another task, or keep the visible model waiting. On a later explicit status request, call material-status once; it performs no provider probe or project scan.
 4. A read-only planning worker must return a structured bounded work plan. The coordinator accepts it once, creates exact dependency-ready writer nodes, and continues without another visible model turn. Observation alone is not completion.
 5. The visible console must not take project ownership when dispatch or execution fails. Report the typed blocker, owner, recovery trigger, and already-owned recovery action. A later run-task-cycle call is valid only for the same task after a material recovery trigger or new user direction.
@@ -91,6 +91,8 @@ Report only material transitions:
 - Next: material action already assigned or exact decision required.
 
 Do not present worker count, healthy processes, token use, elapsed time, or repeated status checks as progress.
+
+When the user explicitly requests periodic reports, create or update one heartbeat on the chosen Codex task. Each wake calls material-status exactly once and posts a timestamped Done / Active / Blocked / Resources / Next report. It must not inspect files, probe providers, dispatch work, restart a stopped coordinator, create another task, or claim unchanged activity as progress. Rebind the existing reporter when the project task changes; never create duplicate reporters.
 
 ## Tool Surface
 

@@ -1,7 +1,7 @@
 # Project Outcome
 
 State: active
-Updated: 2026-07-19T09:28:50Z
+Updated: 2026-07-19T11:17:07Z
 
 ## North Star
 
@@ -56,14 +56,14 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 
 ## Verified State
 
-- AI Mobile 1.3.3 passes 21 lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, and privacy regressions. Structured plans are now workspace-grounded before writer dispatch, rejected plans return to provider failover, and accepted graph transitions reset the finite no-progress budget without treating activity as progress.
+- AI Mobile 1.3.5 passes the full lifecycle, routing, portfolio, integration, worktree, restart-order, capability, patch-safety, MCP, scanner, and privacy matrix. Blocked recovery retains exact graph ownership, orphan work is refused, and bounded project discovery excludes stale provider worktrees and transient data.
 - Job and coordinator state is cross-process locked, revisioned, and monotonic; a killed worker reconciles without waiting for its deadline, and bounded Windows worktree cleanup cannot silently report success while files remain.
 - Explicit unavailable models and exhausted Antigravity models fail closed; Codex CLI remains usable above reserve, and unsafe symlink/submodule patches are refused.
 - A real authenticated Codex and Claude portfolio completed two independent disposable projects concurrently, integrated project-local evidence, preserved the 15 percent Codex reserve, cleaned all worktrees, and opened no desktop app.
 - Normal run-task-cycle starts or reuses one finite detached event-driven coordinator; the visible console owns no files and does not poll.
 - Read-only observations create fingerprinted exact writer units. Isolated Codex workers return bounded diffs that AI Mobile recounts, path-checks, applies, verifies, and integrates without sandbox bypass.
 - material-status is passive, provider-diagnostics is privacy-safe, and model/capacity routing uses callable capabilities plus measured quota/reset evidence.
-- AI Mobile 1.3.3 is installed for Codex and Claude Code from this checkout; the complete 21-test matrix, privacy gate, scanner grade A, and both 100-point lint profiles pass without publishing private quota or machine data. Commit and push remain the current release action.
+- The verified AI Mobile 1.3.5 tree passes scanner grade A with zero findings and both 100-point lint profiles without publishing private quota or machine data; commit, push, and exact shared-host installation are the current release action.
 ## Context Pointers
 
 - `.codex/ACCEPTANCE.json`
@@ -95,16 +95,16 @@ Make AI Mobile useful in complicated real projects without turning orchestration
 ## Failure Memory
 
 - Planning before bounded project observation creates durable guesswork; observations must yield fingerprinted, exact next units.
-- Returning `continuationRequired` is not durable execution when another visible Codex turn must collect, integrate, or recover.
-- Root-wide writers, inferred full-suite verification, and repeated premium review can spend more than the accepted change warrants.
-- A per-turn model override is not a persistent visible model switch; restart success requires thread settings, preserved structured child proof, and exact-task foregrounding.
+- A failed round from before the current execution must be collected for evidence but cannot cool its provider or consume the fresh no-progress budget.
+- Worker plans need the verifier contract before generation, and a provider exit code of zero is not success when its output records permission denial.
+- A per-turn model override is not a persistent visible model switch; restart success requires thread settings, preserved structured child proof, and a bounded post-continuation package reload.
 - Retries, worktrees, backups, API calls, and processes require finite budgets, monotonic terminal state, retention, idempotency, no-progress stops, and cleanup that passes only when the owned path is actually gone.
 
 ## Current Slice
 
-- Acceptance ID: RESTART_CONTINUITY
-- Goal: prove this explicitly authorized plugin-upgrade restart reopens and visibly refreshes the exact persisted Codex task, verifies the freshly loaded 1.3.3 runtime on a capable setup model, persists Luna-low through thread settings, and resumes useful work through a separate worker.
-- Required proof: user-visible evidence from the exact restarted task; installation, process launch, model selection, or synthetic restart tests alone do not pass this gate.
+- Acceptance ID: PUBLIC_RELEASE
+- Goal: commit, push, and install the exact verified AI Mobile 1.3.5 tree, then start a fresh Job Vibhu console that proves owned recovery dispatch and material progress.
+- Required proof: the exact release commit on origin/main, Codex and Claude resolving 1.3.5, and a fresh project task using the installed runtime without orphan work.
 ## Next
 
-Commit and push the verified 1.3.3 release. At the next explicitly authorized upgrade restart, prove the supported route refresh visibly surfaces the same-task continuation before reconciling and resuming Job Vibhu. Do not restart during normal project execution.
+Commit and push 1.3.5, install it for Codex and Claude, then create and verify one fresh Job Vibhu project task. Do not restart during normal project execution.

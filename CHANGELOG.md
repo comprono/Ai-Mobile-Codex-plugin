@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.5 - 2026-07-19
+
+- Preserves the exact blocked work-graph node through recovery planning so structured observations cannot be dispatched as orphan jobs.
+- Refuses automatic work when no durable graph node owns it and records orphan observation rejection once instead of retrying invisibly.
+- Adds a capped deterministic filename scan that gives planning workers likely implementation, fixture, runner, and focused-test paths while excluding provider worktrees, caches, logs, reports, backups, dependencies, and build output.
+- Adds an explicitly requested unattended mode with one finite five-hour coordinator and an explicitly requested passive five-minute status heartbeat; neither behavior starts by default.
+- Adds a regression for the real Job Vibhu failure shape: blocked acceptance, bounded path discovery, exact graph ownership, and stale Claude worktree exclusion.
+
 ## 1.3.4 - 2026-07-19
 
 - Scopes provider cooldown and no-progress accounting to rounds created by the current execution, so a stale failed round cannot exclude a healthy provider or consume a fresh recovery budget.

@@ -287,10 +287,19 @@ function criticalPath(requirements, workGraph) {
     ? (requirements || []).find((row) => row.id === ready.acceptanceRequirementId)
     : (requirements || []).find((row) => row.required !== false && row.status !== "passing" && row.status !== "blocked");
   if (!ready && !requirement) {
-    const blocked = (requirements || []).find((row) => row.required !== false && row.status === "blocked");
+    const blockedNodes = graph
+      .filter((row) => row.state === "blocked" && !row.owner && (row.dependsOn || []).every((id) => completed.has(id)))
+      .sort((left, right) => Number(right.priority || 50) - Number(left.priority || 50));
+    const blockedNode = blockedNodes.find((node) => (requirements || []).some((row) => (
+      row.id === node.acceptanceRequirementId && row.required !== false && row.status === "blocked"
+    ))) || null;
+    const blocked = blockedNode
+      ? (requirements || []).find((row) => row.id === blockedNode.acceptanceRequirementId)
+      : (requirements || []).find((row) => row.required !== false && row.status === "blocked");
     return blocked ? {
       state: "blocked",
       requirementId: blocked.id,
+      workGraphNodeId: blockedNode?.id || null,
       goal: "Recover blocked acceptance " + blocked.id + ": " + blocked.description,
       acceptanceCriteria: [blocked.description],
       reason: "No dependency-ready acceptance item exists until the recorded blocker changes.",

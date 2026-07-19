@@ -220,9 +220,61 @@ function inferTaskKind(goal) {
   return "code";
 }
 
-function boundedObservationFiles(task) {
+const OBSERVATION_SKIP_DIRECTORIES = new Set([
+  ".git", ".ai-mobile", ".antigravity-bridge", ".agents", ".claude", ".codex", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+  "node_modules", ".pnpm-store", ".yarn", "__pycache__", ".venv", "venv", "env", "logs", "log",
+  "coverage", "dist", "build", "reports", "db_backups",
+]);
+const OBSERVATION_FILE_PATTERN = /\.(?:[cm]?[jt]sx?|py|ps1|rb|php|go|rs|java|cs|fs|sh|bat|cmd|md|json|toml|ya?ml)$/i;
+const OBSERVATION_STOP_WORDS = new Set([
+  "about", "acceptance", "after", "against", "before", "bounded", "every", "exact", "from", "into", "only",
+  "project", "recover", "return", "satisfy", "should", "their", "then", "these", "this", "through", "when", "with",
+]);
+
+function observationTerms(goal) {
+  return [...new Set(String(goal || "").toLowerCase().split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 4 && !OBSERVATION_STOP_WORDS.has(word) && !/^req\d*$/.test(word)))].slice(0, 24);
+}
+
+function boundedWorkspaceCandidates(workspace, goal) {
+  const terms = observationTerms(goal);
+  if (!terms.length) return [];
+  const pending = [{ absolute: workspace, depth: 0 }];
+  const candidates = [];
+  let visited = 0;
+  while (pending.length && visited < 5000) {
+    const current = pending.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(current.absolute, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); }
+    catch { continue; }
+    for (const entry of entries) {
+      if (visited >= 5000) break;
+      visited += 1;
+      const lowerName = entry.name.toLowerCase();
+      const absolute = path.join(current.absolute, entry.name);
+      if (entry.isDirectory()) {
+        if (current.depth < 7 && !OBSERVATION_SKIP_DIRECTORIES.has(lowerName)) pending.push({ absolute, depth: current.depth + 1 });
+        continue;
+      }
+      if (!entry.isFile() || !OBSERVATION_FILE_PATTERN.test(entry.name)) continue;
+      let size = 0;
+      try { size = fs.statSync(absolute).size; } catch { continue; }
+      if (size > 256 * 1024) continue;
+      const relative = path.relative(workspace, absolute).split(path.sep).join("/");
+      const lowerPath = relative.toLowerCase();
+      const score = terms.reduce((total, term) => total + (lowerName.includes(term) ? 5 : lowerPath.includes(term) ? 1 : 0), 0);
+      if (score > 0) candidates.push({ relative, score });
+    }
+  }
+  return candidates
+    .sort((left, right) => right.score - left.score || left.relative.length - right.relative.length || left.relative.localeCompare(right.relative))
+    .slice(0, 20)
+    .map((row) => row.relative);
+}
+
+function boundedObservationFiles(task, goal) {
   const declared = cleanStrings(task.projectContext?.contextPointers, 24, 500).filter((value) => value !== ".");
-  if (declared.length) return declared;
+  const discovered = boundedWorkspaceCandidates(task.workspace, goal);
   const values = [];
   for (const relative of [".codex/PROJECT_OUTCOME.md", ".codex/ACCEPTANCE.json", "README.md", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"]) {
     try { if (fs.existsSync(path.join(task.workspace, relative))) values.push(relative); } catch { /* bounded fallback */ }
@@ -235,7 +287,7 @@ function boundedObservationFiles(task) {
       if (fs.statSync(file).size <= 128 * 1024 && !values.includes(entry.name)) values.push(entry.name);
     }
   } catch { /* no bounded discovery file is available */ }
-  return values.slice(0, 24);
+  return [...new Set([...declared, ...discovered, ...values])].slice(0, 24);
 }
 
 function recommendedWorkUnit(task) {
@@ -244,7 +296,9 @@ function recommendedWorkUnit(task) {
   const blocker = requirement?.status === "blocked" ? (requirement.blocker || null) : null;
   if (plan.state === "blocked" && /(^|[^a-z])(user|human)([^a-z]|$)/i.test(String(blocker?.owner || ""))) return null;
   if (!["ready", "awaiting-evidence", "verification", "blocked"].includes(plan.state)) return null;
-  const node = (task.workGraph || []).find((row) => row.id === plan.workGraphNodeId) || {};
+  if (!plan.workGraphNodeId) return null;
+  const node = (task.workGraph || []).find((row) => row.id === plan.workGraphNodeId);
+  if (!node) return null;
   const declaredVerification = node.verificationCommands || [];
   const relevantFiles = cleanStrings(node.relevantFiles, 80, 500);
   const expectedFiles = cleanStrings(node.expectedFiles, 80, 500);
@@ -258,7 +312,7 @@ function recommendedWorkUnit(task) {
     goal: readOnly ? "Observe the bounded acceptance gap, then return a structured plan with exact writer files and deterministic verification: " + goal : goal,
     workGraphNodeId: plan.workGraphNodeId || undefined,
     independenceReason: "The visible project console owns no implementation files; this is the single dependency-ready work-plane unit.",
-    relevantFiles: relevantFiles.length ? relevantFiles : boundedObservationFiles(task),
+    relevantFiles: relevantFiles.length ? relevantFiles : boundedObservationFiles(task, goal),
     expectedFiles: readOnly ? [] : expectedFiles,
     acceptanceCriteria: node.acceptanceCriteria?.length ? node.acceptanceCriteria : plan.acceptanceCriteria,
     verificationCommands,
@@ -406,14 +460,17 @@ function executionContract(task, failures = [], completed = []) {
   const userActionRequired = plan.state === "blocked" && /(^|[^a-z])(user|human)([^a-z]|$)/i.test(String(blocker?.owner || ""));
   const recoveryAction = String(blocker?.recoveryAction || "").trim();
   const workPlaneAction = plan.state === "blocked" && recoveryAction ? recoveryAction : plan.goal;
-  const mustDispatchNow = plan.state !== "blocked" || (!userActionRequired && Boolean(recoveryAction));
+  const ownsGraphNode = Boolean(plan.workGraphNodeId && (task.workGraph || []).some((row) => row.id === plan.workGraphNodeId));
+  const mustDispatchNow = ownsGraphNode && (plan.state !== "blocked" || (!userActionRequired && Boolean(recoveryAction)));
   return {
     mode: "console-workplane",
     status: userActionRequired ? "decision-required" : mustDispatchNow ? "dispatch-required" : "blocked",
     owner: userActionRequired ? blocker.owner : "coordinator",
-    action: mustDispatchNow ? "Dispatch work-plane unit: " + workPlaneAction : workPlaneAction,
+    action: mustDispatchNow
+      ? "Dispatch work-plane unit: " + workPlaneAction
+      : ownsGraphNode ? workPlaneAction : "Reconcile the task work graph before dispatch; orphan work is refused.",
     workPlaneAction,
-    reason: blocker?.reason || plan.reason,
+    reason: ownsGraphNode ? (blocker?.reason || plan.reason) : "No durable work-graph node owns the proposed action.",
     requirementId: plan.requirementId || null,
     workGraphNodeId: plan.workGraphNodeId || null,
     recovery: plan.transitions || [],

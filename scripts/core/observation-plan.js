@@ -171,7 +171,20 @@ function acceptObservationJob(taskIdValue, jobIdValue) {
     return duplicate;
   }
   const sourceNode = (task.workGraph || []).find((row) => row.id === contract.workGraphNodeId);
-  if (!sourceNode) return { taskId, jobId, accepted: false, blocker: "observation-work-graph-node-missing" };
+  if (!sourceNode) {
+    const rejected = {
+      taskId,
+      jobId,
+      accepted: false,
+      rejected: true,
+      fingerprint,
+      blocker: "observation-work-graph-node-missing",
+      generatedAt: utcNow(),
+    };
+    writeJson(path.join(dir, "observation-evidence.json"), rejected);
+    setStatus(taskId, jobId, { observationRejectedAt: rejected.generatedAt, integrationState: "observation-rejected" });
+    return rejected;
+  }
   const proposed = Array.isArray(artifact.proposedWorkUnits) ? artifact.proposedWorkUnits.slice(0, 3) : [];
   const blockerText = String(artifact.blocker || "").trim().slice(0, 1200);
   if (!proposed.length && !blockerText) return { taskId, jobId, accepted: false, blocker: "structured-work-plan-has-no-bounded-units-or-blocker" };

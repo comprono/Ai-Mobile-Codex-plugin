@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "A finite event-driven local AI resource orchestrator with a lightweight Codex console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
