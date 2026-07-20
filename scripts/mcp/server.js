@@ -93,6 +93,7 @@ const TOOLS = [
 function content(value, isError = false) { return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError }; }
 
 async function invoke(name, args = {}, entrypoint) {
+  if (name === "prepare-restart-handoff") return { runtimeVersion: pluginVersion(), ...createRestartHandoff(args) };
   assertCurrentRuntime();
   if (name === "orchestrator-profile") return args.action === "update" ? writeProfile(args.patch || {}) : readProfile();
   if (name === "start-task") {
@@ -112,7 +113,6 @@ async function invoke(name, args = {}, entrypoint) {
   if (name === "material-status") return { runtimeVersion: pluginVersion(), ...coordinatorStatus(args) };
   if (name === "complete-task") return completeTask(args);
   if (name === "cancel-task") { requestCoordinatorCancel(args); return cancelTask(args); }
-  if (name === "prepare-restart-handoff") return { runtimeVersion: pluginVersion(), ...createRestartHandoff(args) };
   if (name === "provider-diagnostics") return { runtimeVersion: pluginVersion(), ...await providerDiagnostics(args) };
   if (name === "resource-inventory") {
     const value = await inventory({ refresh: args.refresh === true });

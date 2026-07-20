@@ -142,6 +142,8 @@ try {
   assert.ok(fix >= 0 && fix < noSwitch && noSwitch < closeDesktop && closeDesktop < reopen && reopen < verify && verify < switchAfter);
   assert.match(skill, /If nothing changed, emit nothing\./);
   assert.match(skill, /immediately pause that same heartbeat/);
+  const server = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
+  assert.ok(server.indexOf('name === "prepare-restart-handoff"') < server.indexOf("assertCurrentRuntime();"));
 
   process.stdout.write(JSON.stringify({
     ok: true,
@@ -150,6 +152,7 @@ try {
     unavailableFailsClosed: true,
     restartSequenceEnforced: true,
     terminalReporterStops: true,
+    staleRuntimeCanPrepareRestart: true,
   }, null, 2) + String.fromCharCode(10));
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

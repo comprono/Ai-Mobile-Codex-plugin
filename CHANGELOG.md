@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.7 - 2026-07-21
+
+- Allows the authorized restart-handoff tool to prepare the exact-task upgrade boundary when the currently loaded AI Mobile runtime is stale.
+- Keeps every ordinary orchestration tool fail-closed until the installed runtime has been loaded and verified.
+
 ## 1.3.6 - 2026-07-21
 
 - Preserves process timeout truth across Codex, Claude, Antigravity, and Cursor adapters instead of misclassifying partial output as a generic provider failure.
