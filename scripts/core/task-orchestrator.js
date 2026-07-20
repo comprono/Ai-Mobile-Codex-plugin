@@ -304,6 +304,8 @@ function recommendedWorkUnit(task) {
   const expectedFiles = cleanStrings(node.expectedFiles, 80, 500);
   const boundedWriter = expectedFiles.length > 0 && declaredVerification.length > 0;
   const readOnly = node.readOnly === true || !boundedWriter;
+  const complexity = node.complexity || (readOnly ? "medium" : "large");
+  const planningTimeoutSeconds = { small: 300, medium: 420, large: 600 }[complexity] || 420;
   const verificationCommands = readOnly ? [] : declaredVerification;
   const goal = plan.state === "blocked" && String(blocker?.recoveryAction || "").trim()
     ? String(blocker.recoveryAction).trim().slice(0, 5000)
@@ -317,10 +319,10 @@ function recommendedWorkUnit(task) {
     acceptanceCriteria: node.acceptanceCriteria?.length ? node.acceptanceCriteria : plan.acceptanceCriteria,
     verificationCommands,
     taskKind: node.taskKind || (readOnly ? "repository-scan" : inferTaskKind(goal)),
-    complexity: node.complexity || (readOnly ? "medium" : "large"),
+    complexity,
     readOnly,
     artifactKind: readOnly ? "work-plan" : undefined,
-    timeoutSeconds: readOnly ? 240 : 600,
+    timeoutSeconds: readOnly ? planningTimeoutSeconds : 600,
     estimatedDirectTokens: readOnly ? 4000 : 12000,
     maxWorkerOutputTokens: readOnly ? 800 : 1600,
     requiredCapabilities: node.requiredCapabilities || [],
@@ -364,6 +366,14 @@ function mergeRequirements(existing, proposed, options = {}) {
 
 function classifyRecovery(reason) {
   const value = String(reason || "");
+  if (/provider-timeout|exceeded \d+ seconds|deadline exceeded/i.test(value)) {
+    return {
+      failureClass: "provider-timeout",
+      owner: "AI Mobile provider router",
+      recoveryTrigger: "The worker timeout, model, provider, or bounded input contract changes materially.",
+      recoveryAction: "Re-dispatch this acceptance-linked unit once with a complexity-appropriate finite timeout or a better eligible provider. Never retry the unchanged timed-out invocation.",
+    };
+  }
   if (/provider-process-failed|worker-runtime-failed|invalid json|json parse|invalid .*argument|schema/i.test(value)) {
     return {
       failureClass: "provider-adapter-failure",

@@ -39,6 +39,7 @@ function promptFor(contract) {
     `Execution workspace: ${contract.executionWorkspace}`,
     `Mode: ${contract.readOnly ? "read-only" : contract.skipModelReview ? "trusted primary writer" : "isolated writer"}`,
     codexPatchWriter ? "Codex writer transport: read the bounded files, do not call write or shell-mutation tools, and return exactly one complete git-compatible unified diff in a ```diff fence. The coordinator will path-check and apply it only inside the isolated worktree. Include no prose outside the diff; if a safe patch is impossible, return one line beginning BLOCKER:." : "",
+    contract.artifactKind === "work-plan" ? "The supplied outcome, unresolved acceptance, constraints, and bounded files are the authoritative resume context for this unit. Do not narrate setup or progress." : "",
     workPlanContract,
     contract.relevantFiles?.length ? `Read scope: ${contract.relevantFiles.join(", ")}` : "",
     contract.expectedFiles?.length ? `Only allowed write boundaries: ${contract.expectedFiles.join(", ")}` : "Do not modify files.",

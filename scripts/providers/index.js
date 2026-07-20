@@ -220,8 +220,9 @@ function provider(id, available, extra = {}) {
   return { id, installed: Boolean(extra.command), available, authenticated: available, headless: true, confidence: available ? "medium" : "high", models: [], capabilities: PROVIDER_CAPABILITIES[id] || {}, surfaces: PROVIDER_SURFACES[id] || { headless: true }, ...extra };
 }
 
-function classifyFailure(value, exitCode) {
+function classifyFailure(value, exitCode, timedOut = false) {
   const text = String(value || "").toLowerCase();
+  if (timedOut) return "provider-timeout";
   if (/tool required.{0,240}permission|permission.{0,240}cannot prompt|auto-denied|(?:missing|not (?:present|included)).{0,120}permissions\.allow|permissions\.allow.{0,120}(?:required|missing|denied)/.test(text)) return "authorization-required";
   if (exitCode === 0) return "";
   if (/transport closed|econnreset|econnrefused|socket hang up|broken pipe|connection (?:closed|reset|refused)/.test(text)) return "transport-unavailable";
@@ -239,9 +240,10 @@ function runCodex(providerState, contract, prompt) {
   const args = buildCodexExecArgs({ workspace: contract.workspace, model, effort: contract.effort || "medium", readOnly: patchOutputWriter ? true : contract.readOnly });
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, input: prompt, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
   const parsed = parseCodexJsonl(result.stdout);
-  const text = parsed.resultText || result.stderr;
-  const ok = result.status === 0 && !parsed.turnFailed;
-  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, usage: { model, inputTokens: parsed.inputTokens, cachedInputTokens: parsed.cachedInputTokens, outputTokens: parsed.outputTokens }, exitCode: result.status };
+  const partial = parsed.resultText || result.stderr;
+  const text = result.timedOut ? `Codex worker exceeded ${contract.timeoutSeconds} seconds before final structured output. Partial output: ${partial || "none"}` : partial;
+  const ok = !result.timedOut && result.status === 0 && !parsed.turnFailed;
+  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status ?? 1, result.timedOut), text, usage: { model, inputTokens: parsed.inputTokens, cachedInputTokens: parsed.cachedInputTokens, outputTokens: parsed.outputTokens }, exitCode: result.status };
 }
 
 const CLAUDE_SYSTEM_PROMPT = "You are a bounded project worker. Follow the supplied lane contract exactly. Never broaden scope, delegate, or interact with the visible project console. Use only the enabled local file tools. For read-only lanes do not edit. Stop when the requested evidence is sufficient and return only the required JSON.";
@@ -339,9 +341,10 @@ function runClaude(providerState, contract, prompt) {
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
   let body = null;
   try { body = JSON.parse(result.stdout); } catch { /* retain plain output */ }
-  const text = structuredClaudeText(body) || result.stdout || result.stderr;
-  const ok = result.status === 0 && !body?.is_error;
-  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status || 1), text, artifact: body?.structured_output || body?.structuredOutput || null, usage: normalizeClaudeUsage(body, contract.model), exitCode: result.status };
+  const partial = structuredClaudeText(body) || result.stdout || result.stderr;
+  const text = result.timedOut ? `Claude worker exceeded ${contract.timeoutSeconds} seconds before final structured output. Partial output: ${partial || "none"}` : partial;
+  const ok = !result.timedOut && result.status === 0 && !body?.is_error;
+  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status ?? 1, result.timedOut), text, artifact: body?.structured_output || body?.structuredOutput || null, usage: normalizeClaudeUsage(body, contract.model), exitCode: result.status };
 }
 
 function buildAntigravityArgs(contract, prompt) {
@@ -355,16 +358,19 @@ function runAntigravity(providerState, contract, prompt) {
   if (contract.needsUi) return { ok: false, typedBlocker: "ui-required", text: "This lane requires visible Antigravity UI state; CLI execution was intentionally not attempted." };
   const args = buildAntigravityArgs(contract, prompt);
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
-  const text = [result.stdout, result.stderr].filter(Boolean).join("\n");
-  const typedBlocker = classifyFailure(text, result.status);
-  return { ok: result.status === 0 && !typedBlocker, typedBlocker, text, usage: { model: contract.model || "unknown" }, exitCode: result.status };
+  const partial = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  const text = result.timedOut ? `Antigravity worker exceeded ${contract.timeoutSeconds} seconds before final structured output. Partial output: ${partial || "none"}` : partial;
+  const typedBlocker = classifyFailure(text, result.status, result.timedOut);
+  return { ok: !result.timedOut && result.status === 0 && !typedBlocker, typedBlocker, text, usage: { model: contract.model || "unknown" }, exitCode: result.status };
 }
 
 function runCursor(providerState, contract, prompt) {
   const args = ["-p", "--workspace", contract.workspace, prompt];
   const result = commandResult(providerState.command, args, { cwd: contract.workspace, timeout: contract.timeoutSeconds * 1000, maxBuffer: 16 * 1024 * 1024 });
-  const text = result.stdout || result.stderr;
-  return { ok: result.status === 0, typedBlocker: result.status === 0 ? "" : classifyFailure(text, result.status), text, usage: {}, exitCode: result.status };
+  const partial = result.stdout || result.stderr;
+  const text = result.timedOut ? `Cursor worker exceeded ${contract.timeoutSeconds} seconds before final structured output. Partial output: ${partial || "none"}` : partial;
+  const ok = !result.timedOut && result.status === 0;
+  return { ok, typedBlocker: ok ? "" : classifyFailure(text, result.status, result.timedOut), text, usage: {}, exitCode: result.status };
 }
 
 function runProvider(state, contract, prompt) {

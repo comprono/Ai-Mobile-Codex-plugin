@@ -83,6 +83,7 @@ try {
   assert.equal(task.workPlane.recommendedWorkUnits.length, 1);
   assert.equal(task.workPlane.recommendedWorkUnits[0].workPlaneRequired, true);
   assert.deepEqual(task.workPlane.recommendedWorkUnits[0].relevantFiles, ["README.md"]);
+  assert.equal(task.workPlane.recommendedWorkUnits[0].timeoutSeconds, 600);
 
   const round = dispatchRound({ taskId: task.taskId }, resources, {}, fakeCreate);
   assert.equal(round.state, "running");
@@ -139,6 +140,8 @@ try {
   const verify = skill.indexOf("requires its runtimeVersion");
   const switchAfter = skill.indexOf("Only after that tool evidence");
   assert.ok(fix >= 0 && fix < noSwitch && noSwitch < closeDesktop && closeDesktop < reopen && reopen < verify && verify < switchAfter);
+  assert.match(skill, /If nothing changed, emit nothing\./);
+  assert.match(skill, /immediately pause that same heartbeat/);
 
   process.stdout.write(JSON.stringify({
     ok: true,
@@ -146,6 +149,7 @@ try {
     workerDispatched: round.workers[0].provider,
     unavailableFailsClosed: true,
     restartSequenceEnforced: true,
+    terminalReporterStops: true,
   }, null, 2) + String.fromCharCode(10));
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

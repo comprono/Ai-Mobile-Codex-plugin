@@ -63,6 +63,7 @@ const resources = { generatedAt: new Date().toISOString(), machine: { freeRamMb:
     assert.equal(diagnostics.passiveDiscovery, true);
 
     assert.equal(classifyFailure('jetski: a tool required the "command" permission; headless mode cannot prompt, so it was auto-denied.', 0), "authorization-required");
+    assert.equal(classifyFailure("partial worker commentary", null, true), "provider-timeout");
     const antigravityPermission = runProvider({ antigravity: { available: true, command: antigravityPermissionFixture } }, { provider: "antigravity", workspace, timeoutSeconds: 30, readOnly: true, model: "fixture" }, "inspect fixture");
     assert.equal(antigravityPermission.ok, false);
     assert.equal(antigravityPermission.typedBlocker, "authorization-required");

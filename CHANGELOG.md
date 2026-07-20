@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.6 - 2026-07-21
+
+- Preserves process timeout truth across Codex, Claude, Antigravity, and Cursor adapters instead of misclassifying partial output as a generic provider failure.
+- Gives bounded read-only planning workers finite complexity-aware budgets of 300, 420, or 600 seconds and permits one materially changed recovery route after a timeout.
+- Prevents periodic reporters from spending tokens on unchanged terminal status; one terminal report is emitted and the same heartbeat is paused.
+- Tightens work-plan prompts to use supplied resume context directly and return only the required structured artifact.
+
 ## 1.3.5 - 2026-07-19
 
 - Preserves the exact blocked work-graph node through recovery planning so structured observations cannot be dispatched as orphan jobs.

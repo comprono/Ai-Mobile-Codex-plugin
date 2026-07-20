@@ -92,7 +92,7 @@ Report only material transitions:
 
 Do not present worker count, healthy processes, token use, elapsed time, or repeated status checks as progress.
 
-When the user explicitly requests periodic reports, create or update one heartbeat on the chosen Codex task. Each wake calls material-status exactly once and posts a timestamped Done / Active / Blocked / Resources / Next report. It must not inspect files, probe providers, dispatch work, restart a stopped coordinator, create another task, or claim unchanged activity as progress. Rebind the existing reporter when the project task changes; never create duplicate reporters.
+When the user explicitly requests periodic reports, create or update one heartbeat on the chosen Codex task. Each wake calls material-status exactly once. Post Done / Active / Blocked / Resources / Next only when its material event id, acceptance fingerprint, blocker fingerprint, or execution state changed. If nothing changed, emit nothing. After one final report for a completed, stopped, cancelled, or genuinely blocked execution, immediately pause that same heartbeat. It must not inspect files, probe providers, dispatch work, restart a stopped coordinator, create another task, or claim unchanged activity as progress. Rebind the existing reporter when the project task changes; never create duplicate reporters.
 
 ## Tool Surface
 
