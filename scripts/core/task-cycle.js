@@ -1,6 +1,7 @@
 "use strict";
 
 const { inventory } = require("./capacity");
+const { isRecoverableCapacityWait } = require("./capacity-wait");
 const { createJob } = require("./job-store");
 const { providerHistory } = require("./provider-history");
 const { collectRound, completeTask, dispatchRound, integrateRound, taskSummary } = require("./task-orchestrator");
@@ -17,6 +18,15 @@ function passingCount(summary) {
 }
 
 function progressSignature(summary) {
+  if (summary?.program?.mode === "director-cfo") {
+    return JSON.stringify({
+      completed: summary.state === "completed",
+      passing: passingCount(summary),
+      acceptedEvidence: (summary.program.report?.acceptedEvidence || [])
+        .filter((row) => row.passed === true)
+        .map((row) => [row.requirementId, row.level, row.ref]),
+    });
+  }
   return JSON.stringify({
     state: summary?.state || "",
     passing: passingCount(summary),
@@ -103,18 +113,24 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
         for (const failure of terminalFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
       }
 
-      const needsIntegration = collected.state === "ready-for-integration" && terminalCompleted.length > 0;
+      const directorTerminalFailure = summary.program?.mode === "director-cfo" && terminalFailures.length > 0;
+      const needsIntegration = ["ready-for-integration", "needs-correction"].includes(collected.state)
+        && (terminalCompleted.length > 0 || directorTerminalFailure);
       if (needsIntegration) {
         const integrated = integrateRound({ taskId, roundId: latest.roundId });
-        const integrationFailures = (integrated.integrations || []).filter((row) => row.integrated !== true).map((row) => ({
+        const managerTransitions = (integrated.integrations || []).filter((row) => row.managerTransition === true);
+        const integrationFailures = (integrated.integrations || []).filter((row) => row.integrated !== true && row.managerTransition !== true).map((row) => ({
           jobId: row.jobId,
           provider: terminalCompleted.find((completed) => completed.jobId === row.jobId)?.provider || "",
           model: terminalCompleted.find((completed) => completed.jobId === row.jobId)?.model || "",
           blocker: row.blocker,
+          reconciled: row.reconciled === true,
         }));
         failures.push(...integrationFailures);
         if (belongsToCurrentExecution) {
-          for (const failure of integrationFailures) failedProviders.add(String(failure.provider || "").toLowerCase());
+          for (const failure of integrationFailures.filter((row) => row.reconciled !== true)) {
+            failedProviders.add(String(failure.provider || "").toLowerCase());
+          }
         }
         transitions.push({
           type: "integrated",
@@ -122,6 +138,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
           state: integrated.state,
           acceptedEvidence: (integrated.acceptedEvidence || []).map((row) => ({ requirementId: row.requirementId, level: row.level, ref: row.ref })),
           observations: (integrated.integrations || []).filter((row) => row.observation === true && row.integrated === true).map((row) => ({ jobId: row.jobId, createdWorkGraphNodeIds: row.createdWorkGraphNodeIds || [] })),
+          managerTransitions: managerTransitions.map((row) => ({ jobId: row.jobId, refreshScheduled: row.refreshScheduled === true, blocked: row.blocked === true })),
           failures: integrationFailures,
         });
       }
@@ -131,7 +148,7 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
       if (currentProgressSignature !== lastProgressSignature) {
         lastProgressSignature = currentProgressSignature;
         noProgressCount = 0;
-      } else if (belongsToCurrentExecution) {
+      } else if (belongsToCurrentExecution && !(summary.program?.mode === "director-cfo" && ["context", "strategy"].includes(summary.program.phase))) {
         noProgressCount += 1;
       }
       if (noProgressCount >= noProgressLimit) {
@@ -188,7 +205,14 @@ async function runTaskCycleInline(args = {}, entrypoint, dependencies = {}) {
       rejected: (round.rejected || []).map((row) => ({ goal: row.goal, reason: row.reason })),
     });
     if (!(round.workers || []).length) {
-      stopReason = "no-eligible-worker";
+      stopReason = isRecoverableCapacityWait(round) ? "capacity-wait" : "no-eligible-worker";
+      if (stopReason === "capacity-wait") {
+        transitions.push({
+          type: "capacity-wait",
+          roundId: round.roundId,
+          reasons: (round.rejected || []).map((row) => row.reason).filter(Boolean),
+        });
+      }
       break;
     }
   }

@@ -2,16 +2,22 @@
 
 const path = require("node:path");
 const { readJson } = require("./utils");
-const { jobDirectory, listJobIds, listTaskIds } = require("./state-store");
+const { jobDirectory, listJobIds, listTaskIds, readTask } = require("./state-store");
 
 function providerHistory() {
   const rows = [];
   for (const taskId of listTaskIds().slice(-100)) {
+    const task = readTask(taskId);
+    const recoveredJobIds = new Set([
+      ...(task.program?.resultRecoveries || []),
+      ...(task.program?.runtimeRecoveries || []),
+    ].filter((row) => ["adopted", "patch-adopted", "retry-admitted"].includes(row?.state)).map((row) => row.jobId).filter(Boolean));
     for (const jobId of listJobIds(taskId)) {
       const dir = jobDirectory(taskId, jobId);
       const status = readJson(path.join(dir, "status.json"), {});
       const contract = readJson(path.join(dir, "contract.json"), {});
       const at = Date.parse(status.finishedAt || status.updatedAt || status.createdAt || "") || 0;
+      if (status.state === "failed" && recoveredJobIds.has(jobId)) continue;
       if (status.state && contract.provider) rows.push({ provider: contract.provider, status, at });
     }
   }

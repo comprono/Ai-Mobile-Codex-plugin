@@ -1,6 +1,6 @@
 # AI Mobile 1.3.5 - owned recovery and visible unattended progress
 
-AI Mobile 1.3.5 repairs the failure observed in the live Job Vibhu orchestration run.
+AI Mobile 1.3.5 repairs the failure observed in the live production orchestration run.
 
 - Blocked recovery work retains its exact acceptance-linked work-graph node.
 - Automatic dispatch refuses orphan work instead of spending a model call that cannot be integrated.

@@ -3,7 +3,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { commandResult, isInside, redact } = require("./utils");
+const { commandResult, fileSha256, isInside, redact } = require("./utils");
 
 function statusPaths(workspace) {
   const result = commandResult("git", ["-C", workspace, "status", "--porcelain=v1", "-z", "--", ".", ":(exclude).ai-mobile/**", ":(exclude).antigravity-bridge/**"], { timeout: 15000 });
@@ -13,29 +13,54 @@ function statusPaths(workspace) {
   return { available: true, paths: [...new Set(paths)], raw: rows.join("\n") };
 }
 
-function walkBoundary(workspace, relative, output, limit) {
-  if (output.length >= limit) return;
+function walkBoundary(workspace, relative, output, limit, options, state) {
+  if (state.overflow) return;
+  if (output.length >= limit) {
+    state.overflow = true;
+    return;
+  }
   const absolute = path.resolve(workspace, relative);
-  if (!isInside(workspace, absolute) || !fs.existsSync(absolute)) return;
-  const stat = fs.statSync(absolute);
+  if (!isInside(workspace, absolute)) return;
+  let stat;
+  try { stat = fs.lstatSync(absolute); }
+  catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  const relativePath = path.relative(workspace, absolute).replace(/\\/g, "/") || ".";
+  if (stat.isSymbolicLink()) {
+    output.push([relativePath, `symlink:${fs.readlinkSync(absolute)}`]);
+    return;
+  }
   if (stat.isDirectory()) {
-    for (const entry of fs.readdirSync(absolute, { withFileTypes: true })) {
-      if ([".git", ".ai-mobile", ".antigravity-bridge", "node_modules", ".venv", "dist", "build"].includes(entry.name)) continue;
-      walkBoundary(workspace, path.relative(workspace, path.join(absolute, entry.name)), output, limit);
-      if (output.length >= limit) break;
+    if (options.strong === true) output.push([relativePath === "." ? "./" : `${relativePath}/`, "directory"]);
+    for (const entry of fs.readdirSync(absolute, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (options.strong !== true && [".git", ".ai-mobile", ".antigravity-bridge", "node_modules", ".venv", "dist", "build"].includes(entry.name)) continue;
+      walkBoundary(workspace, path.relative(workspace, path.join(absolute, entry.name)), output, limit, options, state);
+      if (state.overflow) break;
     }
     return;
   }
-  if (!stat.isFile()) return;
-  const hash = stat.size <= 2 * 1024 * 1024
+  if (!stat.isFile()) {
+    if (options.strong === true) output.push([relativePath, `filesystem-node:${stat.mode}`]);
+    return;
+  }
+  const hash = options.strong === true
+    ? fileSha256(absolute)
+    : stat.size <= 2 * 1024 * 1024
     ? crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")
     : `${stat.size}:${stat.mtimeMs}`;
-  output.push([path.relative(workspace, absolute).replace(/\\/g, "/"), hash]);
+  output.push([relativePath, hash]);
 }
 
-function fingerprint(workspace, boundaries = [], limit = 1000) {
+function fingerprint(workspace, boundaries = [], limit = 1000, options = {}) {
   const entries = [];
-  for (const boundary of boundaries) walkBoundary(workspace, boundary, entries, limit);
+  const state = { overflow: false };
+  for (const boundary of boundaries) {
+    walkBoundary(workspace, boundary, entries, limit, options, state);
+    if (state.overflow) break;
+  }
+  if (state.overflow) entries.push(["__AI_MOBILE_FINGERPRINT_OVERFLOW__", `more-than-${limit}-entries`]);
   return Object.fromEntries(entries);
 }
 

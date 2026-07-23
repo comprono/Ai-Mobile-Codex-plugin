@@ -38,6 +38,8 @@ fs.writeFileSync(fake, [
   'const fs=require("node:fs"),path=require("node:path");',
   `const timeline=${JSON.stringify(timeline)};`,
   'const provider=process.argv[2];const started=Date.now();',
+  'const logIndex=process.argv.indexOf("--log-file");',
+  'if(provider==="antigravity"&&logIndex>=0&&process.argv[logIndex+1])fs.writeFileSync(process.argv[logIndex+1],"Propagating selected model override to backend: label=\\\"Gemini Flash\\\"\\n");',
   'fs.appendFileSync(timeline,JSON.stringify({provider,started})+"\\n");',
   'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1200);',
   'fs.appendFileSync(path.join(process.cwd(),"src","worker.txt"),provider+"-change\\n");',

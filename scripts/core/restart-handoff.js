@@ -6,7 +6,8 @@ const { readProfile } = require("../lib/orchestrator-profile");
 const { readTask } = require("./state-store");
 const { safeWorkspace, utcNow, writeJson } = require("./utils");
 const { stateRoot } = require("./state-store");
-const { pluginVersion } = require("../lib/version");
+const { assertCurrentRuntime, pluginVersion } = require("../lib/version");
+const { runtimeFingerprint } = require("../lib/runtime-identity");
 
 function safeThreadId(value) {
   const threadId = String(value || process.env.CODEX_THREAD_ID || "").trim();
@@ -30,11 +31,31 @@ function safeReasoningEffort(value, fallback = "") {
   return effort;
 }
 
+function safeEmbeddedContract(value, label) {
+  let serialized;
+  try {
+    serialized = JSON.stringify(value || {});
+  } catch {
+    throw new Error(`Restart ${label} must be JSON serializable.`);
+  }
+  if (Buffer.byteLength(serialized, "utf8") > 128 * 1024) {
+    throw new Error(`Restart ${label} exceeds the 128 KiB handoff limit.`);
+  }
+  return JSON.parse(serialized);
+}
+
+function assertRestartRuntimeCurrent(root) {
+  return assertCurrentRuntime(root);
+}
+
 function createRestartHandoff(args = {}) {
   const profile = readProfile();
   if (args.userAuthorized !== true && profile.allowCodexRestartHandoff !== true) {
     throw new Error("Codex restart handoff is not authorized in the private profile or this call.");
   }
+  // A loaded older cache cannot safely describe or verify a newer installed
+  // release. Prepare the handoff from the candidate source or newest cache.
+  assertRestartRuntimeCurrent();
   const workspace = safeWorkspace(args.workspace);
   const threadId = safeThreadId(args.threadId);
   const resumeModel = safeResumeModel(args.resumeModel || "");
@@ -42,6 +63,11 @@ function createRestartHandoff(args = {}) {
   const verificationModel = safeResumeModel(args.verificationModel || "");
   const verificationEffort = safeReasoningEffort(args.verificationEffort || "");
   const task = args.taskId ? readTask(args.taskId) : null;
+  if (!task) throw new Error("Restart handoff requires an existing durable AI Mobile task.");
+  const directorProgram = task.program?.mode === "director-cfo";
+  if (!directorProgram && args.migrateToDirector !== true) {
+    throw new Error("A legacy task requires migrateToDirector true before restart continuation.");
+  }
   const nextAction = String(args.nextAction || task?.currentCodex?.goal || "").trim().slice(0, 4000);
   if (!nextAction) throw new Error("Restart handoff requires the exact next action.");
   const priorities = (Array.isArray(args.priorities) ? args.priorities : []).slice(0, 12).map((item) => String(item).trim().slice(0, 500)).filter(Boolean);
@@ -55,9 +81,32 @@ function createRestartHandoff(args = {}) {
     status: item.status,
     evidence: (item.evidence || []).slice(-2).map((entry) => ({ level: entry.level, ref: entry.ref, summary: entry.summary })),
   }));
+  const reconcileContract = directorProgram ? null : safeEmbeddedContract({
+    taskId: task.taskId,
+    migrateToDirector: true,
+    cancelActiveWorkers: true,
+    outcome: String(args.outcome || task.outcome || "").slice(0, 10000),
+    userRequest: String(args.latestUserRequest || task.latestUserRequest || "").slice(0, 10000),
+    constraints: Array.isArray(args.constraints) ? args.constraints : task.constraints || [],
+    projectContract: args.projectContract === undefined ? true : args.projectContract,
+    sourceDescriptors: args.sourceDescriptors || {},
+    authorization: args.authorization || {},
+    authorizedPermissions: args.authorizedPermissions || [],
+    consoleModel: resumeModel,
+    consoleEffort: resumeEffort,
+    codexReservePercent: args.codexReservePercent,
+  }, "migration contract");
+  const campaignContract = safeEmbeddedContract({
+    taskId: task.taskId,
+    awaitBoundarySeconds: Math.max(0, Math.min(120, Number(args.awaitBoundarySeconds ?? 30))),
+    maxRounds: Math.max(1, Math.min(50, Number(args.maxRounds || 3))),
+    maxMinutes: Math.max(1, Math.min(300, Number(args.maxMinutes || 15))),
+    noProgressLimit: Math.max(1, Math.min(5, Number(args.noProgressLimit || 2))),
+    horizonHours: Math.max(1, Math.min(168, Number(args.horizonHours || 5))),
+  }, "campaign contract");
   const createdAt = utcNow();
   const handoff = {
-    schemaVersion: 2,
+    schemaVersion: 4,
     oneShot: true,
     userAuthorized: true,
     createdAt,
@@ -68,6 +117,7 @@ function createRestartHandoff(args = {}) {
     threadId,
     workspace,
     expectedRuntimeVersion: pluginVersion(),
+    expectedRuntimeFingerprint: runtimeFingerprint(),
     verificationModel,
     verificationEffort,
     resumeModel,
@@ -75,6 +125,9 @@ function createRestartHandoff(args = {}) {
     cleanupPluginIds,
     refreshPluginIds: ["ai-mobile@ai-mobile"],
     taskId: task?.taskId || String(args.taskId || ""),
+    handoffMode: directorProgram ? "resume-program" : "migrate-program",
+    reconcileContract,
+    campaignContract,
     outcome: String(task?.outcome || args.outcome || "").slice(0, 6000),
     latestUserRequest: String(task?.latestUserRequest || args.latestUserRequest || "").slice(0, 6000),
     priorities,
@@ -85,11 +138,14 @@ function createRestartHandoff(args = {}) {
       resumeModel ? "Visible console model: " + resumeModel + " at " + resumeEffort + " effort." : "",
       "The visible task is a lightweight project console only: invoke coordinator tools, take user direction, and report verified material transitions.",
       "Do not bulk-read repositories, perform heavy planning, edit project files, review patches, create a duplicate Codex task, AI Mobile task, Goal, automation, manager loop, or hidden CLI continuation.",
-      task?.taskId ? "Reconcile durable task " + task.taskId + " once; do not create another task." : "",
+      directorProgram
+        ? "Resume durable Director-CFO task " + task.taskId + " in place. Do not call reconcile-task, start-program, start-task, or any legacy orchestration tool."
+        : "Migrate durable task " + task.taskId + " exactly once with reconcile-task using this JSON contract; do not create another task: " + JSON.stringify(reconcileContract),
       task?.outcome ? "Outcome: " + task.outcome : "",
       priorities.length ? "Priorities: " + priorities.join(" | ") : "",
       "Start now: " + nextAction,
-      "Invoke run-task-cycle exactly once for this task with maxRounds 3, maxMinutes 15, noProgressLimit 2, and horizonHours 5. It starts or reuses one finite detached event-driven coordinator. Do not poll or call it again in this turn. Report the returned durable execution receipt as one compact Done / Active / Blocked / Resources / Next update; later user status requests use material-status once.",
+      !directorProgram ? "The migration must return the same taskId with program.mode director-cfo. Stop if it does not; never fall back to legacy orchestration tools." : "The existing program.mode must remain director-cfo.",
+      "Then invoke run-program-campaign exactly once using this JSON contract: " + JSON.stringify(campaignContract) + ". It starts or resumes one bounded Director-CFO program supervisor across finite slices and budget-campaign epochs. Do not poll or call it again in this turn. You may call program-report once after the campaign receipt to produce one compact Goal / Milestone / Evidence / Teams / Budget / Blockers / Next update; later user status requests also use program-report once.",
     ].filter(Boolean).join("\n"),
   };
   const root = path.join(stateRoot(), "restart-handoffs");
@@ -106,4 +162,4 @@ function createRestartHandoff(args = {}) {
   };
 }
 
-module.exports = { createRestartHandoff, safeReasoningEffort, safeResumeModel, safeThreadId };
+module.exports = { assertRestartRuntimeCurrent, createRestartHandoff, safeReasoningEffort, safeResumeModel, safeThreadId };

@@ -18,6 +18,8 @@ Contributions must preserve these invariants:
 - cached negative provider evidence is refreshed before dispatch rejection;
 - completion requires acceptance evidence;
 - startup and discovery never open desktop applications;
+- one durable program supervisor owns continuation across finite campaign epochs, process restarts, and recoverable capacity waits until its overall horizon or stop policy is reached;
+- whole-program resource caps aggregate every durable attempt and immutable allocation grant across revisions; missing telemetry is committed conservatively, live leases define concurrency, and unknown quota remains unknown;
 - no LLM manager loop, Goal, heartbeat, automation, repeated model-turn poll, or premium review chain is added; one finite detached coordinator may advance only on durable transitions and acceptance evidence.
 
 ## Development Checks
@@ -25,27 +27,49 @@ Contributions must preserve these invariants:
 Run the complete deterministic release matrix:
 
 ```powershell
-node .\scripts\self-test.js
-node .\scripts\reliability-e2e.js
-node .\scripts\continuation-regression.js
-node .\scripts\task-cycle-regression.js
+node .\scripts\antigravity-model-identity-regression.js
+node .\scripts\app-server-resume-regression.js
 node .\scripts\console-workplane-regression.js
+node .\scripts\context-freshness-regression.js
+node .\scripts\continuation-regression.js
+node .\scripts\director-cfo-budget-regression.js
+node .\scripts\director-cfo-campaign-continuation-regression.js
+node .\scripts\director-cfo-context-regression.js
+node .\scripts\director-cfo-contracts-regression.js
+node .\scripts\director-cfo-failed-round-regression.js
+node .\scripts\director-cfo-live-inventory-regression.js
+node .\scripts\director-cfo-migration-regression.js
+node .\scripts\director-cfo-operational-dispatch-regression.js
+node .\scripts\director-cfo-program-regression.js
+node .\scripts\director-cfo-provider-contract-regression.js
+node .\scripts\director-cfo-resource-enforcement-regression.js
+node .\scripts\director-cfo-runtime-regression.js
+node .\scripts\director-cfo-typed-execution-regression.js
 node .\scripts\durable-event-regression.js
+node .\scripts\economic-regression.js
+node .\scripts\fable-routing-regression.js
+node .\scripts\global-resource-regression.js
+node .\scripts\installed-runtime-parity-regression.js
+node .\scripts\integration-regression.js
+node .\scripts\orchestration-regression.js
+node .\scripts\outcome-recovery-e2e.js
+node .\scripts\portfolio-e2e.js
+node .\scripts\program-reporting-regression.js
+node .\scripts\program-resource-snapshot-regression.js
 node .\scripts\provider-capability-regression.js
 node .\scripts\provider-patch-regression.js
-node .\scripts\app-server-resume-regression.js
-node .\scripts\fable-routing-regression.js
-node .\scripts\trusted-primary-regression.js
+node .\scripts\reliability-e2e.js
+node .\scripts\release-canary-policy-regression.js
+node .\scripts\resource-lease-regression.js
+node .\scripts\self-test.js
 node .\scripts\shared-host-install-regression.js
-node .\scripts\outcome-recovery-e2e.js
-node .\scripts\orchestration-regression.js
+node .\scripts\sqlite-observation-regression.js
+node .\scripts\sqlite-snapshot-regression.js
 node .\scripts\state-capacity-regression.js
-node .\scripts\worker-isolation-regression.js
-node .\scripts\integration-regression.js
-node .\scripts\portfolio-e2e.js
-node .\scripts\global-resource-regression.js
 node .\scripts\storage-lifecycle-regression.js
-node .\scripts\economic-regression.js
+node .\scripts\task-cycle-regression.js
+node .\scripts\trusted-primary-regression.js
+node .\scripts\worker-isolation-regression.js
 
 powershell -ExecutionPolicy Bypass -File ".\scripts\antigravity.ps1" privacy
 git diff --check
@@ -59,6 +83,13 @@ The authenticated real-provider canaries consume bounded provider requests and a
 ```powershell
 node .\scripts\installed-provider-canary.js
 node .\scripts\real-provider-portfolio-canary.js
+```
+
+For a release that changes the Director lifecycle, run the cloned-state canary against an explicitly authorized durable task. Real context and strategy workers send the task's authorized source contents to authenticated model providers. The canary guards static production state, tolerates independently changing runtime logs/databases, and stops before the first execution worker launches:
+
+```powershell
+$env:AI_MOBILE_CANARY_TASK_ID = "task-your-durable-id"
+node .\scripts\live-state-release-canary.js
 ```
 
 The scanner may request manual review for a local executable stdio MCP entry. Document that result rather than weakening the MCP behavior.

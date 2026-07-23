@@ -12,7 +12,7 @@ const ALLOWED = new Set([
 ]);
 
 function verificationPlanningGuidance() {
-  return "Verification policy: use an allowlisted executable with argument arrays only. Never use inline code flags such as node -e, python -c, or PowerShell -Command. Prefer node <existing-or-expected-script>, python <existing-or-expected-script>, python -m unittest <module>, python -m json.tool <json-file>, or pytest <existing-or-expected-test>. Every directly named script must already exist or be listed in expectedFiles, and every new expected file must have an existing immediate parent directory.";
+  return "Verification policy: use an allowlisted executable with argument arrays only. Never use inline code flags such as node -e, python -c, or PowerShell -Command. Prefer node <existing-or-expected-script>, python <existing-or-expected-script>, python -m unittest <module>, python -m json.tool <json-file>, or python -m pytest <existing-or-expected-test>. Every directly named script must already exist or be listed in expectedFiles, and every new expected file must have an existing immediate parent directory.";
 }
 
 function normalizeCommands(value) {
@@ -48,6 +48,16 @@ function validateCommands(workspace, commands) {
   return { valid: normalized.length > 0 && errors.length === 0, commands: normalized, errors };
 }
 
+function fallbackInvocation(entry, result) {
+  const executable = path.basename(entry.command).toLowerCase();
+  if (result?.error?.code !== "ENOENT" || !/^pytest(?:\.exe)?$/.test(executable)) return null;
+  return {
+    command: process.platform === "win32" ? "python" : "python3",
+    args: ["-m", "pytest", ...entry.args],
+    fallbackFrom: entry.command,
+  };
+}
+
 function runVerification(workspace, jobDir, commands) {
   const normalized = normalizeCommands(commands);
   const checks = [];
@@ -58,12 +68,19 @@ function runVerification(workspace, jobDir, commands) {
       break;
     }
     const started = Date.now();
-    const result = commandResult(entry.command, entry.args, { cwd: workspace, timeout: entry.timeoutSeconds * 1000, env: { ...process.env, CI: process.env.CI || "1" } });
+    let executed = { command: entry.command, args: entry.args, fallbackFrom: "" };
+    let result = commandResult(executed.command, executed.args, { cwd: workspace, timeout: entry.timeoutSeconds * 1000, env: { ...process.env, CI: process.env.CI || "1" } });
+    const fallback = fallbackInvocation(entry, result);
+    if (fallback) {
+      executed = fallback;
+      result = commandResult(executed.command, executed.args, { cwd: workspace, timeout: entry.timeoutSeconds * 1000, env: { ...process.env, CI: process.env.CI || "1" } });
+    }
     const passed = !result.error && result.status === entry.expectedExitCode;
     checks.push({
       name: entry.name,
-      command: entry.command,
-      args: entry.args,
+      command: executed.command,
+      args: executed.args,
+      fallbackFrom: executed.fallbackFrom || "",
       durationMs: Date.now() - started,
       expectedExitCode: entry.expectedExitCode,
       exitCode: result.status,
@@ -92,4 +109,10 @@ function runVerification(workspace, jobDir, commands) {
   return evidence;
 }
 
-module.exports = { normalizeCommands, runVerification, validateCommands, verificationPlanningGuidance };
+module.exports = {
+  normalizeCommands,
+  runVerification,
+  validateCommands,
+  verificationPlanningGuidance,
+  __test: { fallbackInvocation },
+};

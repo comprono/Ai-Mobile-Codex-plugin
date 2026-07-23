@@ -14,6 +14,22 @@ const DEFAULT_SURFACES = {
   cursor: { headless: true, source: true, "local-files": true, git: true, tests: true, browser: false, github: false, api: false, "project-tools": false },
 };
 const TASK_KINDS = new Set(["architecture", "browser", "code", "debug", "docs", "generic", "live-state", "repository-scan", "research", "review", "tests"]);
+const TYPED_ARTIFACT_KINDS = new Set([
+  "work-plan", "context-dossier", "master-plan", "patch", "operation-receipt", "browser-receipt",
+  "external-transaction-receipt", "monitoring-evidence", "verification-result", "reconciliation-decision",
+]);
+const EXECUTOR_TASK_KIND = Object.freeze({
+  "context-scout": "repository-scan",
+  strategist: "architecture",
+  "code-change": "code",
+  "operational-transaction": "live-state",
+  "browser-action": "browser",
+  "external-transaction": "live-state",
+  "evidence-observer": "research",
+  verification: "tests",
+  reconciliation: "architecture",
+});
+const EFFECT_EXECUTORS = new Set(["operational-transaction", "browser-action", "external-transaction"]);
 const SELECTION_AUTHORITIES = new Set(["router", "user"]);
 const CANONICAL_MODEL_FAMILIES = [
   ["claude", /(^|[^a-z])(claude|fable|mythos|opus|sonnet|haiku)([^a-z]|$)/i],
@@ -55,6 +71,73 @@ function paths(workspace, values) {
   return boundedList(values, 80, 500).map((value) => safeRelativePath(workspace, value)).filter(Boolean);
 }
 
+
+function copyStructured(value, maxChars = 50000) {
+  if (!value || typeof value !== "object") return null;
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized || serialized.length > maxChars) return null;
+    return JSON.parse(serialized);
+  } catch {
+    return null;
+  }
+}
+
+function structuredRows(values, maxItems = 40) {
+  return (Array.isArray(values) ? values : []).slice(0, maxItems).map((row) => copyStructured(row, 12000)).filter(Boolean);
+}
+
+function taskKindFor(input = {}) {
+  if (TASK_KINDS.has(input.taskKind)) return input.taskKind;
+  const executor = String(input.executorKind || "").trim().toLowerCase();
+  return EXECUTOR_TASK_KIND[executor] || (input.mode === "review" ? "review" : "generic");
+}
+
+function normalizedNames(values, maxItems = 40) {
+  return boundedList(values, maxItems, 120).map((value) => value.toLowerCase());
+}
+
+function structuredCommandsValid(commands) {
+  return Array.isArray(commands) && commands.length > 0 && commands.every((command) => (
+    command
+    && typeof command === "object"
+    && !Array.isArray(command)
+    && String(command.command || "").trim()
+    && Array.isArray(command.args)
+    && command.args.every((arg) => typeof arg === "string")
+    && Number(command.timeoutSeconds || 0) > 0
+  ));
+}
+
+function directorPreflightBinding(request) {
+  if (!request.directorBudgetAuthority || request.permissionPreflight?.ok !== true) return false;
+  if (String(request.permissionPreflight.blocker || "").trim()) return false;
+  for (const field of ["missingCapabilities", "missingAuthorization", "missingGrant", "missingProviderPermissions", "invalidSideEffectContract"]) {
+    if ((request.permissionPreflight[field] || []).length) return false;
+  }
+  const grant = new Set(request.permissionGrant || []);
+  const preflightGrant = new Set(request.permissionPreflight.permissionGrant || []);
+  const preflightPermissions = new Set(request.permissionPreflight.requiredPermissions || []);
+  const preflightCapabilities = new Set(request.permissionPreflight.requiredCapabilities || []);
+  if (request.requiredPermissions.some((value) => !grant.has(value) || !preflightGrant.has(value) || !preflightPermissions.has(value))) return false;
+  if (request.declaredRequiredCapabilities.some((value) => !preflightCapabilities.has(value))) return false;
+  return true;
+}
+
+function directorEffectAuthorization(request) {
+  if (!directorPreflightBinding(request) || !EFFECT_EXECUTORS.has(request.executorKind)) return false;
+  const grant = new Set(request.permissionGrant || []);
+  if (request.executorKind === "operational-transaction") {
+    const commandLane = request.commands.length > 0 || request.requiredCapabilities.includes("command") || request.requiredPermissions.includes("run-command");
+    return !commandLane || (grant.has("run-command") && structuredCommandsValid(request.commands));
+  }
+  if (request.executorKind === "browser-action") {
+    if (!grant.has("browser")) return false;
+    return request.mutatesExternalState !== true
+      || (grant.has("external-write") && Boolean(request.userAuthorizationRef));
+  }
+  return grant.has("external-write") && Boolean(request.userAuthorizationRef);
+}
 function normalizeRequest(input = {}) {
   let preferredProvider = String(input.preferredProvider || "auto").toLowerCase();
   if (!PROVIDERS.has(preferredProvider)) throw new Error(`Unsupported provider: ${preferredProvider}`);
@@ -64,8 +147,22 @@ function normalizeRequest(input = {}) {
   }
   const model = normalizeRequestedModel(input.model);
   const canonicalProvider = canonicalModelProvider(model);
+  const allocation = input.allocation && typeof input.allocation === "object" ? input.allocation : null;
+  const directorProgram = input.directorProgram && typeof input.directorProgram === "object" ? input.directorProgram : null;
+  const allocationWorkPackageId = String(allocation?.workPackageId || "").trim();
+  const directorWorkPackageId = String(directorProgram?.workPackageId || "").trim();
+  const directorBudgetBinding = input.directorBudgetAuthority === true
+    && selectionAuthority === "router"
+    && Boolean(String(directorProgram?.programId || "").trim())
+    && Boolean(String(allocation?.allocationId || "").trim())
+    && Boolean(String(allocation?.candidateId || "").trim())
+    && allocationWorkPackageId
+    && allocationWorkPackageId === directorWorkPackageId
+    && allocationWorkPackageId === String(input.workPackageId || input.workGraphNodeId || "").trim()
+    && String(allocation?.provider || "").trim().toLowerCase() === preferredProvider
+    && normalizeRequestedModel(allocation?.model) === model;
   let selectionCorrection = "";
-  if (model && canonicalProvider && preferredProvider !== "auto" && preferredProvider !== canonicalProvider) {
+  if (!directorBudgetBinding && model && canonicalProvider && preferredProvider !== "auto" && preferredProvider !== canonicalProvider) {
     selectionCorrection = `Corrected provider "${preferredProvider}" to "${canonicalProvider}": "${model}" is a ${canonicalProvider} model (${CANONICAL_BINDING_HINT}).`;
     preferredProvider = canonicalProvider;
   }
@@ -79,15 +176,33 @@ function normalizeRequest(input = {}) {
     }
   }
   const readOnly = input.readOnly === true;
+  const executorKind = String(input.executorKind || "").trim().toLowerCase();
   const expectedFiles = paths(input.workspace, input.expectedFiles);
-  if (!readOnly && !expectedFiles.length) throw new Error("Writer lanes require explicit expectedFiles boundaries.");
+  const relevantFiles = paths(input.workspace, input.relevantFiles);
+  if (!readOnly && !expectedFiles.length && executorKind !== "operational-transaction") {
+    throw new Error("Writer lanes require explicit expectedFiles boundaries.");
+  }
+  if (executorKind === "operational-transaction" && !relevantFiles.length) {
+    throw new Error("Operational transactions require explicit relevantFiles boundaries.");
+  }
   const complexity = ["small", "medium", "large"].includes(input.complexity) ? input.complexity : "medium";
   const defaultOutput = complexity === "large" ? 2000 : 1200;
-  const taskKind = TASK_KINDS.has(input.taskKind) ? input.taskKind : (input.mode === "review" ? "review" : "generic");
+  const taskKind = taskKindFor(input);
+  const minimumCapabilityTier = String(input.minimumCapabilityTier || "").trim().toLowerCase();
+  const effortProvided = Boolean(String(input.effort || "").trim());
+  const defaultEffort = minimumCapabilityTier === "frontier" ? "high"
+    : minimumCapabilityTier === "efficient" ? "low" : minimumCapabilityTier === "balanced" ? "medium" : readOnly ? "low" : "medium";
+  const maxAttempts = Math.max(1, Math.floor(Number(input.maxAttempts || allocation?.maxAttempts || input.resourceEstimate?.attempts || 1)));
+  const allocationAttempt = Math.max(1, Math.floor(Number(input.allocationAttempt || allocation?.attempt || allocation?.attemptIndex || 1)));
   const request = {
+    acceptanceIds: boundedList(input.acceptanceIds, 40, 120),
+    evidenceRequirementIds: boundedList(input.evidenceRequirementIds || input.planEvidenceRequirementIds, 40, 120),
+    evidenceRequirements: structuredRows(input.evidenceRequirements, 40),
     projectGoal: String(input.projectGoal || "").trim().slice(0, 6000),
     goal: String(input.goal || "").trim().slice(0, 8000),
     currentCodexGoal: String(input.currentCodexGoal || "").trim().slice(0, 5000),
+    localFileAccess: readOnly ? "read-only" : "bounded-write",
+    effectKind: EFFECT_EXECUTORS.has(executorKind) ? executorKind : "",
     independenceReason: String(input.independenceReason || "").trim().slice(0, 2000),
     acceptanceCriteria: boundedList(input.acceptanceCriteria, 20, 1000),
     nextStep: String(input.nextStep || "").trim().slice(0, 3000),
@@ -96,13 +211,34 @@ function normalizeRequest(input = {}) {
     workspace: input.workspace,
     preferredProvider,
     readOnly,
-    relevantFiles: paths(input.workspace, input.relevantFiles),
+    relevantFiles,
     currentCodexFiles: paths(input.workspace, input.currentCodexFiles),
     // An active Codex lane may be intentionally reserved for different work. This is
     // never a blanket bypass: only disjoint, read-only external evidence lanes qualify.
     currentCodexReserved: input.currentCodexReserved === true,
     workPlaneRequired: input.workPlaneRequired === true,
-    artifactKind: input.artifactKind === "work-plan" ? "work-plan" : "",
+    artifactKind: TYPED_ARTIFACT_KINDS.has(String(input.artifactKind || input.deliverableKind || "").trim().toLowerCase()) ? String(input.artifactKind || input.deliverableKind).trim().toLowerCase() : "",
+    executorKind,
+    deliverableKind: String(input.deliverableKind || "").trim().toLowerCase(),
+    workPackageId: String(input.workPackageId || input.workGraphNodeId || "").trim(),
+    workGraphNodeId: String(input.workGraphNodeId || input.workPackageId || "").trim(),
+    allocation: copyStructured(allocation),
+    directorProgram: copyStructured(directorProgram),
+    minimumCapabilityTier,
+    requiredPermissions: normalizedNames(input.requiredPermissions, 40),
+    permissionGrant: normalizedNames(input.permissionGrant, 40),
+    permissionPreflight: copyStructured(input.permissionPreflight),
+    commands: structuredRows(input.commands, 12),
+    preconditions: boundedList(input.preconditions, 30, 1000),
+    postconditions: boundedList(input.postconditions, 30, 1000),
+    rollback: copyStructured(input.rollback),
+    recoveryAction: String(input.recoveryAction || "").trim().slice(0, 1200),
+    mutatesExternalState: input.mutatesExternalState === true,
+    sideEffectKey: String(input.sideEffectKey || "").trim().slice(0, 240),
+    observedStateFingerprint: String(input.observedStateFingerprint || "").trim().slice(0, 180),
+    userAuthorizationRef: String(input.userAuthorizationRef || "").trim().slice(0, 500),
+    resourceEstimate: copyStructured(input.resourceEstimate),
+    declaredRequiredCapabilities: boundedList(input.requiredCapabilities, 12, 80).map((value) => value.toLowerCase()),
     requiredCapabilities: boundedList(input.requiredCapabilities, 12, 80).map((value) => value.toLowerCase()),
     expectedFiles,
     verificationCommands: Array.isArray(input.verificationCommands) ? input.verificationCommands : [],
@@ -111,9 +247,10 @@ function normalizeRequest(input = {}) {
     taskKind,
     model,
     selectionAuthority,
+    directorBudgetAuthority: directorBudgetBinding,
     selectionCorrection,
-    effortProvided: Boolean(input.effort),
-    effort: String(input.effort || (readOnly ? "low" : "medium")).trim(),
+    effortProvided,
+    effort: String(effortProvided ? input.effort : defaultEffort).trim(),
     allowAntigravity: input.allowAntigravity === undefined ? null : input.allowAntigravity === true,
     allowPaidApi: input.allowPaidApi === true,
     allowPremiumModel: input.allowPremiumModel === true,
@@ -122,6 +259,8 @@ function normalizeRequest(input = {}) {
     mode: String(input.mode || "").trim(),
     projectId: String(input.projectId || "").trim(),
     horizonHours: clamp(input.horizonHours, 1, 24, 5),
+    maxAttempts,
+    allocationAttempt,
     estimatedDirectTokens: clamp(input.estimatedDirectTokens, 500, 200000, 0),
     maxWorkerOutputTokens: clamp(input.maxWorkerOutputTokens, 300, 4000, defaultOutput),
     maxApiBudgetUsd: clamp(input.maxApiBudgetUsd ?? input.maxEquivalentUsd, 0.01, 5, complexity === "large" ? 0.75 : 0.35),
@@ -131,6 +270,20 @@ function normalizeRequest(input = {}) {
   if (request.taskKind === "browser") inferredCapabilities.push("browser");
   if (request.verificationCommands.length || request.taskKind === "tests") inferredCapabilities.push("tests");
   request.requiredCapabilities = [...new Set([...request.requiredCapabilities, ...inferredCapabilities])];
+  if (directorBudgetBinding) {
+    const durationSeconds = Math.floor(Number(allocation.durationLimitMs || 0) / 1000);
+    if (durationSeconds > 0) request.timeoutSeconds = Math.max(1, Math.min(request.timeoutSeconds, durationSeconds));
+    const tokenLimit = Math.floor(Number(allocation.tokenLimit || 0));
+    if (tokenLimit > 0) {
+      request.estimatedDirectTokens = Math.max(1, Math.min(request.estimatedDirectTokens || tokenLimit, tokenLimit));
+      request.maxWorkerOutputTokens = Math.max(1, Math.min(request.maxWorkerOutputTokens, tokenLimit));
+    }
+    const allocationMaxAttempts = Math.max(1, Math.floor(Number(allocation.maxAttempts || 1)));
+    request.maxAttempts = Math.min(request.maxAttempts, allocationMaxAttempts);
+    request.allocationAttempt = Math.min(request.allocationAttempt, request.maxAttempts);
+  }
+  request.directorProviderAuthorization = directorPreflightBinding(request);
+  request.directorEffectAuthorization = directorEffectAuthorization(request);
   request.laneKey = laneKey(request);
   return request;
 }
@@ -182,7 +335,7 @@ function windowApplies(window, model) {
 }
 
 function antigravityModel(request, state) {
-  const printable = (row) => row?.displayName || row?.id || "";
+  const printable = (row) => request.directorBudgetAuthority ? (row?.id || row?.displayName || "") : (row?.displayName || row?.id || "");
   const models = (state.models || []).filter((item) => item.quota?.status !== "exhausted" && Number(item.quota?.remainingPercent ?? 1) > 0);
   if (request.model) {
     const matched = modelRecord({ models }, request.model, "antigravity");
@@ -276,7 +429,7 @@ function claudeModelScore(row, request, state, profile) {
 
 function providerModel(id, request, state, profile) {
   const requestedFamily = canonicalModelProvider(request.model);
-  if (request.model && requestedFamily && requestedFamily !== id && ["codex", "claude", "antigravity"].includes(id)) return "";
+  if (!request.directorBudgetAuthority && request.model && requestedFamily && requestedFamily !== id && ["codex", "claude", "antigravity"].includes(id)) return "";
   if (id === "codex") {
     return codexModel(request, state, profile);
   }
@@ -341,11 +494,18 @@ function providerEligibility(id, request, inventory, profile, history) {
   if (!state.available) return { eligible: false, reason: state.reason || "not installed" };
   if (!state.authenticated) return { eligible: false, reason: "not authenticated" };
   if (request.needsUi) return { eligible: false, reason: "visible UI is required; CLI dispatch is intentionally refused" };
-  const surfaces = state.surfaces || DEFAULT_SURFACES[id] || {};
+  const surfaces = {
+    ...(DEFAULT_SURFACES[id] || {}),
+    ...(state.surfaces || {}),
+    ...(state.permissions || {}),
+  };
   if (state.headless === false || surfaces.headless === false) return { eligible: false, reason: "provider has no verified headless execution surface" };
   const missingCapabilities = request.requiredCapabilities.filter((capability) => surfaces[capability] !== true);
   if (missingCapabilities.length) return { eligible: false, reason: `missing callable capabilities: ${missingCapabilities.join(", ")}` };
-  if (id === "antigravity" && !request.allowAntigravity) return { eligible: false, reason: "Antigravity CLI was not authorized for this lane" };
+  if (id === "antigravity" && !request.allowAntigravity && !request.directorProviderAuthorization) return { eligible: false, reason: "Antigravity CLI was not authorized for this lane" };
+  if (id === "antigravity" && request.readOnly && request.requiredCapabilities.includes("command") && !request.directorEffectAuthorization && !request.directorProviderAuthorization) {
+    return { eligible: false, reason: "read-only command tools require a granular headless permission surface; Antigravity only exposes broad auto-approval" };
+  }
   if (id === "claude" && profile.subscriptionOnlyClaude !== false && state.authMode === "api-key" && !request.allowPaidApi) {
     return { eligible: false, reason: "Claude would use API/PAYG billing; explicit allowPaidApi is required" };
   }
@@ -358,7 +518,7 @@ function providerEligibility(id, request, inventory, profile, history) {
       && (rosterMatch.quota?.status === "exhausted" || Number(rosterMatch.quota?.remainingPercent ?? 1) <= 0);
     const reason = !request.model
       ? "no policy-allowed model is available"
-      : requestedFamily && requestedFamily !== id
+      : !request.directorBudgetAuthority && requestedFamily && requestedFamily !== id
         ? `model "${request.model}" is a ${requestedFamily} model and never dispatches through ${id} (${CANONICAL_BINDING_HINT})`
         : !roster.length
           ? `the live ${id} model roster is unavailable; requested model "${request.model}" cannot be verified`
@@ -378,7 +538,7 @@ function providerEligibility(id, request, inventory, profile, history) {
   if (id === "codex" && remaining === null && request.preferredProvider === "auto") {
     return { eligible: false, reason: "shared Codex capacity is unknown; protect the shared Codex reserve until capacity becomes measurable" };
   }
-  if (history?.cooledDown && request.preferredProvider !== id) return { eligible: false, reason: `provider cooldown: ${history.cooldownReason || `${history.consecutiveFailures} consecutive failures`}` };
+  if (history?.cooledDown) return { eligible: false, reason: `provider cooldown: ${history.cooldownReason || `${history.consecutiveFailures} consecutive failures`}` };
   return { eligible: true, reason: "eligible", model, effort, ...capacity, authMode: state.authMode || "unknown" };
 }
 

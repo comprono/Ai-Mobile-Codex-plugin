@@ -6,11 +6,13 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { pluginVersion } = require("./lib/version");
+const { runtimeFingerprint } = require("./lib/runtime-identity");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-mobile-trusted-"));
 const workspace = path.join(root, "repo");
 process.env.AI_MOBILE_DATA_ROOT = path.join(root, "state");
 process.env.LOCALAPPDATA = path.join(root, "local");
+fs.mkdirSync(process.env.LOCALAPPDATA, { recursive: true });
 fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
 fs.writeFileSync(path.join(workspace, "src", "trusted.txt"), "base\n");
 const fakeBin = path.join(workspace, ".test-bin");
@@ -57,8 +59,8 @@ git(["commit", "-qm", "fixture"]);
 
 const { normalizeRequestedModel, trustedPrimaryDecision } = require("./core/trusted-models");
 const { cleanupIsolatedWorkspace, prepareWorkspaceForContract, rollbackPrimaryWorkspace } = require("./core/workspace-isolation");
-const { createRestartHandoff, safeReasoningEffort, safeResumeModel, safeThreadId } = require("./core/restart-handoff");
-const { jobDirectory } = require("./core/state-store");
+const { assertRestartRuntimeCurrent, createRestartHandoff, safeReasoningEffort, safeResumeModel, safeThreadId } = require("./core/restart-handoff");
+const { createTaskRecord, jobDirectory, readTask, updateTask } = require("./core/state-store");
 const { readJson, writeJson } = require("./core/utils");
 const { executeWorker } = require("./core/worker");
 
@@ -122,6 +124,15 @@ const generic = prepareWorkspaceForContract({ ...contract, model: "sonnet" }, "t
 assert.equal(generic.mode, "isolated-git-worktree");
 cleanupIsolatedWorkspace(generic);
 
+const directorPatch = prepareWorkspaceForContract({
+  ...contract,
+  deliverableKind: "patch",
+  directorProgram: { workPackageId: "work-package-build" },
+}, "task-director-0001", "job-director-0001", profile);
+assert.equal(directorPatch.mode, "isolated-git-worktree");
+assert.equal(directorPatch.skipModelReview, undefined);
+cleanupIsolatedWorkspace(directorPatch);
+
 const noChecks = prepareWorkspaceForContract({ ...contract, verificationCommands: [] }, "task-checks-0001", "job-checks-0001", profile);
 assert.equal(noChecks.mode, "isolated-git-worktree");
 cleanupIsolatedWorkspace(noChecks);
@@ -180,8 +191,30 @@ assert.equal(safeResumeModel("gpt-5.6-luna"), "gpt-5.6-luna");
 assert.throws(() => safeResumeModel("gpt-5.6-luna --danger"), /exact safe model id/);
 assert.equal(safeReasoningEffort("ultra"), "ultra");
 assert.throws(() => safeReasoningEffort("reckless"), /effort is invalid/);
+
+const cacheParent = path.join(root, "restart-cache", "ai-mobile");
+const staleCache = path.join(cacheParent, "1.4.2");
+const candidateCache = path.join(cacheParent, "1.4.3");
+for (const [cache, version] of [[staleCache, "1.4.2"], [candidateCache, "1.4.3"]]) {
+  fs.mkdirSync(path.join(cache, ".codex-plugin"), { recursive: true });
+  fs.writeFileSync(path.join(cache, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "ai-mobile", version }));
+}
+assert.throws(() => assertRestartRuntimeCurrent(staleCache), /STALE AI MOBILE TASK.*1\.4\.2.*1\.4\.3/i);
+assert.doesNotThrow(() => assertRestartRuntimeCurrent(candidateCache));
+
+const restartTask = createTaskRecord({
+  workspace,
+  outcome: "Ship the verified fixture",
+  latestUserRequest: "Continue without asking me to restate context",
+  outcomeAuthority: "user",
+  requirements: [{ id: "SHIP", description: "Ship the verified fixture", required: true, status: "failing", evidence: [] }],
+  constraints: [],
+  currentCodex: { model: "gpt-5.6-sol", effort: "ultra", files: [] },
+});
 const handoff = createRestartHandoff({
   userAuthorized: true,
+  taskId: restartTask.taskId,
+  migrateToDirector: true,
   threadId,
   workspace,
   verificationModel: "gpt-5.6-sol",
@@ -192,31 +225,75 @@ const handoff = createRestartHandoff({
   latestUserRequest: "Continue without asking me to restate context",
   priorities: ["finish acceptance evidence", "preserve the current task"],
   nextAction: "Run the trusted writer verification",
+  projectContract: false,
+  sourceDescriptors: { files: [{ locator: "src/trusted.txt", authorized: true }] },
+  authorization: { scopeId: "fixture", authorizedBy: "test", grantRef: "fixture", allowedTypes: ["file"] },
   cleanupPluginIds: ["ai-mobile@personal"],
 });
-assert.equal(handoff.schemaVersion, 2);
+assert.equal(handoff.schemaVersion, 4);
 assert.equal(handoff.oneShot, true);
 assert.equal(handoff.restartState, "prepared");
 assert.equal(handoff.expectedRuntimeVersion, pluginVersion());
+assert.equal(handoff.expectedRuntimeFingerprint, runtimeFingerprint());
+assert.equal(handoff.handoffMode, "migrate-program");
 assert.equal(handoff.verificationModel, "gpt-5.6-sol");
 assert.equal(handoff.verificationEffort, "ultra");
 assert.equal(handoff.resumeModel, "gpt-5.6-luna");
 assert.equal(handoff.resumeEffort, "low");
+assert.equal(handoff.reconcileContract.migrateToDirector, true);
 assert.match(handoff.resumePrompt, /Visible console model: gpt-5\.6-luna at low effort/);
-assert.match(handoff.resumePrompt, /Invoke run-task-cycle exactly once for this task/i);
-assert.match(handoff.resumePrompt, /maxRounds 3, maxMinutes 15, noProgressLimit 2/i);
+assert.match(handoff.resumePrompt, /run-program-campaign exactly once/i);
+assert.match(handoff.resumePrompt, /"migrateToDirector":true/);
+assert.doesNotMatch(handoff.resumePrompt, /run-task-cycle/i);
+assert.deepEqual(handoff.campaignContract, { taskId: restartTask.taskId, awaitBoundarySeconds: 30, maxRounds: 3, maxMinutes: 15, noProgressLimit: 2, horizonHours: 5 });
 assert.match(handoff.resumePrompt, /Do not poll or call it again in this turn/i);
 assert.equal(handoff.restartLog.length, 1);
 assert.deepEqual(handoff.refreshPluginIds, ["ai-mobile@ai-mobile"]);
 assert.equal(fs.existsSync(handoff.file), true);
+
+const directorTask = createTaskRecord({
+  workspace,
+  outcome: "Resume the existing Director program",
+  latestUserRequest: "Continue the existing Director program",
+  outcomeAuthority: "user",
+  requirements: [{ id: "DIRECT", description: "Resume without resetting", required: true, status: "failing", evidence: [] }],
+  constraints: [],
+  currentCodex: { model: "gpt-5.6-sol", effort: "ultra", files: [] },
+});
+updateTask(directorTask.taskId, (current) => ({
+  ...current,
+  program: { mode: "director-cfo", phase: "strategy", state: "active", marker: "must-survive-restart" },
+}));
+const directorBefore = JSON.stringify(readTask(directorTask.taskId).program);
+const directorHandoff = createRestartHandoff({
+  userAuthorized: true,
+  taskId: directorTask.taskId,
+  threadId: "11234567-89ab-cdef-0123-456789abcdef",
+  workspace,
+  verificationModel: "gpt-5.6-sol",
+  verificationEffort: "ultra",
+  resumeModel: "gpt-5.3-codex-spark",
+  resumeEffort: "medium",
+  nextAction: "Resume the existing program and run one finite campaign",
+});
+assert.equal(directorHandoff.handoffMode, "resume-program");
+assert.equal(directorHandoff.reconcileContract, null);
+assert.match(directorHandoff.resumePrompt, /Do not call reconcile-task, start-program, start-task/i);
+assert.doesNotMatch(directorHandoff.resumePrompt, /"migrateToDirector":true/);
+assert.match(directorHandoff.resumePrompt, /run-program-campaign exactly once/i);
+assert.equal(JSON.stringify(readTask(directorTask.taskId).program), directorBefore);
+
 const dryRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "restart-codex-handoff.ps1"), "-HandoffFile", handoff.file, "-DryRun"], { encoding: "utf8" });
 assert.equal(dryRun.status, 0, dryRun.stderr);
 const dry = JSON.parse(dryRun.stdout);
 assert.equal(dry.OneShot, true);
 assert.equal(dry.Recurring, false);
 assert.equal(dry.OpensProviderUi, false);
+assert.equal(dry.TaskId, restartTask.taskId);
+assert.equal(dry.HandoffMode, "migrate-program");
 assert.match(dry.ResumeSurface, /app-server same-task continuation/i);
 assert.equal(dry.ExpectedRuntimeVersion, pluginVersion());
+assert.equal(dry.ExpectedRuntimeFingerprint, runtimeFingerprint());
 assert.equal(dry.VerificationModel, "gpt-5.6-sol");
 assert.equal(dry.VerificationEffort, "ultra");
 assert.equal(dry.RequestedResumeModel, "gpt-5.6-luna");
@@ -277,6 +354,8 @@ const resumeSource = fs.readFileSync(path.join(__dirname, "resume-codex-thread.p
 assert.equal(resumeSource.includes("codex-app-server-resume.js"), true);
 assert.equal(resumeSource.includes("resume-complete"), true);
 assert.equal(resumeSource.includes("runningRuntimeVersion"), true);
+assert.equal(resumeSource.includes("continuationProofVerified"), true);
+assert.equal(resumeSource.includes("campaignCalls"), true);
 assert.equal(resumeSource.includes("codex exec resume"), false);
 const appServerSource = fs.readFileSync(path.join(__dirname, "codex-app-server-resume.js"), "utf8");
 assert.equal(appServerSource.includes('["app-server", "--stdio"]'), true);
@@ -284,13 +363,18 @@ assert.equal(appServerSource.includes('"thread/resume"'), true);
 assert.equal(appServerSource.includes('"thread/settings/update"'), true);
 assert.equal((appServerSource.match(/"turn\/start"/g) || []).length >= 1, true);
 assert.equal(appServerSource.includes("Fresh AI Mobile runtime proof was not observed"), true);
+assert.equal(appServerSource.includes("exactly one run-program-campaign"), true);
+assert.equal(appServerSource.includes('new Set(["reconciletask", "runprogramcampaign", "programreport"])'), true);
+assert.equal(appServerSource.includes('new Set(["runprogramcampaign", "programreport"])'), true);
+assert.equal(appServerSource.includes("Restart continuation used unauthorized AI Mobile tools"), true);
 
 const skillSource = fs.readFileSync(path.join(__dirname, "..", "skills", "ai-mobile", "SKILL.md"), "utf8");
-assert.equal(skillSource.includes("The visible Codex task is a lightweight project console"), true);
-assert.equal(skillSource.includes("gpt-5.6-luna at low effort"), true);
+assert.equal(skillSource.includes("The visible Codex task is a lightweight Spark project console"), true);
+assert.equal(skillSource.includes("gpt-5.3-codex-spark") && skillSource.includes("medium effort"), true);
 assert.equal(skillSource.includes("resume the same thread through " + String.fromCharCode(96) + "codex exec resume"), false);
 const mcpServerSource = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
-assert.equal(mcpServerSource.includes("official local Codex app-server"), true);
+assert.equal(mcpServerSource.includes("runtime version and build fingerprint"), true);
+assert.equal(mcpServerSource.includes("run-program-campaign"), true);
 fs.rmSync(root, { recursive: true, force: true });
 process.stdout.write(JSON.stringify({
   ok: true,
@@ -299,7 +383,10 @@ process.stdout.write(JSON.stringify({
   dirtyOwnershipRejected: true,
   deterministicVerificationRequired: true,
   restartHandoffOneShot: true,
+  staleRuntimeCannotPrepareHandoff: true,
+  directorRestartResumesWithoutReconciliation: true,
   concurrentCodexOwnershipIsolated: true,
   rollbackNeverTouchesUnownedPaths: true,
   trustedPrimaryWorkExecuted: true,
+  directorPatchesAlwaysIsolated: true,
 }, null, 2) + "\n");

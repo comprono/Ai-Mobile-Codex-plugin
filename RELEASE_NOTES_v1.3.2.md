@@ -1,6 +1,6 @@
 # AI Mobile 1.3.2 - visible restart continuity and resilient provider failover
 
-AI Mobile 1.3.2 repairs the real restart and Job Vibhu orchestration failures observed with 1.3.1.
+AI Mobile 1.3.2 repairs the real restart and production orchestration failures observed with 1.3.1.
 
 ## Changes
 

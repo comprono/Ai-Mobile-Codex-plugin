@@ -1,5 +1,87 @@
 # Changelog
 
+## 1.4.7 - 2026-07-24
+
+- Revises only the failed Job Vibhu operation to the exact confirmed-write command and preserves the accepted context and strategy.
+- Accepts strictly matched legacy operation receipts when deterministic verification proves the same allocation, side effect, command, and postcondition.
+- Preserves and adopts successful worker results after runtime-only receipt or verification adapter repairs instead of paying for duplicate work.
+- Authorizes exact isolated Director patch writers in Antigravity, maps the tests capability to `run-tests`, and prevents recovered failures from poisoning provider cooldown.
+- Falls back from a missing `pytest` executable to the equivalent `python -m pytest` invocation and records the exact fallback in verification evidence.
+- Proves the preserved Job Vibhu clone with plan integrity reduced from 580 to 0, clean startup preflight, an integrated REQ-004 patch, and 9 passing focused tests.
+
+## 1.4.6 - 2026-07-23
+
+- Renew a stopped program supervisor exactly once for one bounded, read-only reconciliation epoch while preserving hard program caps and blocking replay.
+- Release unused capacity from terminal allocation grants using actual durable receipts while retaining gross authorization totals for audit.
+- Integrate plan-derived execution context scouts as ordinary revision-fenced execution receipts without replacing the canonical bootstrap dossier.
+- Forbid write, edit, and patch tools in every read-only worker transport and require typed JSON artifacts in the final response.
+- Deterministically normalize redundant milestone dependency links and reject invented discovery paths or output files before worker launch.
+- Make the exact Job Vibhu public-path canary require a real acceptance-linked execution result and measure progress across all finite campaign slices.
+## 1.4.5 - 2026-07-23
+
+- Consume failed Director rounds exactly once as `correction-scheduled`, preserving recovery lineage without re-collecting or re-integrating stale work.
+- Stabilize budget authority across observation timestamp refreshes and allow one exclusive, capped attempt when authenticated provider quota capacity is unknown.
+- Preserve generic Antigravity command denial while permitting exact Director-budgeted, permission-preflighted read-only commands inside mandatory isolated snapshots.
+- Let `run-program-campaign` optionally return its first meaningful durable boundary, and make restart handoffs request that boundary by default.
+- Extend the exact Job Vibhu clone gate to reproduce the installed post-failure state and prove bounded, materially changed foundation reconciliation.
+## 1.4.4 - 2026-07-23
+
+- Correct release identity after 1.4.3 source diverged from its installed cache.
+- Budget strong reconciliation from complete observed invocation exposure, including Codex host-context overhead.
+- Preserve schema-valid read-only Director results after a measurable resource overrun so paid reasoning is not discarded; persist the breach for supervisor rebudgeting.
+- Constrain typed Codex workers with ephemeral output schemas, prefer completed messages over streaming fragments, and recover balanced JSON artifacts without preserving malformed output.
+- Exclude cooled providers during CFO allocation and reject a Codex worker binary older than its shared model cache before spending a failed attempt; rebudget to an eligible provider.
+- Import the full measured Antigravity model roster and reserve 10%/5%/2% of the selected model pool for frontier/balanced/efficient invocations before launch.
+- Use the native Antigravity CLI roster as the callable source of truth and translate canonical model IDs to exact CLI display labels so Pro requests cannot silently run on Flash.
+- Preserve the canonical database observation receipt across context handoffs and salvage only the expected schema-valid read-only artifact from an otherwise immutable worker snapshot.
+- Enforce per-requirement evidence floors, bounded code outputs with deterministic verification, and evidence-linked operational/code executor routes in the Master Plan.
+- Make the exact-state canary gate on Director outcomes rather than an exact round count.
+- Account for every active plan package exactly once as allocated or deferred without allowing future dependent work to change the current worker selection.
+
+## 1.4.3 - 2026-07-22
+
+- Adds one durable program-level supervisor above finite campaign epochs, preserving the original horizon, no-progress budget, wake/recovery ownership, campaign lineage, and cancellation across context-to-strategy transitions, capacity waits, crashes, and same-task restarts.
+- Rolls completed or expired finite campaigns into bounded new budget epochs without duplicate dispatch or integration; a finite campaign stop is no longer misreported as a terminal program blocker while the supervisor owns continuation.
+- Adds deterministic, bounded, read-only SQLite observation receipts tied to immutable snapshot hashes, so file-only context workers can inspect database evidence without receiving the binary database or command access.
+- Keeps semantic Director integration failures out of provider-wide cooldown, securely permits owned pre-plan reconciliation, requires a machine-actionable applied delta, and forces context refresh when no accepted dossier exists.
+- Clears stale running ownership after terminal integration errors, stops the affected campaign fail-closed, and records an executable recovery action instead of waiting for a completed worker.
+- Adds an idempotent cross-campaign CFO snapshot that counts failed and cancelled attempts, immutable allocation grants, missing-telemetry commitments, cache-aware tokens, elapsed duration, durable artifact bytes, live leases, and monotonic campaign exposure without treating unknown quota as zero.
+- Enforces whole-program resource caps and allocation attempt ceilings across mission, plan, and campaign revisions; unknown current quota enters bounded capacity recovery or fallback rather than resetting spend.
+- Separates the overall ownership horizon from spending authority: fixed no-budget limits can become a fingerprinted provisional CFO budget and then an accepted plan budget, while historical exposure, funded-allocation deduplication, missing telemetry, and explicit hard ceilings remain cumulative and restart-safe.
+- Allows already-authorized results to drain at or beyond a cap without new grants, reserves new allocations atomically, treats full concurrency as a targeted wait, permits bounded same-allocation retries, and renews stopped supervisors only after a material revision-fenced project change.
+- Normalizes same-task restart proof across MCP and deferred dynamic tool-call events and enforces exact mode-specific tool cardinality, rejecting every extra, failed, wrong-namespace, migration, or legacy call.
+- Makes program reports distinguish verified outcome progress, durable foundation progress, activity, resource movement, terminal job state, program-supervisor state, and one truthful recovery path while suppressing stale worker-wait guidance.
+- Proves restart continuation from a bounded per-turn notification capture, surviving global-ring eviction and failing closed if the capture exceeds its limit.
+- Documents all 42 local deterministic regression, end-to-end, and self-test gates while keeping authenticated provider canaries separate.
+
+## 1.4.2 - 2026-07-21
+
+- Makes the coordinator consume its real disk-inventory contract and separates Spark-specific Codex quota from the protected general Codex pool.
+- Carries complete fingerprinted Director contracts into providers, sends long Claude prompts through stdin, and keeps read-only observation workers in non-mutating provider modes.
+- Moves long Antigravity prompts out of Windows process arguments into isolated temporary prompt files and cleans them after the synchronous provider run.
+- Requires strict Master Plans with exact authoritative requirement IDs, plan-wide team and budget links, and deterministic evidence before requirements may pass.
+- Adds Director-owned evidence recovery, stronger reconciliation packets, all-failed-round reconciliation, legacy-round repair, and terminal coordinator replay refusal.
+- Captures immutable full-tree context snapshots, WAL-safe SQLite backups, static post-worker freshness checks, bounded RAM/disk leases, and crash cleanup.
+- Upgrades restart handoffs to prove the exact runtime build and exactly one same-task Director campaign with no reconciliation, migration, start, or legacy tools for an existing Director program.
+- Adds a mutation-guarded cloned-state release canary and regressions for the live inventory, long provider contracts, requirement ownership, evidence recovery, and restart continuation.
+- Proves the exact Job Vibhu clone through real context, frontier strategy, whole-plan team/budget compilation, and the first execution route while production remains unchanged.
+
+## 1.4.1 - 2026-07-21
+
+- Maps the live resource inventory's `worktreeStorage.freeMb` measurement into the Director-CFO resource ledger when machine-level free disk is absent.
+- Prevents valid context-scout assignments from being deferred as `machine-free-disk-unknown` after a verified restart.
+- Adds unit and full-program regressions using the real installed inventory shape.
+
+## 1.4.0 - 2026-07-21
+
+- Adds the Director-CFO program lifecycle: one-minute intake, authorized context dossiers, strong master plans, plan-wide resource budgets, typed teams, finite campaigns, and material reports.
+- Adds revision-fenced Mission, Context Dossier, Master Plan, Resource Budget, Campaign, Work Package, Execution Receipt, Failure Packet, Evidence Ledger, and Report Cursor contracts.
+- Adds strong failure reconciliation, material-change retry gates, context refresh after repeated acceptance failure, protected reserves, permission preflight, and evidence-gated program completion.
+- Gives one canonical legacy task an explicit evidence-preserving in-place Director migration; active legacy work is cancelled and no duplicate task is created.
+- Requires exact whole-runtime SHA-256 parity in both host caches and verifies both semantic version and build fingerprint before post-restart continuation.
+- Changes restart continuation to reconcile the same Director task and invoke one run-program-campaign; it never invokes the legacy task cycle.
+- Preserves the legacy task-cycle surface for existing tasks and deliberate diagnosis while making Director-CFO tools the normal complex-project workflow.
+
 ## 1.3.7 - 2026-07-21
 
 - Allows the authorized restart-handoff tool to prepare the exact-task upgrade boundary when the currently loaded AI Mobile runtime is stale.
@@ -18,7 +100,7 @@
 - Refuses automatic work when no durable graph node owns it and records orphan observation rejection once instead of retrying invisibly.
 - Adds a capped deterministic filename scan that gives planning workers likely implementation, fixture, runner, and focused-test paths while excluding provider worktrees, caches, logs, reports, backups, dependencies, and build output.
 - Adds an explicitly requested unattended mode with one finite five-hour coordinator and an explicitly requested passive five-minute status heartbeat; neither behavior starts by default.
-- Adds a regression for the real Job Vibhu failure shape: blocked acceptance, bounded path discovery, exact graph ownership, and stale Claude worktree exclusion.
+- Adds a regression for the real production failure shape: blocked acceptance, bounded path discovery, exact graph ownership, and stale Claude worktree exclusion.
 
 ## 1.3.4 - 2026-07-19
 

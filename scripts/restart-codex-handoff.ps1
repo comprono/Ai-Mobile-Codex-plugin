@@ -207,7 +207,7 @@ function Stop-ProcessTree {
     }
 }
 
-if ($handoff.oneShot -ne $true -or $handoff.userAuthorized -ne $true) {
+if ($handoff.schemaVersion -ne 4 -or $handoff.oneShot -ne $true -or $handoff.userAuthorized -ne $true) {
     throw "The restart handoff is not an authorized one-shot contract."
 }
 if ($handoff.consumedAt) {
@@ -215,6 +215,12 @@ if ($handoff.consumedAt) {
 }
 if ($handoff.threadId -notmatch "^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$") {
     throw "The restart handoff has an invalid Codex thread id."
+}
+if ([string]$handoff.taskId -notmatch "^task-[A-Za-z0-9._-]{8,100}$") {
+    throw "The restart handoff has no exact durable task id."
+}
+if ([string]$handoff.handoffMode -notin @("resume-program", "migrate-program")) {
+    throw "The restart handoff has an invalid continuation mode."
 }
 $workspace = (Resolve-Path -LiteralPath ([string]$handoff.workspace)).Path
 if (-not [string]$handoff.resumePrompt) {
@@ -238,7 +244,10 @@ if ($isDryRun) {
         OneShot = $true
         HandoffFile = $handoffPath
         ResumeSurface = "Exact OpenAI.Codex desktop reopen immediately after refresh, then visible official app-server same-task continuation"
+        TaskId = [string]$handoff.taskId
+        HandoffMode = [string]$handoff.handoffMode
         ExpectedRuntimeVersion = [string]$handoff.expectedRuntimeVersion
+        ExpectedRuntimeFingerprint = [string]$handoff.expectedRuntimeFingerprint
         VerificationModel = [string]$handoff.verificationModel
         VerificationEffort = [string]$handoff.verificationEffort
         RequestedResumeModel = $resumeModel
@@ -402,14 +411,23 @@ try {
     }
     Remove-Item -LiteralPath $resumeStdout, $resumeStderr -Force -ErrorAction SilentlyContinue
     $structuredResumeSucceeded = $resumeResult -and $resumeResult.ok -eq $true -and `
-        [string]$resumeResult.runtimeVersion -eq [string]$handoff.expectedRuntimeVersion
+        [string]$resumeResult.runtimeVersion -eq [string]$handoff.expectedRuntimeVersion -and `
+        [string]$resumeResult.runtimeFingerprint -eq [string]$handoff.expectedRuntimeFingerprint -and `
+        $resumeResult.continuationProof.verified -eq $true -and `
+        [string]$resumeResult.continuationProof.taskId -eq [string]$handoff.taskId -and `
+        [int]$resumeResult.continuationProof.campaignCalls -eq 1 -and `
+        $resumeResult.continuationProof.noStartOrLegacyTools -eq $true
     if (-not $structuredResumeSucceeded) {
         $resumeOutput = @($resumeStdoutText, $resumeStderrText) -join [Environment]::NewLine
         throw "Same-task app-server continuation failed with exit code $($resumeProcess.ExitCode): $($resumeOutput.Trim())"
     }
     $handoff = Get-Content -Raw -LiteralPath $handoffPath | ConvertFrom-Json
-    if ($handoff.modelSwitchVerified -ne $true -or [string]$handoff.runningRuntimeVersion -ne [string]$handoff.expectedRuntimeVersion) {
-        throw "The same-task continuation did not prove the fresh runtime and post-proof model switch."
+    if ($handoff.modelSwitchVerified -ne $true -or `
+        [string]$handoff.runningRuntimeVersion -ne [string]$handoff.expectedRuntimeVersion -or `
+        [string]$handoff.runningRuntimeFingerprint -ne [string]$handoff.expectedRuntimeFingerprint -or `
+        $handoff.continuationProofVerified -ne $true -or `
+        [string]$handoff.continuationProof.taskId -ne [string]$handoff.taskId) {
+        throw "The same-task continuation did not prove the fresh runtime, exact campaign, and post-proof model switch."
     }
 
     # The app-server can persist the continuation while the desktop renderer
@@ -428,7 +446,7 @@ try {
     $handoff | Add-Member -NotePropertyName desktopReloadedAfterContinuationAt -NotePropertyValue $reloadedAt -Force
     $handoff | Add-Member -NotePropertyName desktopForegroundedAt -NotePropertyValue $reloadedAt -Force
     $handoff | Add-Member -NotePropertyName desktopVisibleContinuationRequestedAt -NotePropertyValue $reloadedAt -Force
-    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex package and task were reloaded after fresh runtime proof and lightweight continuation completed."
+    Save-RestartState -State "completed" -Message "The exact OpenAI.Codex task was reloaded after fresh runtime proof and one verified same-task Director-CFO campaign with no start or legacy tools."
 } catch {
     $caughtError = $_
     Save-RestartState -State "failed" -Message "The one-shot restart handoff failed; Codex will still be reopened." -ErrorText $_.Exception.Message

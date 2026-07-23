@@ -17,6 +17,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Director-CFO context intake
+        run: node scripts/director-cfo-context-regression.js
+
+      - name: Director-CFO durable contracts
+        run: node scripts/director-cfo-contracts-regression.js
+
+      - name: Director-CFO resource budget
+        run: node scripts/director-cfo-budget-regression.js
+
+      - name: Director-CFO runtime state
+        run: node scripts/director-cfo-runtime-regression.js
+
+      - name: Truthful material program reporting
+        run: node scripts/program-reporting-regression.js
+
+      - name: Director-CFO typed execution
+        run: node scripts/director-cfo-typed-execution-regression.js
+
+      - name: Director-CFO end-to-end program
+        run: node scripts/director-cfo-program-regression.js
+
+      - name: Director-CFO in-place legacy migration
+        run: node scripts/director-cfo-migration-regression.js
+
       - name: Portable MCP smoke test
         run: node scripts/reliability-e2e.js
 
@@ -53,6 +77,9 @@ jobs:
       - name: Shared Codex and Claude installation
         run: node scripts/shared-host-install-regression.js
 
+      - name: Exact installed runtime parity
+        run: node scripts/installed-runtime-parity-regression.js
+
       - name: Outcome recovery and reconciliation
         run: node scripts/outcome-recovery-e2e.js
 
@@ -70,6 +97,9 @@ jobs:
 
       - name: Machine-wide resource guards
         run: node scripts/global-resource-regression.js
+
+      - name: SQLite observation receipt boundary
+        run: node scripts/sqlite-observation-regression.js
 
       - name: Worktree storage lifecycle
         run: node scripts/storage-lifecycle-regression.js

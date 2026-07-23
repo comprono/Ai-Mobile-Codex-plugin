@@ -27,7 +27,7 @@ git(["commit", "-m", "fixture"]);
 const workspaceRoot = spawnSync("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).stdout.trim();
 
 const fake = path.join(root, "fake-worker.js");
-fs.writeFileSync(fake, 'const fs=require("node:fs"),path=require("node:path");const file=path.join(process.cwd(),"src","ui.txt");fs.appendFileSync(file,"isolated-change\\n");process.stdout.write("updated isolated UI file\\n");', "utf8");
+fs.writeFileSync(fake, 'const fs=require("node:fs"),path=require("node:path");const file=path.join(process.cwd(),"src","ui.txt");fs.appendFileSync(file,"isolated-change\\n");process.stdout.write(JSON.stringify({is_error:false,result:"updated isolated UI file",model:"sonnet",usage:{input_tokens:20,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:8}}));', "utf8");
 let command;
 if (process.platform === "win32") {
   command = path.join(root, "ai-mobile-worker.cmd");

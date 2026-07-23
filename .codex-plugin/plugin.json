@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
-  "version": "1.3.7",
-  "description": "A finite event-driven local AI resource orchestrator with a lightweight Codex console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
+  "version": "1.4.7",
+  "description": "A Director-CFO orchestrator that turns complex projects into context-backed plans, resource budgets, typed worker teams, finite campaigns, and verified outcomes.",
   "repository": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "homepage": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
   "license": "MIT",
@@ -27,8 +27,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AI Mobile",
-    "shortDescription": "Coordinate local AI workers with durable evidence, not chat polling.",
-    "longDescription": "AI Mobile installs one shared MCP runtime into Codex and Claude Code. The visible Codex task is a lightweight zero-file project console, while a finite detached event-driven coordinator assigns acceptance-linked work to authenticated Codex CLI, Claude Code, Antigravity CLI, and optional Cursor workers using fresh capability, quota, reset, reliability, RAM, storage, priority, and total-cost evidence. Structured observations become exact writer units. Isolated patches are integrated exactly once with boundary and deterministic verification gates; isolated Codex writers return validated diffs without sandbox bypass. Passive material status and privacy-safe provider diagnostics provide visibility without provider probes, repeated model turns, Goals, automations, hidden continuations, or desktop launches.",
+    "shortDescription": "Direct complex AI projects through plans, budgets, teams, and evidence.",
+    "longDescription": "AI Mobile is a Director-CFO orchestration runtime shared by Codex and Claude Code. It bypasses tasks that can be completed directly within one minute. For complex work, the visible Codex task remains a lightweight zero-file console while separate workers build authorized project context, create a strong master plan, forecast total demand, allocate available models and permissions, execute typed work packages in finite campaigns, reconcile failures, and report only verified material progress. Durable revision fences, protected reserves, isolated patch integration, and acceptance evidence prevent stale work, wasteful retries, and false completion.",
     "developerName": "comprono",
     "websiteURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin",
     "privacyPolicyURL": "https://github.com/comprono/Ai-Mobile-Codex-plugin/blob/main/SECURITY.md",
@@ -40,6 +40,16 @@
     ],
     "category": "Productivity",
     "capabilities": [
+      "One-minute direct-task intake gate",
+      "Director-CFO mission and program lifecycle",
+      "Authorized multi-source context dossiers",
+      "Strong master plans with milestones and risks",
+      "Plan-wide demand forecasting and resource budgets",
+      "Typed worker teams and permission preflight",
+      "Finite resource-capped program campaigns",
+      "Strong failure reconciliation and replanning",
+      "Revision-fenced work packages and evidence",
+      "Deduplicated material program reports",
       "Lightweight zero-file Codex project console",
       "Separate Codex CLI, Claude, Antigravity, and Cursor work plane",
       "Dynamic role-based model selection",
@@ -73,9 +83,9 @@
       "Real multi-provider portfolio execution"
     ],
     "defaultPrompt": [
-      "Use AI Mobile to finish this project outcome with the visible task as a lightweight console and separate work-plane workers",
-      "Use AI Mobile for this nontrivial project task and require end-to-end evidence before completion",
-      "Use AI Mobile to coordinate these separate projects as one finite evidence-gated portfolio",
+      "Use AI Mobile as the Director-CFO to finish this project through authorized context, a master plan, a resource budget, typed worker teams, finite campaigns, and verified evidence",
+      "Use AI Mobile for this complex project; keep the visible task as the lightweight console and make workers perform the project work",
+      "Use AI Mobile to reconcile this existing Director-CFO program and continue from its latest verified state",
       "Show the passive AI Mobile resource inventory"
     ],
     "brandColor": "#14B8A6"

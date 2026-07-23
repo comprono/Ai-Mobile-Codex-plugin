@@ -22,6 +22,7 @@ const {
   createPortfolioRoundRecord,
   createRoundRecord,
   createTaskRecord,
+  jobDirectory,
   readPortfolio,
   readPortfolioRound,
   readRound,
@@ -32,7 +33,20 @@ const {
   updateTask,
 } = require("./state-store");
 const { readProfile } = require("../lib/orchestrator-profile");
-const { boundedList, utcNow } = require("./utils");
+const { boundedList, readJson, utcNow } = require("./utils");
+const {
+  assertDirectorIntegrationReady,
+  directorExecution,
+  directorProgramSummary,
+  integrateDirectorJob,
+  isDirectorTask,
+  prepareProgramDispatch,
+  programJobContract,
+  programRecommendedOrPending,
+  programRecommendedWorkUnits,
+  reconcileDirectorProgram,
+  terminalDirectorContracts,
+} = require("./director-cfo-orchestrator");
 
 const EVIDENCE_RANK = { activity: 0, "process-health": 1, "focused-test": 2, integration: 3, "end-to-end": 4, "user-visible": 5 };
 
@@ -721,6 +735,43 @@ function activePortfolioProjectRound(reference, taskId) {
 
 function reconcileSingleTask(args, portfolioReference = null) {
   const task = readTask(args.taskId);
+  if (isDirectorTask(task)) {
+    if (portfolioReference) throw new Error("Director-CFO reconciliation currently requires its direct taskId.");
+    const materialChange = (Object.prototype.hasOwnProperty.call(args, "outcome") && String(args.outcome || "").trim() !== task.outcome)
+      || (String(args.userRequest || args.latestUserRequest || "").trim() && String(args.userRequest || args.latestUserRequest).trim() !== String(task.latestUserRequest || "").trim())
+      || (Array.isArray(args.acceptanceEvidence) && args.acceptanceEvidence.length > 0)
+      || Object.prototype.hasOwnProperty.call(args, "constraints")
+      || Boolean(args.sourceDescriptors)
+      || Boolean(args.authorization)
+      || Object.prototype.hasOwnProperty.call(args, "projectContract")
+      || Array.isArray(args.authorizedPermissions);
+    const staleRound = activeRound(task);
+    if (staleRound && materialChange && args.cancelActiveWorkers === false) {
+      return {
+        taskId: task.taskId,
+        state: task.state,
+        reconciliationAllowed: false,
+        blocker: "The current campaign still owns workers under the stale Director-CFO contract.",
+        recoveryAction: "Call reconcile-task again with cancelActiveWorkers true, or collect the terminal campaign before revising.",
+        activeRoundId: staleRound.roundId,
+      };
+    }
+    const cancelledWorkers = staleRound && materialChange ? cancelTaskJobs(task.taskId) : [];
+    if (staleRound && materialChange) {
+      updateRound(task.taskId, staleRound.roundId, {
+        state: "invalidated",
+        invalidatedAt: utcNow(),
+        invalidatedReason: "Director-CFO mission changed from the latest user correction.",
+      });
+    }
+    const updated = reconcileDirectorProgram(task, args);
+    return {
+      ...singleTaskSummary(updated),
+      reconciliationAllowed: true,
+      reconciliation: updated.outcomeReconciliation || null,
+      cancelledWorkers,
+    };
+  }
   const context = discoverProjectContext(task.workspace);
   const outcomeInput = Object.prototype.hasOwnProperty.call(args, "outcome") ? args.outcome : task.outcome;
   const latestCorrection = String(args.userRequest || args.latestUserRequest || "").trim();
@@ -872,6 +923,9 @@ function terminalRoundState(rows) {
 function quotaPoolIds(providerId, provider, model) {
   const modelText = String(model || "").toLowerCase();
   const selected = (provider?.quotaPools || []).filter((pool) => {
+    if (Array.isArray(pool.modelIds) && pool.modelIds.length) {
+      return pool.modelIds.some((id) => String(id || "").toLowerCase() === modelText);
+    }
     const scope = String(pool.scope || "all").toLowerCase();
     return ["all", "shared", "global"].includes(scope) || !modelText || modelText.includes(scope) || scope.includes(modelText);
   });
@@ -914,19 +968,47 @@ function workerTaskContext(task) {
   };
 }
 function dispatchSingleRound(args, resources, histories, createJob) {
-  const task = synchronizeTaskWithProject(readTask(args.taskId));
+  let task = synchronizeTaskWithProject(readTask(args.taskId));
   if (task.state !== "active") throw new Error("Task " + task.taskId + " is " + task.state + "; it cannot dispatch another round.");
   const previousRoundRef = (task.rounds || []).at(-1);
   if (previousRoundRef) {
     const previous = readRound(task.taskId, previousRoundRef.roundId);
     if (previous.state === "running") throw new Error("Round " + previous.roundId + " is still running. Collect it at the integration point instead of creating duplicate work.");
   }
+  if (isDirectorTask(task)) task = prepareProgramDispatch(task, resources, histories);
 
   if (args.currentCodex?.files?.length) throw new Error("The lightweight project console cannot own project files.");
   const supplied = Array.isArray(args.workUnits) ? args.workUnits.slice(0, 2) : [];
-  const automatic = supplied.length ? [] : [recommendedWorkUnit(task)].filter(Boolean);
+  if (isDirectorTask(task) && supplied.length) throw new Error("Director-CFO programs dispatch only plan-owned, budgeted work packages; ad hoc workUnits are refused.");
+  const automatic = supplied.length
+    ? []
+    : isDirectorTask(task)
+      ? programRecommendedWorkUnits(task)
+          .filter((row) => !Array.isArray(args.programAllowedAllocationIds)
+            || args.programAllowedAllocationIds.includes(String(row.allocation?.allocationId || "")))
+          .slice(0, task.program.policy?.maxWorkers || 2)
+      : [recommendedWorkUnit(task)].filter(Boolean);
   const workUnits = supplied.length ? supplied : automatic;
-  if (!workUnits.length) throw new Error("No dependency-ready work-plane unit exists for this task.");
+  if (!workUnits.length) {
+    if (isDirectorTask(task)) {
+      const execution = directorExecution(task);
+      const deferred = task.program.runtime?.budget?.deferred || [];
+      return {
+        taskId: task.taskId,
+        roundId: null,
+        state: "blocked",
+        console: task.currentCodex,
+        currentCodex: task.currentCodex,
+        workers: [],
+        rejected: deferred.map((row) => ({ goal: row.workPackageId, reason: (row.reasons || []).join(", ") || "not funded" })),
+        recoveryPlan: null,
+        execution,
+        resources: resourceReport(task, [], deferred),
+        nextAction: execution.action,
+      };
+    }
+    throw new Error("No dependency-ready work-plane unit exists for this task.");
+  }
 
   const round = createRoundRecord(task.taskId, {
     state: "planning",
@@ -966,8 +1048,10 @@ function dispatchSingleRound(args, resources, histories, createJob) {
     }
     try {
       const selected = resources.providers[decision.provider];
+      const directorContract = programJobContract(task, unit);
       const receipt = createJob({
         ...decision.request,
+        ...directorContract,
         taskId: task.taskId,
         roundId: round.roundId,
         workGraphNodeId: unit.workGraphNodeId || null,
@@ -980,25 +1064,58 @@ function dispatchSingleRound(args, resources, histories, createJob) {
         quotaPoolIds: quotaPoolIds(decision.provider, selected, decision.request.model),
         fairnessKey: task.taskId,
       });
-      jobs.push({ ...receipt, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
+      jobs.push({ ...receipt, directorProgram: directorContract.directorProgram || null, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
       workerOwners.push({ goal: unitGoal, files: unitFiles });
-    } catch (error) { rejected.push({ goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
+    } catch (error) {
+      if (process.env.AI_MOBILE_CANARY_FAIL_FAST === "1" && /^release-canary-/.test(String(error.message || ""))) throw error;
+      rejected.push({ goal: unitGoal, reason: error.message, considered: decision.considered || [] });
+    }
   }
 
   const state = jobs.length ? "running" : "blocked";
   updateRound(task.taskId, round.roundId, { state, jobs, rejected });
+  const selectedDirectorIds = isDirectorTask(task)
+    ? new Set(workUnits.map((row) => row.workPackageId || row.workGraphNodeId).filter(Boolean))
+    : new Set();
   const updatedTask = updateTask(task.taskId, (current) => {
     current.capacitySnapshot = compactResources(resources);
     current.workGraph = (current.workGraph || []).map((node) => {
       const job = jobs.find((row) => row.workGraphNodeId === node.id);
       return job ? { ...node, state: "running", owner: { type: "worker", jobId: job.jobId, provider: job.provider } } : node;
     });
+    if (isDirectorTask(current)) {
+      current.program = {
+        ...current.program,
+        workPackages: (current.program.workPackages || []).map((row) => {
+          const job = jobs.find((item) => item.workGraphNodeId === row.workPackageId);
+          if (job) return { ...row, state: "running", jobId: job.jobId, dispatchedAt: utcNow() };
+          if (selectedDirectorIds.has(row.workPackageId)) {
+            return {
+              ...row,
+              state: "pending",
+              allocation: null,
+              permissionPreflight: null,
+              revisionFence: null,
+              canonicalContract: null,
+              routingFailure: rejected.find((item) => item.goal === row.goal)?.reason || "selected-allocation-was-not-dispatched",
+            };
+          }
+          return row;
+        }),
+        activeCampaign: jobs.length ? current.program.activeCampaign : null,
+        nextAction: jobs.length
+          ? "Wait for material worker terminals; then integrate each fenced deliverable once."
+          : "The selected allocation was rejected by final routing; refresh resources and rebudget before retry.",
+        updatedAt: utcNow(),
+      };
+    }
     return current;
   });
   const recoveryPlan = nextPlanForTask(updatedTask, rejected);
+  const baseExecution = isDirectorTask(updatedTask) ? directorExecution(updatedTask) : executionContract(updatedTask);
   const execution = jobs.length
     ? {
-        ...executionContract(updatedTask),
+        ...baseExecution,
         status: "workers-running",
         action: "Collect this finite round once at its integration point.",
         workPlaneAction: jobs.map((job) => job.goal).join(" | "),
@@ -1007,7 +1124,7 @@ function dispatchSingleRound(args, resources, histories, createJob) {
         mayEndTurn: true,
       }
     : {
-        ...executionContract(updatedTask, rejected),
+        ...(isDirectorTask(updatedTask) ? directorExecution(updatedTask) : executionContract(updatedTask, rejected)),
         status: "blocked",
         action: recoveryPlan.transitions[0]?.recoveryAction || "Refresh capacity only after a material provider transition.",
         mustDispatchNow: false,
@@ -1162,7 +1279,10 @@ function dispatchPortfolioRound(args, resources, histories, createJob) {
       });
       jobs.push({ ...receipt, projectId: project.projectId, taskId: project.taskId, workGraphNodeId: unit.workGraphNodeId || null, goal: unitGoal, reason: withMandateNote(decision.reason, mandatedUnit), economics: decision.economics, integrationAction: decision.request.integrationAction || "" });
       workerOwners.push({ projectId: project.projectId, workspace: project.workspace, goal: unitGoal, files: unitFiles });
-    } catch (error) { rejected.push({ projectId: project.projectId, goal: unitGoal, reason: error.message, considered: decision.considered || [] }); }
+    } catch (error) {
+      if (process.env.AI_MOBILE_CANARY_FAIL_FAST === "1" && /^release-canary-/.test(String(error.message || ""))) throw error;
+      rejected.push({ projectId: project.projectId, goal: unitGoal, reason: error.message, considered: decision.considered || [] });
+    }
   }
   const state = jobs.length ? "running" : "blocked";
   updatePortfolioRound(portfolio.portfolioId, round.roundId, { state, jobs, rejected });
@@ -1255,7 +1375,8 @@ function collectSingleRound(args) {
   const failures = results.filter((row) => row.terminal && row.state !== "completed").map((row) => ({ goal: row.goal, blocker: row.blocker }));
   const completed = results.filter((row) => row.terminal && row.state === "completed");
   const nextPlan = state === "running" ? null : nextPlanForTask(updatedTask, failures, completed);
-  return { taskId: task.taskId, roundId: round.roundId, state, results, recoveryPlan: nextPlan, execution: executionContract(updatedTask, failures, completed), resources: resourceReport(updatedTask, round.jobs || [], failures), nextAction: executionContract(updatedTask, failures, completed).action };
+  const execution = isDirectorTask(updatedTask) ? directorExecution(updatedTask) : executionContract(updatedTask, failures, completed);
+  return { taskId: task.taskId, roundId: round.roundId, state, results, recoveryPlan: nextPlan, execution, resources: resourceReport(updatedTask, round.jobs || [], failures), nextAction: execution.action };
 }
 
 function collectPortfolioRound(args) {
@@ -1325,11 +1446,165 @@ function integrationEvidenceFor(task, job, result) {
   };
 }
 
+function settleTerminalDirectorIntegrationFailures(taskId, integrations = []) {
+  const terminalFailures = integrations.filter((result) => (
+    result?.integrated !== true
+    && result?.managerTransition !== true
+    && result?.reconciled !== true
+    && result?.stale !== true
+    && result?.workPackageId
+  ));
+  if (!terminalFailures.length) return readTask(taskId);
+  const failedAt = utcNow();
+  return updateTask(taskId, (current) => {
+    const packages = current.program?.workPackages || [];
+    const owned = terminalFailures.filter((result) => packages.some((row) => (
+      row.workPackageId === result.workPackageId
+      && ["ready", "running"].includes(row.state)
+      && (!result.jobId || !row.jobId || row.jobId === result.jobId)
+    )));
+    if (!owned.length) return current;
+    const resultByPackage = new Map(owned.map((result) => [result.workPackageId, result]));
+    const failedIds = new Set(resultByPackage.keys());
+    const blocker = owned.map((result) => (
+      result.workPackageId + ": " + String(result.blocker || "director-integration-failed")
+    )).join(" | ").slice(0, 1200);
+    const activeCampaignId = current.program.activeCampaign?.campaignId || "";
+    current.program = {
+      ...current.program,
+      state: "blocked",
+      phase: "blocked",
+      activeCampaign: null,
+      campaigns: (current.program.campaigns || []).map((campaign) => (
+        activeCampaignId && campaign.campaignId === activeCampaignId
+          ? { ...campaign, state: "stopped", finishedAt: failedAt, stopReason: "terminal-integration-error" }
+          : campaign
+      )),
+      workPackages: packages.map((row) => {
+        const failure = resultByPackage.get(row.workPackageId);
+        if (!failure) return row;
+        const packageBlocker = String(failure.blocker || "director-integration-failed").slice(0, 1200);
+        return {
+          ...row,
+          state: "failed",
+          failedAt,
+          blocker: packageBlocker,
+          allocation: null,
+          permissionPreflight: null,
+          terminalIntegrationFailure: { jobId: failure.jobId || row.jobId || "", blocker: packageBlocker, failedAt },
+        };
+      }),
+      nextAction: "Terminal integration failed closed: " + blocker + ". Correct the Director integration contract, then resume this same task; do not wait for the completed worker or dispatch a duplicate.",
+      updatedAt: failedAt,
+    };
+    current.workGraph = (current.workGraph || []).map((node) => failedIds.has(node.id)
+      ? { ...node, state: "blocked", owner: null, lastFailure: blocker }
+      : node);
+    return current;
+  });
+}
+
 function integrateSingleRound(args) {
   const task = readTask(args.taskId);
   const round = readRound(task.taskId, args.roundId);
+  if (["integrated", "correction-scheduled"].includes(round.state)) {
+    const updated = readTask(task.taskId);
+    const execution = isDirectorTask(updated) ? directorExecution(updated) : executionContract(updated);
+    return {
+      taskId: task.taskId,
+      roundId: round.roundId,
+      state: round.state,
+      integrations: (round.integrationResults || []).map((result) => ({ ...result, alreadyIntegrated: result.integrated === true })),
+      acceptedEvidence: [],
+      summary: singleTaskSummary(updated),
+      execution,
+      nextAction: execution.action,
+      alreadySettled: true,
+    };
+  }
   if (round.state === "running" || round.state === "planning") throw new Error("Collect the finite round before integration.");
   if (round.state === "invalidated") throw new Error("An invalidated round cannot be integrated.");
+  if (isDirectorTask(task)) {
+    const integrations = (round.jobs || []).map((job) => {
+      const collected = readJob(task.taskId, job.jobId, "compact", 0);
+      const workPackageId = job.directorProgram?.workPackageId || job.workGraphNodeId;
+      if (collected.state !== "completed") {
+        return integrateDirectorJob({
+          taskId: task.taskId,
+          jobId: job.jobId,
+          workPackageId,
+          baseIntegration: { integrated: false, blocker: collected.blocker || "worker-failed" },
+        });
+      }
+      if (collected.readOnly === true) {
+        return integrateDirectorJob({
+          taskId: task.taskId,
+          jobId: job.jobId,
+          workPackageId,
+          baseIntegration: { integrated: true, typedDeliverable: true },
+        });
+      }
+      let directorIntegration = null;
+      const storedContract = readJson(path.join(jobDirectory(task.taskId, job.jobId), "contract.json"), {});
+      const integrationExpectation = { jobId: job.jobId };
+      if (Object.hasOwn(storedContract.directorProgram || {}, "revisionFence")) integrationExpectation.revisionFence = storedContract.directorProgram.revisionFence;
+      else if (Object.hasOwn(storedContract, "revisionFence")) integrationExpectation.revisionFence = storedContract.revisionFence;
+      const baseIntegration = integrateJob(task.taskId, job.jobId, {
+        beforeApply: () => assertDirectorIntegrationReady(task.taskId, workPackageId, integrationExpectation),
+        finalize: (verifiedIntegration) => {
+          directorIntegration = integrateDirectorJob({
+            taskId: task.taskId,
+            jobId: job.jobId,
+            workPackageId,
+            baseIntegration: verifiedIntegration,
+          });
+          if (directorIntegration?.integrated !== true) {
+            throw new Error(directorIntegration?.blocker || "director-program-finalization-failed");
+          }
+        },
+      });
+      if (directorIntegration) {
+        const rollbackIncomplete = baseIntegration.rollback && baseIntegration.rollback.rolledBack !== true;
+        return {
+          ...directorIntegration,
+          blocker: rollbackIncomplete ? baseIntegration.blocker : directorIntegration.blocker,
+          rollback: baseIntegration.rollback || directorIntegration.rollback,
+          recoveryAction: baseIntegration.recoveryAction || directorIntegration.recoveryAction,
+          verification: baseIntegration.verification || directorIntegration.verification,
+        };
+      }
+      if (String(baseIntegration.blocker || "").startsWith("integration-precondition-failed")) {
+        return { ...baseIntegration, jobId: job.jobId, workPackageId, stale: true };
+      }
+      return integrateDirectorJob({
+        taskId: task.taskId,
+        jobId: job.jobId,
+        workPackageId,
+        baseIntegration,
+      });
+    });
+    const failures = integrations.filter((row) => row?.integrated !== true && row?.managerTransition !== true);
+    if (failures.length) settleTerminalDirectorIntegrationFailures(task.taskId, integrations);
+    const settledAt = utcNow();
+    updateRound(task.taskId, round.roundId, {
+      state: failures.length ? "correction-scheduled" : "integrated",
+      integratedAt: failures.length ? null : settledAt,
+      settledAt: failures.length ? settledAt : null,
+      integrationResults: integrations.map((result) => ({ jobId: result.jobId, workPackageId: result.workPackageId || "", integrated: result.integrated, reconciled: result.reconciled === true, managerTransition: result.managerTransition === true, stale: result.stale === true, blocker: result.blocker || "" })),
+    });
+    const updated = readTask(task.taskId);
+    const execution = directorExecution(updated);
+    return {
+      taskId: task.taskId,
+      roundId: round.roundId,
+      state: failures.length ? "correction-scheduled" : "integrated",
+      integrations,
+      acceptedEvidence: [],
+      summary: singleTaskSummary(updated),
+      execution,
+      nextAction: execution.action,
+    };
+  }
   const integrations = (round.jobs || []).map((job) => {
     const collected = readJob(task.taskId, job.jobId, "compact", 0);
     if (collected.readOnly !== true) return { job, result: integrateJob(task.taskId, job.jobId) };
@@ -1450,8 +1725,42 @@ function recordTaskEvidence(taskId, entries) {
         requirement.blocker = null;
       }
       task.evidence = [...(task.evidence || []), { requirementId: requirement.id, ...evidence }].slice(-50);
+      if (isDirectorTask(task)) {
+        task.program.evidenceLedger = {
+          ...(task.program.evidenceLedger || {}),
+          entries: [...(task.program.evidenceLedger?.entries || []), {
+            requirementId: requirement.id,
+            ...evidence,
+            passed: entry.passed === true,
+          }].slice(-1000),
+        };
+        task.program.updatedAt = utcNow();
+      }
       if (entry.workGraphNodeId) {
         task.workGraph = (task.workGraph || []).map((node) => node.id === entry.workGraphNodeId && entry.passed === true ? { ...node, state: "completed", evidenceRefs: [...(node.evidenceRefs || []), evidence.ref].slice(-10) } : node);
+      }
+    }
+    if (isDirectorTask(task)) {
+      const required = task.requirements.filter((row) => row.required);
+      if (required.length && required.every((row) => row.status === "passing")) {
+        const now = utcNow();
+        const terminal = terminalDirectorContracts(task.program, task.requirements, "completed");
+        task.state = "completed";
+        task.completedAt = now;
+        task.program.state = "completed";
+        task.program.phase = "completed";
+        task.program.mission = terminal.mission;
+        task.program.contracts = terminal.contracts;
+        task.program.workPackages = (task.program.workPackages || []).map((row) => row.state === "completed"
+          ? row
+          : { ...row, state: "cancelled", cancelledAt: now });
+        task.program.activeCampaign = task.program.activeCampaign
+          ? { ...task.program.activeCampaign, state: "completed", finishedAt: now, stopReason: "acceptance-evidence-complete" }
+          : null;
+        task.program.nextAction = "All required acceptance evidence passed.";
+        task.workGraph = (task.workGraph || []).map((node) => node.state === "completed"
+          ? node
+          : { ...node, state: "cancelled", owner: null });
       }
     }
     return task;
@@ -1463,6 +1772,7 @@ function recordEvidence(args) {
   if (!entries.length) throw new Error("At least one evidence entry is required.");
   if (!args.portfolioId) {
     const updated = recordTaskEvidence(args.taskId, entries);
+    if (isDirectorTask(updated) && updated.state === "completed") cancelTaskJobs(updated.taskId);
     return taskSummary({ taskId: updated.taskId });
   }
   const portfolio = readPortfolio(args.portfolioId);
@@ -1505,6 +1815,7 @@ function recordEvidence(args) {
 }
 
 function synchronizeTaskWithProject(task) {
+  if (isDirectorTask(task)) return task;
   const context = discoverProjectContext(task.workspace);
   if (
     task.outcomeAuthority === "user"
@@ -1589,7 +1900,7 @@ function singleTaskSummary(task) {
   task = reconciled.task;
   const lastRound = reconciled.round;
   const latestFailures = lastRound?.state === "needs-correction"
-    ? (lastRound.integrationResults || []).filter((row) => row.integrated !== true).map((row) => ({
+    ? (lastRound.integrationResults || []).filter((row) => row.integrated !== true && row.managerTransition !== true).map((row) => ({
         goal: (lastRound.jobs || []).find((job) => job.jobId === row.jobId)?.goal || "",
         blocker: row.blocker || "integration-failed",
       })).concat((lastRound.jobs || []).flatMap((job) => {
@@ -1602,12 +1913,13 @@ function singleTaskSummary(task) {
       }))
     : [];
   const requirements = task.requirements.map((item) => ({ id: item.id, description: item.description, required: item.required !== false, status: item.status, minimumEvidenceLevel: item.minimumEvidenceLevel, evidenceCount: (item.evidence || []).length, blocker: item.blocker || null }));
-  const execution = executionContract(task, latestFailures);
+  const director = isDirectorTask(task);
+  const execution = director ? directorExecution(task) : executionContract(task, latestFailures);
   const workState = task.state === "completed"
     ? "completed"
     : lastRound?.state === "running"
       ? "workers-running"
-      : execution.mustStartNow
+      : execution.mustDispatchNow || execution.mustStartNow
         ? "ready-for-dispatch"
         : execution.status || "blocked";
   return {
@@ -1625,9 +1937,13 @@ function singleTaskSummary(task) {
     requirements,
     console: task.currentCodex,
     currentCodex: task.currentCodex,
-    workPlane: { plan: nextPlanForTask(task), recommendedWorkUnits: [recommendedWorkUnit(task)].filter(Boolean) },
+    workPlane: {
+      plan: director ? { state: task.program.phase, goal: task.program.nextAction, owner: "director-cfo" } : nextPlanForTask(task),
+      recommendedWorkUnits: director ? programRecommendedOrPending(task) : [recommendedWorkUnit(task)].filter(Boolean),
+    },
     nextPlan: nextPlanForTask(task),
     execution,
+    program: director ? directorProgramSummary(task) : null,
     resources: resourceReport(task, lastRound?.jobs || [], lastRound?.rejected || []),
     latestRound: lastRound ? { roundId: lastRound.roundId, state: lastRound.state, workers: (lastRound.jobs || []).map((job) => ({ jobId: job.jobId, provider: job.provider, model: job.model, goal: job.goal })) } : null,
     completionAllowed: task.state === "completed",
@@ -1660,7 +1976,33 @@ function completeSingleTask(taskId) {
   const missing = task.requirements.filter((item) => item.required && item.status !== "passing").map((item) => ({ id: item.id, description: item.description, status: item.status }));
   if (missing.length) return { taskId: task.taskId, state: task.state, completionAllowed: false, missing, rule: "Worker completion, process health, and activity cannot replace required acceptance evidence." };
   if (task.state === "completed") return { taskId: task.taskId, state: task.state, completionAllowed: true, completedAt: task.completedAt, alreadyCompleted: true };
-  const completed = updateTask(task.taskId, (current) => ({ ...current, state: "completed", completedAt: utcNow() }));
+  const completed = updateTask(task.taskId, (current) => {
+    const now = utcNow();
+    const next = { ...current, state: "completed", completedAt: now };
+    if (isDirectorTask(next)) {
+      const terminal = terminalDirectorContracts(next.program, next.requirements, "completed");
+      next.program = {
+        ...next.program,
+        state: "completed",
+        phase: "completed",
+        mission: terminal.mission,
+        contracts: terminal.contracts,
+        activeCampaign: next.program.activeCampaign
+          ? { ...next.program.activeCampaign, state: "completed", finishedAt: now, stopReason: "acceptance-evidence-complete" }
+          : null,
+        nextAction: "All required acceptance evidence passed.",
+        updatedAt: now,
+      };
+      next.program.workPackages = (next.program.workPackages || []).map((row) => row.state === "completed"
+        ? row
+        : { ...row, state: "cancelled", cancelledAt: now });
+      next.workGraph = (next.workGraph || []).map((node) => node.state === "completed"
+        ? node
+        : { ...node, state: "cancelled", owner: null });
+    }
+    return next;
+  });
+  if (isDirectorTask(completed)) cancelTaskJobs(completed.taskId);
   return { taskId: completed.taskId, state: completed.state, completionAllowed: true, completedAt: completed.completedAt };
 }
 
@@ -1685,7 +2027,27 @@ function cancelTask(args) {
   if (!args.portfolioId) {
     const task = readTask(args.taskId);
     const jobs = cancelTaskJobs(task.taskId);
-    const cancelled = updateTask(task.taskId, (current) => ({ ...current, state: "cancelled", cancelledAt: utcNow() }));
+    const cancelled = updateTask(task.taskId, (current) => {
+      const now = utcNow();
+      const next = { ...current, state: "cancelled", cancelledAt: now };
+      if (isDirectorTask(next)) {
+        const terminal = terminalDirectorContracts(next.program, next.requirements, "cancelled");
+        next.program = {
+          ...next.program,
+          state: "cancelled",
+          phase: "cancelled",
+          mission: terminal.mission,
+          contracts: terminal.contracts,
+          activeCampaign: next.program.activeCampaign
+            ? { ...next.program.activeCampaign, state: "cancelled", finishedAt: now, stopReason: "user-cancelled" }
+            : null,
+          workPackages: (next.program.workPackages || []).map((row) => ["pending", "ready", "running"].includes(row.state) ? { ...row, state: "cancelled", cancelledAt: now } : row),
+          nextAction: "Program cancelled; no further work is authorized.",
+          updatedAt: now,
+        };
+      }
+      return next;
+    });
     return { taskId: cancelled.taskId, state: cancelled.state, jobs };
   }
   const portfolio = readPortfolio(args.portfolioId);

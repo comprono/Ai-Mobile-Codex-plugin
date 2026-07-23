@@ -92,12 +92,55 @@ try {
   assert.equal(unverified.blocker, "deterministic-verification-required-before-primary-integration");
   assert.equal(fs.readFileSync(path.join(workspace, "src", "value.txt"), "utf8").trim(), "new");
 
+  process.env.EXPECT_VALUE = "stale";
+  fixtureJob("job-integration-0004", patch("new", "stale"), [{ name: "verify-value", command: "node", args: ["scripts/verify.js"] }]);
+  let finalizeCalled = false;
+  const staleFinalization = integrateJob(task.taskId, "job-integration-0004", {
+    finalize(candidate) {
+      finalizeCalled = true;
+      assert.equal(candidate.verification.passed, true);
+      throw new Error("stale Director revision fence");
+    },
+  });
+  delete process.env.EXPECT_VALUE;
+  assert.equal(finalizeCalled, true);
+  assert.equal(staleFinalization.integrated, false);
+  assert.match(staleFinalization.blocker, /integration-finalization-failed.*stale Director revision fence/);
+  assert.equal(staleFinalization.rollback.rolledBack, true);
+  assert.equal(fs.readFileSync(path.join(workspace, "src", "value.txt"), "utf8").trim(), "new");
+
+  fixtureJob("job-integration-0005", patch("new", "blocked"), [{ name: "verify-value", command: "node", args: ["scripts/verify.js"] }]);
+  const stalePrecondition = integrateJob(task.taskId, "job-integration-0005", {
+    beforeApply() { throw new Error("work package was superseded"); },
+  });
+  assert.equal(stalePrecondition.integrated, false);
+  assert.match(stalePrecondition.blocker, /integration-precondition-failed.*superseded/);
+  assert.equal(fs.readFileSync(path.join(workspace, "src", "value.txt"), "utf8").trim(), "new");
+
+  process.env.EXPECT_VALUE = "tampered";
+  fixtureJob("job-integration-0006", patch("new", "tampered"), [{ name: "verify-value", command: "node", args: ["scripts/verify.js"] }]);
+  const incompleteRollback = integrateJob(task.taskId, "job-integration-0006", {
+    finalize() {
+      fs.writeFileSync(path.join(workspace, "src", "value.txt"), "manual-race\n", "utf8");
+      throw new Error("stale result after concurrent file change");
+    },
+  });
+  delete process.env.EXPECT_VALUE;
+  assert.equal(incompleteRollback.integrated, false);
+  assert.match(incompleteRollback.blocker, /rollback-incomplete/);
+  assert.equal(incompleteRollback.rollback.rolledBack, false);
+  assert.match(incompleteRollback.recoveryAction, /Stop automatic integration/);
+  git(["restore", "src/value.txt"]);
+
   process.stdout.write(JSON.stringify({
     ok: true,
     patchAppliedOnce: true,
     deterministicVerificationPassed: true,
     userChangeProtected: true,
     unverifiedPatchRefused: true,
+    stalePreconditionRefused: true,
+    staleFinalizationRolledBack: true,
+    incompleteRollbackFailsClosed: true,
   }, null, 2) + String.fromCharCode(10));
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

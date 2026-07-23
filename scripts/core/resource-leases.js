@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { processAlive, readJson, utcNow, withDirectoryLock, writeJson } = require("./utils");
@@ -28,6 +29,76 @@ function normalizePools(provider, values) {
   return pools.length ? pools : [`${provider}:unknown-shared-pool`];
 }
 
+function measurementValue(value) {
+  if (value && typeof value === "object") {
+    if (value.state && value.state !== "known") return null;
+    value = value.value;
+  }
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.ceil(number) : null;
+}
+
+function reservationValue(contract, key) {
+  const sources = [
+    contract,
+    contract.resourceReservation,
+    contract.resourceEstimate,
+    contract.resourceDemand,
+    contract.demand,
+    contract.allocation?.cost,
+    contract.cost,
+    contract.directorProgram?.resourceEstimate,
+    contract.directorWorkerContract?.resourceEstimate,
+    contract.directorWorkerContract?.executionEnvelope?.resourceEstimate,
+  ];
+  for (const source of sources) {
+    if (!source || !Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = measurementValue(source[key]);
+    if (value === null) throw new Error(`Resource lease requires a known non-negative planned ${key} value.`);
+    return value;
+  }
+  return 0;
+}
+
+function plannedReservation(contract = {}) {
+  return {
+    ramMb: reservationValue(contract, "ramMb"),
+    diskMb: reservationValue(contract, "diskMb"),
+  };
+}
+
+function activeReservationTotal(rows, key) {
+  return (rows || []).reduce((total, row) => total + (measurementValue(row?.[key]) || 0), 0);
+}
+
+function liveFreeDiskMb() {
+  try {
+    fs.mkdirSync(stateRoot(), { recursive: true });
+    const stats = fs.statfsSync(stateRoot());
+    const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+    return Number.isFinite(freeBytes) ? Math.floor(freeBytes / (1024 * 1024)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function assertReservationFits(label, freeMb, floorMb, activeMb, requestedMb) {
+  const resource = String(label || "").toLowerCase();
+  const floor = Math.max(0, Number(floorMb) || 0);
+  if (!Number.isFinite(freeMb)) {
+    if (activeMb + requestedMb > 0) throw new Error(`machine-free-${resource}-unknown`);
+    return;
+  }
+  if (freeMb < floor) {
+    throw new Error(`minimum-free-${resource}-floor-would-be-crossed:live=${freeMb};floor=${floor}`);
+  }
+  const afterReservation = freeMb - activeMb - requestedMb;
+  if (afterReservation < floor) {
+    throw new Error(`minimum-free-${resource}-floor-would-be-crossed:live=${freeMb};active=${activeMb};requested=${requestedMb};floor=${floor}`);
+  }
+}
+
 function liveRows(record, now = Date.now()) {
   return (record.active || []).filter((lease) => {
     const expires = Date.parse(lease.expiresAt || "");
@@ -53,12 +124,23 @@ function acquireResourceLease(contract, jobId, profileValue) {
   return withLeaseLock(() => {
     const record = readJson(leaseFile(), emptyRecord());
     record.active = liveRows(record);
+    const reservation = plannedReservation(contract);
     const freeRamMb = Math.floor(os.freemem() / (1024 * 1024));
-    if (freeRamMb < profile.minimumFreeRamMb) {
-      throw new Error(`Machine free RAM (${freeRamMb} MB) is below the configured ${profile.minimumFreeRamMb} MB worker floor.`);
+    const freeDiskMb = liveFreeDiskMb();
+    assertReservationFits("RAM", freeRamMb, profile.minimumFreeRamMb, activeReservationTotal(record.active, "ramMb"), reservation.ramMb);
+    assertReservationFits("disk", freeDiskMb, profile.worktreeMinFreeMb, activeReservationTotal(record.active, "diskMb"), reservation.diskMb);
+    const programLimits = contract.programResourceLimits || {};
+    const supervisorGlobalLimit = Math.floor(Number(programLimits.maxGlobalWorkers || 0));
+    const effectiveGlobalLimit = Number.isFinite(supervisorGlobalLimit) && supervisorGlobalLimit > 0
+      ? Math.min(profile.maxGlobalWorkers, supervisorGlobalLimit)
+      : profile.maxGlobalWorkers;
+    if (record.active.length >= effectiveGlobalLimit) {
+      throw new Error(`Machine-wide worker limit (${effectiveGlobalLimit}) is already in use. global-worker-cap-exhausted:${record.active.length}>=${effectiveGlobalLimit}`);
     }
-    if (record.active.length >= profile.maxGlobalWorkers) {
-      throw new Error(`Machine-wide worker limit (${profile.maxGlobalWorkers}) is already in use.`);
+    const supervisorProgramLimit = Math.floor(Number(programLimits.maxWorkers || 0));
+    const sameProgramRows = record.active.filter((lease) => lease.taskId === contract.taskId);
+    if (Number.isFinite(supervisorProgramLimit) && supervisorProgramLimit > 0 && sameProgramRows.length >= supervisorProgramLimit) {
+      throw new Error(`Program worker limit (${supervisorProgramLimit}) is already in use. program-worker-cap-exhausted:${sameProgramRows.length}>=${supervisorProgramLimit}`);
     }
     const provider = String(contract.provider || "").trim();
     const providerRows = record.active.filter((lease) => lease.provider === provider);
@@ -81,6 +163,8 @@ function acquireResourceLease(contract, jobId, profileValue) {
       model: contract.model || "",
       quotaPoolIds,
       workspace: contract.workspace,
+      ramMb: reservation.ramMb,
+      diskMb: reservation.diskMb,
       pid: null,
       acquiredAt: utcNow(),
       expiresAt: new Date(Date.now() + (Math.max(30, Number(contract.timeoutSeconds || 900)) + 120) * 1000).toISOString(),
@@ -106,11 +190,12 @@ function bindLeasePid(jobId, pid) {
 function releaseResourceLease(jobId) {
   return withLeaseLock(() => {
     const record = readJson(leaseFile(), emptyRecord());
-    const before = (record.active || []).length;
+    const rows = record.active || [];
+    const released = rows.some((lease) => lease.jobId === jobId);
     record.active = liveRows(record).filter((lease) => lease.jobId !== jobId);
     record.updatedAt = utcNow();
     writeJson(leaseFile(), record);
-    return { released: record.active.length < before, active: record.active.length };
+    return { released, active: record.active.length };
   });
 }
 

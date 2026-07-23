@@ -80,6 +80,22 @@ function safeRelativePath(workspace, value) {
   return path.relative(workspace, absolute).replace(/\\/g, "/") || ".";
 }
 
+function fileSha256(file) {
+  const hash = crypto.createHash("sha256");
+  const descriptor = fs.openSync(file, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    while (true) {
+      const count = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!count) break;
+      hash.update(buffer.subarray(0, count));
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return hash.digest("hex");
+}
+
 function readJson(file, fallback = null) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -226,6 +242,7 @@ module.exports = {
   boundedList,
   commandResult,
   commandInvocation,
+  fileSha256,
   isInside,
   localDataFile,
   processAlive,

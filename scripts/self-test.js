@@ -34,9 +34,13 @@ async function run() {
       cursor: { available: false, authenticated: false, reason: "not installed", models: [], quotaPools: [] },
     } };
 
-    assert.equal(TOOLS.length, 15);
-    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-task", "reconcile-task", "dispatch-round", "run-task-cycle", "collect-round", "integrate-round", "record-evidence", "task-summary", "material-status", "complete-task", "cancel-task", "resource-inventory", "provider-diagnostics", "orchestrator-profile", "prepare-restart-handoff"]);
-    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 15);
+    assert.equal(TOOLS.length, 18);
+    assert.deepEqual(TOOLS.map((tool) => tool.name), ["start-program", "run-program-campaign", "program-report", "start-task", "reconcile-task", "dispatch-round", "run-task-cycle", "collect-round", "integrate-round", "record-evidence", "task-summary", "material-status", "complete-task", "cancel-task", "resource-inventory", "provider-diagnostics", "orchestrator-profile", "prepare-restart-handoff"]);
+    assert.equal(handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, __filename).result.tools.length, 18);
+    const runProgramCampaignTool = TOOLS.find((tool) => tool.name === "run-program-campaign");
+    const restartHandoffTool = TOOLS.find((tool) => tool.name === "prepare-restart-handoff");
+    assert.equal(runProgramCampaignTool.inputSchema.properties.horizonHours.maximum, 168);
+    assert.equal(restartHandoffTool.inputSchema.properties.horizonHours.maximum, 168);
 
     const task = startTask({ workspace, outcome: "Ship verified fixture", currentModel: "gpt-5.6-sol", acceptanceEvidence: ["Fixture passes end to end"] }, resources);
     assert.match(task.taskId, /^task-/);
@@ -83,6 +87,7 @@ async function run() {
 
     const codexWriterArgs = buildCodexExecArgs({ workspace, model: "gpt-fixture", effort: "medium", readOnly: false });
     assert.deepEqual(codexWriterArgs.slice(0, 3), ["-a", "never", "exec"]);
+    assert.equal(codexWriterArgs.includes("--skip-git-repo-check"), true);
     assert.equal(codexWriterArgs[codexWriterArgs.indexOf("--sandbox") + 1], "workspace-write");
     assert.equal(codexWriterArgs.includes("plugins"), true);
 
@@ -114,7 +119,7 @@ async function run() {
       assert.equal(serverSource.includes(forbidden), false);
       assert.equal(skillSource.includes(forbidden), false);
     }
-    return { ok: true, assertions: 55, durationMs: Date.now() - started, tools: TOOLS.length };
+    return { ok: true, assertions: 57, durationMs: Date.now() - started, tools: TOOLS.length };
   } finally {
     if (savedDataRoot === undefined) delete process.env.AI_MOBILE_DATA_ROOT; else process.env.AI_MOBILE_DATA_ROOT = savedDataRoot;
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocalAppData;

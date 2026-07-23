@@ -1,0 +1,21 @@
+# AI Mobile 1.4.3
+
+AI Mobile 1.4.3 fixes the stall exposed by the first real Director-CFO campaign after the 1.4.2 activation.
+
+The central correction is a durable program-level supervisor above finite campaign epochs. A campaign may stop at a slice, context-to-strategy boundary, capacity wait, or budget-epoch horizon without abandoning the project. The supervisor preserves the original overall horizon, no-progress count, campaign lineage, next wake, recovery owner, and cancellation state across process loss and restart, then resumes the same durable task without duplicate dispatch or integration. Individual campaigns remain finite and resource-capped.
+
+Database context now crosses the worker boundary as a deterministic, bounded, read-only observation receipt tied to the immutable SQLite snapshot hash. A context worker with only file-reading tools can inspect the receipt, while validation requires receipt-backed database observation instead of mistaking snapshot creation for semantic access.
+
+Reconciliation no longer stalls the program by cooling down an entire provider after a semantic integration failure. Securely owned reconciliation created before the first Master Plan can integrate without a nonexistent plan fence, but only an exact package change counts as recovery. If no accepted Context Dossier exists, recovery must refresh context. Terminal jobs release stale package ownership and leave an executable next action.
+
+The CFO now keeps one idempotent resource snapshot across all campaign epochs and program revisions. It counts every durable attempt, including failed and cancelled jobs; commits immutable allocation ceilings when telemetry is missing; counts Claude cache tokens once; tracks duration, durable artifact bytes, and live leases; and refuses attempts or usage beyond the original allocation grant. Unknown provider quota remains unknown: it blocks current provider reuse or triggers bounded capacity recovery, but is never rewritten as zero historical spend.
+Program spending authority is independent of the ownership horizon. A fixed conservative envelope applies before a budget exists; a revision-fenced provisional CFO budget replaces it dimension by dimension; and an accepted plan budget may replace that once. Historical exposure is added once, funded allocations are deduplicated, missing telemetry commits the immutable grant, and repeated budget fingerprints cannot expand limits. Explicit hard ceilings only tighten.
+
+At a resource boundary, existing authorized work remains drainable without granting new consumption. The supervisor can wait for an in-flight worker, collect and integrate a completed result, refresh a budget without dispatch, reuse a reserved allocation retry, or wait for a targeted lease/quota transition. New allocations and campaign epochs require positive authority under an atomic task-level reservation. Material plan, context, budget, evidence, or user-correction changes may renew a stopped supervisor under a new fenced epoch; unchanged replay, completion, and cancellation remain terminal.
+
+
+Program reports now separate verified outcome progress, durable context or plan progress, worker activity, resource movement, and actionable blockers. Activity-only churn is suppressed. Reports expose the program supervisor, aggregate CFO snapshot, responsible worker, provider, model, terminal job state, stale ownership, and one real recovery action instead of presenting finite campaign stops or resource use as outcome progress.
+
+The same-task restart verifier now normalizes Codex app-server `mcpToolCall` and deferred `dynamicToolCall` events. Verification permits exactly one AI Mobile inventory call; resume permits exactly one campaign call; migration permits exactly one reconciliation followed by one campaign. Mixed representations are deduplicated by call identity, and every extra or failed AI Mobile action fails closed.
+
+The documented deterministic release matrix now enumerates all 42 local regression, end-to-end, and self-test scripts, including campaign continuation, failed-round replay, model identity, operational dispatch, resource enforcement, aggregate program resources, reporting, SQLite observation, and SQLite snapshot checks. Authenticated provider and cloned-state canaries remain separate release gates; this note does not claim they have passed.

@@ -41,7 +41,7 @@ function Save-ResumeState {
 }
 
 $handoff = Get-Content -Raw -LiteralPath $script:handoffPath | ConvertFrom-Json
-if ($handoff.oneShot -ne $true -or $handoff.userAuthorized -ne $true -or -not $handoff.consumedAt) {
+if ($handoff.schemaVersion -ne 4 -or $handoff.oneShot -ne $true -or $handoff.userAuthorized -ne $true -or -not $handoff.consumedAt) {
     throw "App-server continuation requires one consumed, authorized, one-shot handoff."
 }
 if ($handoff.threadId -notmatch "^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$") {
@@ -49,6 +49,9 @@ if ($handoff.threadId -notmatch "^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$") {
 }
 if (-not [string]$handoff.expectedRuntimeVersion) {
     throw "The restart handoff has no expected runtime version."
+}
+if ([string]$handoff.expectedRuntimeFingerprint -notmatch "^[a-fA-F0-9]{64}$") {
+    throw "The restart handoff has no expected runtime fingerprint."
 }
 if (-not [string]$handoff.resumeModel -or -not [string]$handoff.resumePrompt) {
     throw "The restart handoff has no exact lightweight resume contract."
@@ -67,21 +70,37 @@ try {
         throw $resultText.Trim()
     }
     $result = $resultText | ConvertFrom-Json
-    if ($result.ok -ne $true -or [string]$result.runtimeVersion -ne [string]$handoff.expectedRuntimeVersion) {
+    if ($result.ok -ne $true -or `
+        [string]$result.runtimeVersion -ne [string]$handoff.expectedRuntimeVersion -or `
+        [string]$result.runtimeFingerprint -ne [string]$handoff.expectedRuntimeFingerprint -or `
+        $result.continuationProof.verified -ne $true -or `
+        [string]$result.continuationProof.taskId -ne [string]$handoff.taskId -or `
+        [int]$result.continuationProof.campaignCalls -ne 1 -or `
+        $result.continuationProof.noStartOrLegacyTools -ne $true) {
         throw "The app-server continuation did not prove the expected AI Mobile runtime."
+    }
+    if ([string]$handoff.handoffMode -eq "resume-program" -and [int]$result.continuationProof.reconcileCalls -ne 0) {
+        throw "The existing Director-CFO program was reconciled or migrated instead of resumed in place."
+    }
+    if ([string]$handoff.handoffMode -eq "migrate-program" -and `
+        ([int]$result.continuationProof.reconcileCalls -ne 1 -or $result.continuationProof.migrationVerified -ne $true)) {
+        throw "The legacy durable task migration was not proved before campaign execution."
     }
 
     $handoff = Get-Content -Raw -LiteralPath $script:handoffPath | ConvertFrom-Json
     $handoff | Add-Member -NotePropertyName runningRuntimeVersion -NotePropertyValue ([string]$result.runtimeVersion) -Force
+    $handoff | Add-Member -NotePropertyName runningRuntimeFingerprint -NotePropertyValue ([string]$result.runtimeFingerprint) -Force
     $handoff | Add-Member -NotePropertyName verificationTurnId -NotePropertyValue ([string]$result.verificationTurnId) -Force
     $handoff | Add-Member -NotePropertyName continuationTurnId -NotePropertyValue ([string]$result.continuationTurnId) -Force
     $handoff | Add-Member -NotePropertyName actualVerificationModel -NotePropertyValue ([string]$result.verificationModel) -Force
     $handoff | Add-Member -NotePropertyName actualResumeModel -NotePropertyValue ([string]$result.resumeModel) -Force
     $handoff | Add-Member -NotePropertyName actualResumeEffort -NotePropertyValue ([string]$result.resumeEffort) -Force
+    $handoff | Add-Member -NotePropertyName continuationProof -NotePropertyValue $result.continuationProof -Force
+    $handoff | Add-Member -NotePropertyName continuationProofVerified -NotePropertyValue $true -Force
     $handoff | Add-Member -NotePropertyName modelSwitchVerified -NotePropertyValue $true -Force
     $handoff | Add-Member -NotePropertyName continuationCompletedAt -NotePropertyValue ([DateTime]::UtcNow.ToString("o")) -Force
     Write-Handoff -Value $handoff
-    Save-ResumeState -State "resume-complete" -Message "Fresh runtime verified first; the same task then completed its lightweight console continuation through the official Codex app-server."
+    Save-ResumeState -State "resume-complete" -Message "Fresh runtime, exact same-task campaign, and no-start-or-legacy continuation were verified through the official Codex app-server."
     $result | ConvertTo-Json -Depth 6
 } catch {
     Save-ResumeState -State "resume-failed" -Message "The same-task app-server continuation failed closed before completion." -ErrorText $_.Exception.Message

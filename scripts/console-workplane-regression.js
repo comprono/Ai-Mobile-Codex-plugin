@@ -137,13 +137,13 @@ try {
   const noSwitch = skill.indexOf("Do not switch the visible task");
   const closeDesktop = skill.indexOf("closes only OpenAI.Codex");
   const reopen = skill.indexOf("immediately reopens the exact OpenAI.Codex task");
-  const verify = skill.indexOf("requires its runtimeVersion");
-  const switchAfter = skill.indexOf("Only after that tool evidence");
+  const verify = skill.indexOf("requires both runtimeVersion and runtimeFingerprint");
+  const switchAfter = skill.indexOf("Only after both values match");
   assert.ok(fix >= 0 && fix < noSwitch && noSwitch < closeDesktop && closeDesktop < reopen && reopen < verify && verify < switchAfter);
   assert.match(skill, /If nothing changed, emit nothing\./);
   assert.match(skill, /immediately pause that same heartbeat/);
   const server = fs.readFileSync(path.join(__dirname, "mcp", "server.js"), "utf8");
-  assert.ok(server.indexOf('name === "prepare-restart-handoff"') < server.indexOf("assertCurrentRuntime();"));
+  assert.ok(server.indexOf("assertCurrentRuntime();") < server.indexOf('name === "prepare-restart-handoff"'));
 
   process.stdout.write(JSON.stringify({
     ok: true,
@@ -152,7 +152,7 @@ try {
     unavailableFailsClosed: true,
     restartSequenceEnforced: true,
     terminalReporterStops: true,
-    staleRuntimeCanPrepareRestart: true,
+    staleRuntimeCannotPrepareRestart: true,
   }, null, 2) + String.fromCharCode(10));
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

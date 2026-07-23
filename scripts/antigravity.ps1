@@ -1,5 +1,5 @@
 param(
-  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','provider-diagnostics','start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','material-status','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
+  [Parameter(Position=0)][ValidateSet('setup','resource-inventory','provider-diagnostics','start-program','run-program-campaign','program-report','start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','material-status','complete-task','cancel-task','orchestrator-profile','prepare-restart-handoff','self-test','privacy')][string]$Command = 'setup',
   [string]$ContractFile = '',
   [string]$TaskId = '',
   [string]$PortfolioId = '',
@@ -35,7 +35,7 @@ switch ($Command) {
       PluginRoot = $Root
       StartupBehavior = 'passive; no provider desktop application is opened'
       StateRoot = '%LOCALAPPDATA%\AI Mobile\v1'
-      Tools = @('start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','material-status','complete-task','cancel-task','resource-inventory','provider-diagnostics','orchestrator-profile','prepare-restart-handoff')
+      Tools = @('start-program','run-program-campaign','program-report','start-task','reconcile-task','dispatch-round','run-task-cycle','collect-round','integrate-round','record-evidence','task-summary','material-status','complete-task','cancel-task','resource-inventory','provider-diagnostics','orchestrator-profile','prepare-restart-handoff')
     } | ConvertTo-Json -Depth 4
   }
   'resource-inventory' {
@@ -47,6 +47,12 @@ switch ($Command) {
     $args = @('provider-diagnostics-cli')
     if ($ContractFile) { $args += @('--json-file',(Require-Contract)) }
     Invoke-Node $args
+  }
+  'start-program' { Invoke-Node @('start-program-cli','--json-file',(Require-Contract)) }
+  'run-program-campaign' { Invoke-Node @('run-program-campaign-cli','--json-file',(Require-Contract)) }
+  'program-report' {
+    if (-not $TaskId) { throw '-TaskId is required.' }
+    Invoke-Node @('program-report-cli','--task-id',$TaskId)
   }
   'start-task' { Invoke-Node @('start-task-cli','--json-file',(Require-Contract)) }
   'reconcile-task' { Invoke-Node @('reconcile-task-cli','--json-file',(Require-Contract)) }

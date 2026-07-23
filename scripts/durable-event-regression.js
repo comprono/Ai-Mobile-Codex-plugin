@@ -53,8 +53,11 @@ const observationWorkspace = workspace("observation", "verify-planned.js", "plan
 const detachedWorkspace = workspace("detached", "verify-durable.js", "durable.txt", "DURABLE_OK");
 const lostWorkspace = workspace("lost-worker", "verify-lost.js", "lost.txt", "NEVER_WRITTEN");
 const staleWorkspace = workspace("stale-round", "verify-stale.js", "stale.txt", "STALE_OK");
+const replayWorkspace = workspace("coordinator-replay", "verify-replay.js", "replay.txt", "REPLAY_OK");
+const exitEntrypoint = path.join(root, "coordinator-exit.js");
+fs.writeFileSync(exitEntrypoint, "process.exit(0);\n", "utf8");
 
-fs.writeFileSync(path.join(fakeBin, "fake-claude.js"), `process.stdout.write(JSON.stringify({is_error:false,structured_output:{outcome:"Observed the bounded gap and produced one exact implementation unit.",evidence:["context.md identifies the fixture"],checks:["node verify-planned.js"],blocker:"",blockerOwner:"",recoveryTrigger:"",recoveryAction:"",proposedWorkUnits:[{goal:"Create planned.txt containing PLANNED_OK",relevantFiles:["context.md","verify-planned.js","planned.txt"],expectedFiles:["planned.txt"],acceptanceCriteria:["node verify-planned.js exits zero"],verificationCommands:[{name:"verify-planned",command:"node",args:["verify-planned.js"],timeoutSeconds:30}],taskKind:"code",complexity:"medium",priority:100}]},usage:{input_tokens:40,output_tokens:20}}));\n`, "utf8");
+fs.writeFileSync(path.join(fakeBin, "fake-claude.js"), `process.stdout.write(JSON.stringify({is_error:false,model:"sonnet",structured_output:{outcome:"Observed the bounded gap and produced one exact implementation unit.",evidence:["context.md identifies the fixture"],checks:["node verify-planned.js"],blocker:"",blockerOwner:"",recoveryTrigger:"",recoveryAction:"",proposedWorkUnits:[{goal:"Create planned.txt containing PLANNED_OK",relevantFiles:["context.md","verify-planned.js","planned.txt"],expectedFiles:["planned.txt"],acceptanceCriteria:["node verify-planned.js exits zero"],verificationCommands:[{name:"verify-planned",command:"node",args:["verify-planned.js"],timeoutSeconds:30}],taskKind:"code",complexity:"medium",priority:100}]},usage:{input_tokens:40,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:20}}));\n`, "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-claude.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0fake-claude.js" %*\r\n`, "utf8");
 fs.writeFileSync(path.join(fakeBin, "fake-codex.js"), [
   'const fs=require("node:fs"); const fixture=fs.existsSync("verify-durable.js")?["durable.txt","DURABLE_OK"]:fs.existsSync("verify-stale.js")?["stale.txt","STALE_OK"]:["planned.txt","PLANNED_OK"]; const [file,value]=fixture;',
@@ -69,10 +72,11 @@ fs.writeFileSync(path.join(fakeBin, "fake-codex-fail.cmd"), '@echo off\r\necho {
 const { inventory: unusedInventory } = require("./core/capacity");
 void unusedInventory;
 const { createJob, statusFor } = require("./core/job-store");
-const { coordinatorStatus, runCoordinator, startCoordinator } = require("./core/coordinator");
+const { coordinatorStatus, readCoordinator, runCoordinator, startCoordinator } = require("./core/coordinator");
 const { readMaterialEvents } = require("./core/material-events");
 const { dispatchRound, startTask, taskSummary } = require("./core/task-orchestrator");
-const { processAlive, terminateTree } = require("./core/utils");
+const { createTaskRecord, taskDirectory } = require("./core/state-store");
+const { processAlive, terminateTree, writeJson } = require("./core/utils");
 const entrypoint = path.join(__dirname, "ai-mobile-local-mcp.js");
 
 function resources(provider) {
@@ -264,6 +268,47 @@ function resources(provider) {
     const lostEvents = readMaterialEvents({ taskId: lost.taskId, maxEvents: 50 }).events;
     const lostCollection = lostEvents.find((event) => event.type === "round.collected");
     assert.match(JSON.stringify(lostCollection || {}), /worker-process-lost/);
+    const replay = createTaskRecord({
+      workspace: replayWorkspace,
+      outcome: "Prove a terminal coordinator execution cannot replay",
+      outcomeAuthority: "user",
+      requirements: [{ id: "A1", description: "A bounded replay fixture remains unfinished.", required: true, status: "failing", minimumEvidenceLevel: "integration", evidence: [], blocker: null }],
+      currentCodex: { model: "gpt-console", effort: "low", files: [] },
+      workGraph: [],
+    });
+    const terminalExecutionId = "execution-terminal-replay-test";
+    writeJson(path.join(taskDirectory(replay.taskId), "coordinator.json"), {
+      schemaVersion: 1,
+      executionId: terminalExecutionId,
+      state: "stopped",
+      stopReason: "no-eligible-worker",
+      roundsStarted: 1,
+    });
+    let replayInventoryCalls = 0;
+    const refusedReplay = await runCoordinator({
+      taskId: replay.taskId,
+      executionId: terminalExecutionId,
+      config: { maxRounds: 1, maxMinutes: 1, noProgressLimit: 1, horizonHours: 5 },
+    }, entrypoint, {
+      inventory: async () => { replayInventoryCalls += 1; return resources("none"); },
+      providerHistory: () => ({}),
+      createJob: () => { throw new Error("terminal replay launched work"); },
+    });
+    assert.equal(refusedReplay.terminalExecutionReplayRefused, true);
+    assert.equal(refusedReplay.state, "stopped");
+    assert.equal(replayInventoryCalls, 0);
+    assert.equal(readCoordinator({ taskId: replay.taskId }).executionId, terminalExecutionId);
+
+    const freshExecution = startCoordinator({ taskId: replay.taskId, maxRounds: 1, maxMinutes: 1, noProgressLimit: 1 }, exitEntrypoint);
+    assert.notEqual(freshExecution.executionId, terminalExecutionId);
+    assert.equal(freshExecution.reused, false);
+    const replayExitDeadline = Date.now() + 5000;
+    while (freshExecution.pid && processAlive(freshExecution.pid) && Date.now() < replayExitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(freshExecution.pid ? processAlive(freshExecution.pid) : false, false);
+    assert.equal(readCoordinator({ taskId: replay.taskId }).executionId, freshExecution.executionId);
+
 
     process.stdout.write(JSON.stringify({
       ok: true,
@@ -273,6 +318,8 @@ function resources(provider) {
       oneTimeIntegration: true,
       staleRoundDoesNotConsumeNewExecutionBudget: true,
       lostWorkerReconciledWithoutDeadlineWait: true,
+      terminalExecutionReplayRefused: true,
+      terminalCoordinatorStartsFreshExecution: true,
       visibleConsoleFileOwnership: 0,
       automaticDesktopLaunches: 0,
     }, null, 2) + "\n");

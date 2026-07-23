@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this plugin, please cite it as below."
 title: "AI Mobile Codex Plugin"
-version: "1.2.2"
-date-released: "2026-07-19"
+version: "1.4.7"
+date-released: "2026-07-23"
 authors:
   - name: "comprono"
 repository-code: "https://github.com/comprono/Ai-Mobile-Codex-plugin"
@@ -17,4 +17,4 @@ keywords:
   - "antigravity 2.0 codex plugin"
   - "codex mcp plugin"
   - "devtools mcp antigravity"
-abstract: "A token-efficient community Codex and Claude Code plugin with a lightweight visible project console and a capacity-aware work plane across local Codex CLI, Claude, Antigravity, and optional Cursor workers on Windows."
+abstract: "A community Codex and Claude Code Director-CFO plugin that turns complex projects into authorized context, master plans, resource budgets, typed worker teams, finite campaigns, reconciliation, and verified outcomes across local AI workers on Windows."

@@ -25,6 +25,9 @@ const installer = fs.readFileSync(path.join(root, "scripts", "install-ai-mobile.
 assert.match(installer, /claude.*plugin.*marketplace/s);
 assert.match(installer, /codex.*plugin.*marketplace/s);
 assert.equal((installer.match(/\.mcp\.json/g) || []).length >= 1, true);
+assert.match(installer, /verify-installed-runtime\.js/);
+assert.match(installer, /CacheParityVerified/);
+assert.equal(fs.existsSync(path.join(root, `RELEASE_NOTES_v${codex.version}.md`)), true);
 
 process.stdout.write(JSON.stringify({
   ok: true,

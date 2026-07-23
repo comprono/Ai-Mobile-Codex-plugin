@@ -4,14 +4,15 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { inventory } = require("./core/capacity");
-const { createJob } = require("./core/job-store");
+const { cleanupAbandonedJobs, createJob } = require("./core/job-store");
 const { providerHistory } = require("./core/provider-history");
 const { cleanupStaleLeases, resourceLeaseSnapshot } = require("./core/resource-leases");
 const { cancelTask, collectRound, compactCapacity, completeTask, dispatchRound, integrateRound, reconcileTask, recordEvidence, startTask, taskSummary } = require("./core/task-orchestrator");
 const { cleanupAbandonedWorktrees, storageStatus } = require("./core/workspace-isolation");
 const { runTaskCycle } = require("./core/task-cycle");
-const { coordinatorStatus, requestCoordinatorCancel, runCoordinator } = require("./core/coordinator");
+const { coordinatorStatus, requestCoordinatorCancel, runCampaignSupervisor, runCoordinator } = require("./core/coordinator");
 const { providerDiagnostics } = require("./core/provider-diagnostics");
+const { directorProgramSummary, emitProgramReport, migrateLegacyTaskToDirector, startDirectorProgram } = require("./core/director-cfo-orchestrator");
 const { createRestartHandoff } = require("./core/restart-handoff");
 const { executeWorker } = require("./core/worker");
 const { readProfile, writeProfile } = require("./lib/orchestrator-profile");
@@ -30,6 +31,7 @@ function taskOrPortfolioArgs() {
 
 async function main() {
   if (action !== "worker") {
+    cleanupAbandonedJobs();
     cleanupStaleLeases();
     cleanupAbandonedWorktrees();
   }
@@ -38,13 +40,35 @@ async function main() {
   if (action === "provider-diagnostics-cli") return output(await providerDiagnostics(jsonInput()));
   if (action === "resource-inventory-cli") {
     const resources = await inventory({ refresh: process.argv.includes("--refresh") });
-    return output({ generatedAt: resources.generatedAt, cached: resources.cached, passive: true, machine: resources.machine || null, providers: compactCapacity(resources), leases: resourceLeaseSnapshot(), worktreeStorage: storageStatus() });
+    return output({ generatedAt: resources.generatedAt, cached: resources.cached, passive: true, machine: resources.machine || null, providers: compactCapacity(resources), leases: resourceLeaseSnapshot(), worktreeStorage: resources.worktreeStorage || storageStatus() });
   }
   if (action === "start-task-cli") {
     const input = jsonInput();
     return output(startTask(input, await inventory({ refresh: false })));
   }
-  if (action === "reconcile-task-cli") return output(reconcileTask(jsonInput()));
+  if (action === "start-program-cli") {
+    const input = jsonInput();
+    const started = startDirectorProgram(input, await inventory({ refresh: false }));
+    return output(started.taskId ? { ...started, program: directorProgramSummary(started.taskId) } : started);
+  }
+  if (action === "run-program-campaign-cli") {
+    const input = jsonInput();
+    if (!directorProgramSummary(input.taskId)) throw new Error("run-program-campaign-cli requires a Director-CFO taskId.");
+    return output(await runTaskCycle({ ...input, campaignSupervisor: true }, entrypoint));
+  }
+  if (action === "program-report-cli") {
+    const input = jsonInput();
+    const taskId = input.taskId || arg("--task-id");
+    return output({ taskId, ...emitProgramReport(taskId), program: directorProgramSummary(taskId) });
+  }
+  if (action === "reconcile-task-cli") {
+    const input = jsonInput();
+    if (input.migrateToDirector === true) {
+      const migrated = migrateLegacyTaskToDirector(input, await inventory({ refresh: false }));
+      return output({ taskId: migrated.taskId, migrated: true, program: directorProgramSummary(migrated.taskId) });
+    }
+    return output(reconcileTask(input));
+  }
   if (action === "dispatch-round-cli") {
     const input = jsonInput();
     return output(dispatchRound(input, await inventory({ forDispatch: true }), providerHistory(), (contract) => createJob(contract, entrypoint)));
@@ -54,6 +78,7 @@ async function main() {
     const input = jsonInput();
     return output(coordinatorStatus(input.taskId || input.portfolioId ? input : taskOrPortfolioArgs()));
   }
+  if (action === "campaign-supervisor") return output(await runCampaignSupervisor(jsonInput(), entrypoint));
   if (action === "coordinator") return output(await runCoordinator(jsonInput(), entrypoint));
   if (action === "collect-round-cli") return output(collectRound(jsonInput()));
   if (action === "integrate-round-cli") return output(integrateRound(jsonInput()));

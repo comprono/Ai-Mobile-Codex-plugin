@@ -1,7 +1,7 @@
 {
   "name": "ai-mobile",
-  "version": "1.3.7",
-  "description": "A finite event-driven local AI resource orchestrator with a lightweight console and separate Codex CLI, Claude, Antigravity, and Cursor work plane.",
+  "version": "1.4.7",
+  "description": "A Director-CFO orchestrator for context-backed plans, resource budgets, typed worker teams, finite campaigns, reconciliation, and verified outcomes.",
   "author": {
     "name": "comprono"
   },

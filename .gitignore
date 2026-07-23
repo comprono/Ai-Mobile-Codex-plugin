@@ -3,6 +3,8 @@
 Thumbs.db
 *.log
 .claude/
+*.orig
+*.rej
 
 # Node/Python transient files
 node_modules/

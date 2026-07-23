@@ -1,11 +1,16 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { commandResult, processAlive, readJson, safeWorkspace, utcNow, writeJson } = require("./utils");
+const { commandResult, fileSha256, processAlive, readJson, safeRelativePath, safeWorkspace, utcNow, withDirectoryLock, writeJson } = require("./utils");
 const { stateRoot } = require("./state-store");
 const { readProfile } = require("../lib/orchestrator-profile");
 const { boundaryAllows } = require("./git-evidence");
+const { buildContextScoutPrompt, contextGitStatusArgs, fingerprintSourceSnapshots } = require("./context-dossier");
+const { assertDirectorWorkerContract, contractFingerprint: directorContractFingerprint } = require("./director-worker-contract");
+const { fingerprint: catalogFingerprint } = require("./source-catalog");
+const { releaseResourceLease } = require("./resource-leases");
 
 const { trustedPrimaryDecision } = require("./trusted-models");
 const TRANSIENT_PATHS = [
@@ -22,9 +27,551 @@ function normalized(value) {
   return resolved.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
 }
 
+function disposableCanaryWorkspace(workspace, contract) {
+  if (process.env.AI_MOBILE_CANARY_POLICY !== "disposable-project") return null;
+  const rootValue = String(process.env.AI_MOBILE_CANARY_WORKSPACE_ROOT || "").trim();
+  if (!rootValue) throw new Error("Disposable canary workspace root is missing.");
+  const root = path.resolve(rootValue);
+  const relative = path.relative(root, workspace);
+  if (relative !== "" && (relative.startsWith("..") || path.isAbsolute(relative))) {
+    throw new Error("Disposable canary contract workspace escaped its isolated project root.");
+  }
+  if (!contract.directorProgram || !["code-change", "operational-transaction"].includes(String(contract.executorKind || ""))) {
+    throw new Error("Disposable canary direct workspace is limited to plan-fenced code and local operations.");
+  }
+  if (contract.readOnly === true || contract.mutatesExternalState === true) {
+    throw new Error("Disposable canary direct workspace cannot admit a read-only or external-state contract.");
+  }
+  const gitRoot = commandResult("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { timeout: 5000 });
+  if (gitRoot.status !== 0 || normalized(String(gitRoot.stdout || "").trim()) !== normalized(root)) {
+    throw new Error("Disposable canary workspace must be the root of its isolated Git clone.");
+  }
+  return {
+    mode: "disposable-canary-project",
+    executionWorkspace: workspace,
+    sourceWorkspace: workspace,
+    cleanupRequired: false,
+    skipModelReview: false,
+    createdAt: utcNow(),
+  };
+}
+
 function worktreeRoot() { return path.join(stateRoot(), "worktrees"); }
 function metadataRoot() { return path.join(stateRoot(), "worktree-metadata"); }
 function metadataFile(jobId) { return path.join(metadataRoot(), `${jobId}.json`); }
+
+const CONTEXT_SNAPSHOT_TYPES = new Set(["project-outcome", "acceptance", "chat", "file", "log", "database"]);
+const LOCAL_CONTEXT_TYPES = new Set([...CONTEXT_SNAPSHOT_TYPES, "git"]);
+const MB = 1024 * 1024;
+const SQLITE_OBSERVATION_SCHEMA_VERSION = "director-cfo/sqlite-observation-receipt@1";
+const SQLITE_OBSERVATION_RECEIPT_MAX_BYTES = 256 * 1024;
+
+function copy(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function replaceInsensitive(value, needle, replacement) {
+  let output = String(value || "");
+  const wanted = String(needle || "");
+  if (!wanted) return output;
+  let index = output.toLowerCase().indexOf(wanted.toLowerCase());
+  while (index >= 0) {
+    output = output.slice(0, index) + replacement + output.slice(index + wanted.length);
+    index = output.toLowerCase().indexOf(wanted.toLowerCase(), index + replacement.length);
+  }
+  return output;
+}
+
+function scrubWorkspaceReferences(value, workspace) {
+  const variants = [...new Set([
+    path.resolve(workspace),
+    path.resolve(workspace).replace(/\\/g, "/"),
+    path.resolve(workspace).replace(/\//g, "\\"),
+  ])].sort((left, right) => right.length - left.length);
+  const scrub = (item) => {
+    if (Array.isArray(item)) return item.map(scrub);
+    if (item && typeof item === "object") return Object.fromEntries(Object.entries(item).map(([key, nested]) => [key, scrub(nested)]));
+    if (typeof item !== "string") return item;
+    return variants.reduce((text, variant) => replaceInsensitive(text, variant, "[live-workspace-withheld]"), item);
+  };
+  return scrub(value);
+}
+
+function sameObservedFile(stat, snapshot = {}) {
+  if (!stat?.isFile?.()) return false;
+  if (Number.isFinite(Number(snapshot.size)) && stat.size !== Number(snapshot.size)) return false;
+  const expectedMtime = Date.parse(String(snapshot.modifiedAt || ""));
+  return !Number.isFinite(expectedMtime) || Math.abs(stat.mtimeMs - expectedMtime) <= 2;
+}
+
+function pruneEmptySnapshotParents(target) {
+  const root = path.resolve(worktreeRoot());
+  let current = path.dirname(path.resolve(target));
+  while (normalized(current).startsWith(`${normalized(root)}/`)) {
+    try { fs.rmdirSync(current); } catch { break; }
+    current = path.dirname(current);
+  }
+}
+
+function contextBootstrap(contract = {}) {
+  if (contract.readOnly !== true || contract.executorKind !== "context-scout" || !contract.directorProgram) return null;
+  const bootstrap = contract.directorWorkerContract?.bootstrapContract;
+  if (!bootstrap || bootstrap.schemaVersion !== "director-cfo/context-scout-work-package@1") return null;
+  return bootstrap;
+}
+
+function containedRegularFile(workspace, relative, sourceId) {
+  const candidate = path.join(workspace, relative);
+  const linkStat = fs.lstatSync(candidate);
+  if (linkStat.isSymbolicLink()) throw new Error(`context-source-link-refused:${sourceId}`);
+  if (!linkStat.isFile()) throw new Error(`context-source-not-regular-file:${sourceId}`);
+  const workspaceReal = (fs.realpathSync.native || fs.realpathSync)(workspace);
+  const sourceReal = (fs.realpathSync.native || fs.realpathSync)(candidate);
+  if (!normalized(sourceReal).startsWith(`${normalized(workspaceReal)}/`)) {
+    throw new Error(`context-source-realpath-escaped:${sourceId}`);
+  }
+  return sourceReal;
+}
+
+function copyRegularSnapshot(sourceFile, destination, sourceId, appendOnly) {
+  let sourceDescriptor;
+  let destinationDescriptor;
+  try {
+    sourceDescriptor = fs.openSync(sourceFile, "r");
+    const before = fs.fstatSync(sourceDescriptor);
+    if (!before.isFile()) throw new Error(`context-source-not-regular-file:${sourceId}`);
+    destinationDescriptor = fs.openSync(destination, "wx", 0o600);
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let position = 0;
+    while (position < before.size) {
+      const wanted = Math.min(buffer.length, before.size - position);
+      const count = fs.readSync(sourceDescriptor, buffer, 0, wanted, position);
+      if (!count) throw new Error(`context-source-truncated-during-copy:${sourceId}`);
+      fs.writeSync(destinationDescriptor, buffer, 0, count, position);
+      position += count;
+    }
+    fs.fsyncSync(destinationDescriptor);
+    const after = fs.fstatSync(sourceDescriptor);
+    const identityChanged = Number.isFinite(before.ino) && Number.isFinite(after.ino) && before.ino !== after.ino;
+    const staticChanged = after.size !== before.size || Math.abs(after.mtimeMs - before.mtimeMs) > 2;
+    const appendSnapshotInvalidated = after.size < before.size || identityChanged;
+    if ((!appendOnly && staticChanged) || (appendOnly && appendSnapshotInvalidated)) {
+      throw new Error(`context-source-changed-during-copy:${sourceId}`);
+    }
+    return { sourceSize: before.size, sourceModifiedAt: before.mtime.toISOString() };
+  } catch (error) {
+    try { fs.rmSync(destination, { force: true }); } catch { /* enclosing snapshot cleanup is authoritative */ }
+    throw error;
+  } finally {
+    if (destinationDescriptor !== undefined) fs.closeSync(destinationDescriptor);
+    if (sourceDescriptor !== undefined) fs.closeSync(sourceDescriptor);
+  }
+}
+
+function copyRegularSnapshotWithRetry(sourceFile, destination, sourceId, appendOnly) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return copyRegularSnapshot(sourceFile, destination, sourceId, appendOnly);
+    } catch (error) {
+      lastError = error;
+      if (!/^context-source-(?:changed|truncated)-during-copy:/.test(String(error.message || "")) || attempt === 1) throw error;
+      fs.rmSync(destination, { force: true });
+    }
+  }
+  throw lastError;
+}
+
+function copySqliteSnapshot(sourceFile, destination, sourceId) {
+  const helper = path.join(__dirname, "sqlite-snapshot.js");
+  const result = commandResult(process.execPath, [helper, sourceFile, destination], {
+    timeout: 120000,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    throw new Error(`context-sqlite-snapshot-failed:${sourceId}:${String(result.stderr || result.stdout || "unknown error").trim().slice(0, 500)}`);
+  }
+  let receipt;
+  try { receipt = JSON.parse(String(result.stdout || "").trim()); }
+  catch { throw new Error(`context-sqlite-snapshot-invalid-receipt:${sourceId}`); }
+  if (receipt?.ok !== true || receipt.integrityCheck !== "ok") {
+    throw new Error(`context-sqlite-snapshot-integrity-failed:${sourceId}`);
+  }
+  const stat = fs.statSync(sourceFile);
+  return { sourceSize: stat.size, sourceModifiedAt: stat.mtime.toISOString() };
+}
+
+function captureSqliteObservation(snapshotFile, target, sourceId, snapshotContentHash) {
+  const safeSourceId = String(sourceId || "database").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-|-$/g, "").slice(0, 100) || "database";
+  const relative = path.join(".ai-mobile-director", "database-observations", `${safeSourceId}.json`);
+  const destination = path.join(target, relative);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const helper = path.join(__dirname, "sqlite-observation.js");
+  const result = commandResult(process.execPath, [helper, snapshotFile, destination, sourceId, snapshotContentHash], {
+    timeout: 12000,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    try { fs.rmSync(destination, { force: true }); } catch { /* enclosing snapshot cleanup is authoritative */ }
+    throw new Error(`context-sqlite-observation-failed:${sourceId}:${String(result.stderr || result.stdout || "unknown error").trim().slice(0, 500)}`);
+  }
+  let helperReceipt;
+  try { helperReceipt = JSON.parse(String(result.stdout || "").trim()); }
+  catch { throw new Error(`context-sqlite-observation-invalid-helper-receipt:${sourceId}`); }
+  const receipt = readJson(destination, null);
+  const stat = fs.statSync(destination);
+  if (
+    helperReceipt?.ok !== true
+    || !receipt
+    || receipt.schemaVersion !== SQLITE_OBSERVATION_SCHEMA_VERSION
+    || receipt.sourceId !== sourceId
+    || receipt.snapshot?.contentHash !== snapshotContentHash
+    || receipt.receiptFingerprint !== helperReceipt.receiptFingerprint
+    || stat.size > SQLITE_OBSERVATION_RECEIPT_MAX_BYTES
+  ) {
+    throw new Error(`context-sqlite-observation-binding-invalid:${sourceId}`);
+  }
+  return {
+    sourceId,
+    path: relative,
+    schemaVersion: receipt.schemaVersion,
+    snapshotContentHash,
+    receiptFingerprint: receipt.receiptFingerprint,
+    receiptFileHash: fileSha256(destination),
+    bytes: stat.size,
+    rowsIncluded: Number(receipt.rowsIncluded || 0),
+    limits: receipt.limits,
+  };
+}
+
+function captureGitSnapshot(workspace, target, source, catalog) {
+  const gitEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+  const rootProbe = commandResult("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { timeout: 10000, maxBuffer: 1024 * 1024, env: gitEnv });
+  if (rootProbe.status !== 0 || normalized(String(rootProbe.stdout || "").trim()) !== normalized(workspace)) {
+    throw new Error(`context-git-snapshot-root-invalid:${source.id}`);
+  }
+  let receipt = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const headBefore = commandResult("git", ["-C", workspace, "rev-parse", "HEAD"], { timeout: 10000, maxBuffer: 1024 * 1024, env: gitEnv });
+    const branch = commandResult("git", ["-C", workspace, "branch", "--show-current"], { timeout: 10000, maxBuffer: 1024 * 1024, env: gitEnv });
+    const status = commandResult("git", contextGitStatusArgs(workspace, catalog), { timeout: 30000, maxBuffer: 4 * 1024 * 1024, env: gitEnv });
+    const headAfter = commandResult("git", ["-C", workspace, "rev-parse", "HEAD"], { timeout: 10000, maxBuffer: 1024 * 1024, env: gitEnv });
+    if ([headBefore, branch, status, headAfter].some((row) => row.status !== 0)) {
+      throw new Error(`context-git-snapshot-command-failed:${source.id}`);
+    }
+    const before = String(headBefore.stdout || "").trim();
+    const after = String(headAfter.stdout || "").trim();
+    if (before !== after) {
+      if (attempt === 0) continue;
+      throw new Error(`context-git-head-changed-during-capture:${source.id}`);
+    }
+    const statusText = String(status.stdout || "");
+    const stateFingerprint = catalogFingerprint({ head: before, branch: String(branch.stdout || "").trim(), status: statusText });
+    receipt = {
+      schemaVersion: "director-cfo/git-snapshot-receipt@1",
+      sourceId: source.id,
+      repository: ".",
+      head: before,
+      branch: String(branch.stdout || "").trim(),
+      statusPorcelain: statusText.slice(0, 500000),
+      statusSha256: crypto.createHash("sha256").update(statusText).digest("hex"),
+      stateFingerprint,
+      statusTruncated: statusText.length > 500000,
+      capturedAt: utcNow(),
+    };
+    break;
+  }
+  if (!receipt) throw new Error(`context-git-snapshot-unavailable:${source.id}`);
+  const safeName = String(source.id || "repository").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 100) || "repository";
+  const relative = path.posix.join(".ai-mobile-director", "git", `${safeName}.json`);
+  const destination = path.join(target, relative);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  writeJson(destination, receipt);
+  const stat = fs.statSync(destination);
+  return {
+    sourceId: source.id,
+    sourceType: "git",
+    relative,
+    size: stat.size,
+    contentHash: receipt.stateFingerprint,
+    receiptHash: fileSha256(destination),
+    sourceSize: stat.size,
+    sourceModifiedAt: receipt.capturedAt,
+    capturedAt: receipt.capturedAt,
+  };
+}
+
+function rebaseContextWorkerContract(contract, bootstrapValue, workspace, copiedRows) {
+  let bootstrap = copy(bootstrapValue);
+  const captured = new Map(copiedRows.map((row) => [row.sourceId, row]));
+  bootstrap.sourceCatalog.sources = (bootstrap.sourceCatalog.sources || []).map((source) => {
+    if (!LOCAL_CONTEXT_TYPES.has(String(source.type || ""))) return source;
+    const rowCaptured = captured.get(source.id);
+    if (rowCaptured) return {
+      ...source,
+      locator: rowCaptured.relative,
+      ...(rowCaptured.observationReceiptExpectation ? {
+        observationReceipt: {
+          path: rowCaptured.observationReceiptExpectation.path,
+          schemaVersion: rowCaptured.observationReceiptExpectation.schemaVersion,
+        },
+      } : {}),
+    };
+    try {
+      const relative = safeRelativePath(workspace, source.locator);
+      return { ...source, locator: relative || "." };
+    } catch {
+      return { ...source, locator: `unavailable-source:${source.id}` };
+    }
+  });
+  const originalSnapshots = bootstrap.sourceSnapshotManifest?.snapshots || [];
+  const snapshotIds = new Set(originalSnapshots.map((row) => row.sourceId));
+  const snapshots = originalSnapshots.map((row) => {
+    const rowCaptured = captured.get(row.sourceId);
+    return rowCaptured ? {
+      ...row,
+      state: "available",
+      size: rowCaptured.size,
+      modifiedAt: rowCaptured.sourceModifiedAt,
+      contentHash: rowCaptured.contentHash,
+      capturedAt: rowCaptured.capturedAt,
+    } : row;
+  });
+  for (const row of copiedRows) {
+    if (!snapshotIds.has(row.sourceId)) {
+      snapshots.push({
+        sourceId: row.sourceId,
+        state: "available",
+        size: row.size,
+        modifiedAt: row.sourceModifiedAt,
+        contentHash: row.contentHash,
+        capturedAt: row.capturedAt,
+      });
+    }
+  }
+  const fingerprints = fingerprintSourceSnapshots(bootstrap.sourceCatalog, snapshots);
+  const fingerprintedSnapshots = snapshots.map((row) => ({ ...row, fingerprint: fingerprints[row.sourceId] }));
+  bootstrap.sourceSnapshotManifest = {
+    ...bootstrap.sourceSnapshotManifest,
+    workspace: ".",
+    snapshots: fingerprintedSnapshots,
+    fingerprint: catalogFingerprint({
+      catalogFingerprint: bootstrap.sourceCatalog.catalogFingerprint,
+      fingerprints,
+    }),
+  };
+  bootstrap = scrubWorkspaceReferences(bootstrap, workspace);
+  delete bootstrap.prompt;
+  delete bootstrap.contractFingerprint;
+  bootstrap.prompt = buildContextScoutPrompt(bootstrap);
+  const bootstrapBasis = copy(bootstrap);
+  delete bootstrapBasis.prompt;
+  bootstrap.contractFingerprint = catalogFingerprint(bootstrapBasis);
+
+  const previous = assertDirectorWorkerContract(contract.directorWorkerContract);
+  const workerBasis = copy(previous);
+  delete workerBasis.contractFingerprint;
+  workerBasis.bootstrapContract = bootstrap;
+  contract.directorWorkerContract = {
+    ...workerBasis,
+    contractFingerprint: directorContractFingerprint(workerBasis),
+  };
+  contract.goal = bootstrap.prompt;
+  contract.relevantFiles = [...new Set(copiedRows.map((row) => row.relative))];
+  const observationReceiptExpectations = Object.fromEntries(copiedRows
+    .filter((row) => row.sourceType === "database" && row.observationReceiptExpectation)
+    .map((row) => [row.sourceId, row.observationReceiptExpectation]));
+  const missingRequiredDatabaseIds = (bootstrap.sourceCatalog?.sources || [])
+    .filter((row) => row.type === "database" && row.required !== false && !observationReceiptExpectations[row.id])
+    .map((row) => row.id);
+  if (missingRequiredDatabaseIds.length) {
+    throw new Error(`context-required-database-observation-receipt-missing:${missingRequiredDatabaseIds.join(",")}`);
+  }
+  contract.contextObservationReceiptExpectations = observationReceiptExpectations;
+  contract.contextObservationPreflight = {
+    ok: true,
+    mode: "immutable-sqlite-receipt",
+    databaseSourceIds: Object.keys(observationReceiptExpectations).sort(),
+  };
+  contract.contextSnapshotContractFingerprint = bootstrap.contractFingerprint;
+  return bootstrap;
+}
+
+function plannedSnapshotBytes(contract, workspace, relevantFiles) {
+  const direct = Number(contract.resourceEstimate?.diskMb ?? contract.diskMb);
+  let bytes = 16 * MB;
+  const bootstrap = contextBootstrap(contract);
+  const databaseFiles = new Set((bootstrap?.sourceCatalog?.sources || []).filter((row) => row.type === "database").flatMap((row) => {
+    try { return [safeRelativePath(workspace, row.locator).toLowerCase()]; } catch { return []; }
+  }));
+  for (const relative of relevantFiles) {
+    try {
+      const source = path.join(workspace, relative);
+      const sourceBytes = fs.statSync(source).size;
+      if (databaseFiles.has(String(relative).toLowerCase())) {
+        let walBytes = 0;
+        try { walBytes = fs.statSync(`${source}-wal`).size; } catch { /* a checkpointed database may have no WAL */ }
+        bytes += 2 * (sourceBytes + walBytes) + SQLITE_OBSERVATION_RECEIPT_MAX_BYTES;
+      } else {
+        bytes += sourceBytes;
+      }
+    } catch { /* actual capture reports the authoritative source error */ }
+  }
+  return Number.isFinite(direct) && direct > 0 ? Math.max(bytes, Math.ceil(direct * MB)) : bytes;
+}
+
+function assertSnapshotAllocation(profile, contract, workspace, relevantFiles) {
+  const status = assertStorageAvailable(profile);
+  const plannedBytes = plannedSnapshotBytes(contract, workspace, relevantFiles);
+  if (status.bytes + plannedBytes > profile.worktreeDiskQuotaMb * MB) {
+    throw new Error(`Read-only snapshot allocation would exceed the ${profile.worktreeDiskQuotaMb} MB storage quota.`);
+  }
+  if (status.freeMb !== null && status.freeMb * MB - plannedBytes < profile.worktreeMinFreeMb * MB) {
+    throw new Error(`Read-only snapshot allocation would cross the ${profile.worktreeMinFreeMb} MB free-space floor.`);
+  }
+  return { status, plannedBytes };
+}
+
+function prepareDirectorReadOnlySnapshot(workspaceValue, contract, taskId, jobId, profileValue) {
+  const workspace = safeWorkspace(workspaceValue);
+  const bootstrap = contextBootstrap(contract);
+  if (!bootstrap) throw new Error("Director context snapshot requires an immutable context-scout contract.");
+  const profile = profileValue || readProfile();
+  const target = path.join(worktreeRoot(), "read-only-snapshots", taskId, jobId);
+  const root = normalized(worktreeRoot());
+  if (!normalized(target).startsWith(`${root}/`)) throw new Error("Read-only snapshot target escaped AI Mobile storage.");
+  const declaredRelevantFiles = [...new Set(contract.relevantFiles || [])];
+  if (declaredRelevantFiles.length > 80) {
+    throw new Error(`context-source-file-limit-exceeded:${declaredRelevantFiles.length}:maximum=80`);
+  }
+  const relevantFiles = declaredRelevantFiles.map((value) => safeRelativePath(workspace, value));
+  if (relevantFiles.some((relative) => !relative || relative === ".")) {
+    throw new Error("Read-only context snapshot requires bounded file paths.");
+  }
+  const allocation = assertSnapshotAllocation(profile, contract, workspace, relevantFiles);
+  fs.rmSync(target, { recursive: true, force: true });
+
+  const sourcesByPath = new Map();
+  for (const source of bootstrap.sourceCatalog?.sources || []) {
+    if (!CONTEXT_SNAPSHOT_TYPES.has(String(source.type || ""))) continue;
+    try {
+      const relative = safeRelativePath(workspace, source.locator);
+      if (relative && relative !== ".") sourcesByPath.set(relative.toLowerCase(), source);
+    } catch { /* the bootstrap manifest already records unavailable out-of-scope sources */ }
+  }
+  const copied = [];
+  let copiedBytes = 0;
+  const provisional = {
+    mode: "read-only-snapshot",
+    state: "building",
+    executionWorkspace: target,
+    sourceWorkspace: workspace,
+    taskId,
+    jobId,
+    metadataFile: metadataFile(jobId),
+    cleanupRequired: true,
+    plannedBytes: allocation.plannedBytes,
+    createdAt: utcNow(),
+  };
+  try {
+    writeJson(provisional.metadataFile, provisional);
+    fs.mkdirSync(target, { recursive: true });
+    for (const source of bootstrap.sourceCatalog?.sources || []) {
+      if (source.type !== "git") continue;
+      const row = captureGitSnapshot(workspace, target, source, bootstrap.sourceCatalog);
+      copied.push(row);
+      copiedBytes += row.size;
+    }
+    for (const relative of relevantFiles) {
+      const source = sourcesByPath.get(relative.toLowerCase());
+      if (!source) throw new Error(`Read-only context snapshot has no authorized source descriptor for ${relative}.`);
+      const sourceFile = containedRegularFile(workspace, relative, source.id);
+      const destination = path.join(target, relative);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      const sourceObservation = source.type === "database"
+        ? copySqliteSnapshot(sourceFile, destination, source.id)
+        : copyRegularSnapshotWithRetry(sourceFile, destination, source.id, source.type === "log" && /\.log$/i.test(relative));
+      const copiedStat = fs.statSync(destination);
+      const contentHash = fileSha256(destination);
+      const observationReceiptExpectation = source.type === "database"
+        ? captureSqliteObservation(destination, target, source.id, contentHash)
+        : null;
+      copiedBytes += copiedStat.size + Number(observationReceiptExpectation?.bytes || 0);
+      copied.push({
+        sourceId: source.id,
+        sourceType: source.type,
+        relative: observationReceiptExpectation?.path || relative,
+        ...(observationReceiptExpectation ? { snapshotRelative: relative, observationReceiptExpectation } : {}),
+        size: copiedStat.size,
+        contentHash,
+        sourceSize: sourceObservation.sourceSize,
+        sourceModifiedAt: sourceObservation.sourceModifiedAt,
+        capturedAt: utcNow(),
+      });
+    }
+    const capturedBootstrap = rebaseContextWorkerContract(contract, bootstrap, workspace, copied);
+    const isolation = {
+      ...provisional,
+      state: "ready",
+      sourceSnapshotFingerprint: capturedBootstrap.sourceSnapshotManifest?.fingerprint || "",
+      contextSnapshotContractFingerprint: capturedBootstrap.contractFingerprint,
+      copiedBytes,
+      copied,
+      readyAt: utcNow(),
+    };
+    writeJson(isolation.metadataFile, isolation);
+    const after = storageStatus(profile);
+    if (!after.withinQuota || !after.hasMinimumFree) {
+      cleanupIsolatedWorkspace(isolation);
+      throw new Error(`Creating the read-only snapshot would violate storage limits (${after.usedMb}/${after.quotaMb} MB used, ${after.freeMb ?? "unknown"} MB free).`);
+    }
+    return isolation;
+  } catch (error) {
+    removeTreeWithRetry(target);
+    pruneEmptySnapshotParents(target);
+    try { fs.rmSync(metadataFile(jobId), { force: true }); } catch { /* no-op */ }
+    throw error;
+  }
+}
+
+function prepareDirectorReadOnlyScratch(workspaceValue, contract, taskId, jobId, profileValue) {
+  const workspace = safeWorkspace(workspaceValue);
+  const profile = profileValue || readProfile();
+  const target = path.join(worktreeRoot(), "read-only-snapshots", taskId, jobId);
+  const root = normalized(worktreeRoot());
+  if (!normalized(target).startsWith(`${root}/`)) throw new Error("Read-only scratch target escaped AI Mobile storage.");
+  const allocation = assertSnapshotAllocation(profile, contract, workspace, []);
+  fs.rmSync(target, { recursive: true, force: true });
+  const provisional = {
+    mode: "read-only-snapshot",
+    state: "building",
+    executionWorkspace: target,
+    sourceWorkspace: workspace,
+    taskId,
+    jobId,
+    metadataFile: metadataFile(jobId),
+    cleanupRequired: true,
+    plannedBytes: allocation.plannedBytes,
+    createdAt: utcNow(),
+  };
+  try {
+    writeJson(provisional.metadataFile, provisional);
+    fs.mkdirSync(target, { recursive: true });
+    const isolation = { ...provisional, state: "ready", copiedBytes: 0, copied: [], readyAt: utcNow() };
+    writeJson(isolation.metadataFile, isolation);
+    const after = storageStatus(profile);
+    if (!after.withinQuota || !after.hasMinimumFree) {
+      cleanupIsolatedWorkspace(isolation);
+      throw new Error(`Creating the read-only scratch would violate storage limits (${after.usedMb}/${after.quotaMb} MB used, ${after.freeMb ?? "unknown"} MB free).`);
+    }
+    return isolation;
+  } catch (error) {
+    removeTreeWithRetry(target);
+    pruneEmptySnapshotParents(target);
+    try { fs.rmSync(metadataFile(jobId), { force: true }); } catch { /* no-op */ }
+    throw error;
+  }
+}
 
 function directoryBytes(root) {
   if (!fs.existsSync(root)) return 0;
@@ -110,8 +657,17 @@ function preparePrimaryWorkspace(workspaceValue, contract, profileValue) {
 
 function prepareWorkspaceForContract(contract, taskId, jobId, profileValue) {
   const workspace = safeWorkspace(contract.workspace);
-  if (contract.readOnly === true) return { mode: "shared-read-only", executionWorkspace: workspace, cleanupRequired: false };
+  if (contract.readOnly === true) {
+    if (contextBootstrap(contract)) return prepareDirectorReadOnlySnapshot(workspace, contract, taskId, jobId, profileValue);
+    if (contract.directorProgram) return prepareDirectorReadOnlyScratch(workspace, contract, taskId, jobId, profileValue);
+    return { mode: "shared-read-only", executionWorkspace: workspace, cleanupRequired: false };
+  }
   const profile = profileValue || readProfile();
+  const canary = disposableCanaryWorkspace(workspace, contract);
+  if (canary) return canary;
+  if (contract.directorProgram && contract.deliverableKind === "patch") {
+    return prepareIsolatedWorkspace(workspace, taskId, jobId, false, profile);
+  }
   const decision = trustedPrimaryDecision(contract, profile);
   if (decision.trusted) return preparePrimaryWorkspace(workspace, contract, profile);
   return prepareIsolatedWorkspace(workspace, taskId, jobId, false, profile);
@@ -223,6 +779,23 @@ function cleanupIsolatedWorkspace(isolation = {}) {
   const target = normalized(isolation.executionWorkspace);
   if (!target.startsWith(`${root}/`)) return { cleaned: false, reason: "worktree-cleanup-boundary-refused" };
 
+  if (isolation.mode === "read-only-snapshot") {
+    const removal = fs.existsSync(isolation.executionWorkspace)
+      ? removeTreeWithRetry(isolation.executionWorkspace)
+      : { removed: true, attempts: 0 };
+    const cleaned = removal.removed && !fs.existsSync(isolation.executionWorkspace);
+    if (cleaned) {
+      try { fs.rmSync(isolation.metadataFile || metadataFile(isolation.jobId), { force: true }); } catch { /* startup cleanup can remove stale metadata */ }
+      pruneEmptySnapshotParents(isolation.executionWorkspace);
+    }
+    return {
+      cleaned,
+      attempts: removal.attempts,
+      ...(removal.error ? { warning: removal.error } : {}),
+      ...(cleaned ? {} : { recoveryAction: "Keep the snapshot metadata and retry cleanup during startup or cancellation recovery." }),
+    };
+  }
+
   const result = commandResult("git", ["-C", isolation.sourceWorkspace, "worktree", "remove", "--force", isolation.executionWorkspace], { timeout: 30000, maxBuffer: 1024 * 1024 });
   const removal = fs.existsSync(isolation.executionWorkspace)
     ? removeTreeWithRetry(isolation.executionWorkspace)
@@ -242,6 +815,29 @@ function jobStatusFor(meta) {
   return readJson(path.join(stateRoot(), "tasks", String(meta.taskId || ""), "jobs", String(meta.jobId || ""), "status.json"), null);
 }
 
+function failAbandonedQueuedJob(meta, graceMs = 60000) {
+  const file = path.join(stateRoot(), "tasks", String(meta.taskId || ""), "jobs", String(meta.jobId || ""), "status.json");
+  return withDirectoryLock(`${file}.lock`, () => {
+    const current = readJson(file, null);
+    const ageMs = Date.now() - Date.parse(current?.updatedAt || current?.createdAt || meta.createdAt || "");
+    if (!current || current.state !== "queued" || current.pid || !Number.isFinite(ageMs) || ageMs <= graceMs) return false;
+    const now = utcNow();
+    writeJson(file, {
+      ...current,
+      taskId: meta.taskId,
+      jobId: meta.jobId,
+      state: "failed",
+      pid: null,
+      blocker: "worker-spawn-lost: queued job never received a worker process",
+      recoverable: true,
+      finishedAt: now,
+      updatedAt: now,
+      revision: Number(current.revision || 0) + 1,
+    });
+    return true;
+  });
+}
+
 function cleanupAbandonedWorktrees(profileValue) {
   const profile = profileValue || readProfile();
   const root = metadataRoot();
@@ -259,11 +855,15 @@ function cleanupAbandonedWorktrees(profileValue) {
     if (!status) reason = "missing-job";
     else if (terminal.has(status.state)) reason = "terminal-job";
     else if (status.pid && !processAlive(status.pid)) reason = "lost-worker";
+    else if (status.state === "queued" && !status.pid && failAbandonedQueuedJob(meta)) reason = "queued-without-worker";
     else if (Number.isFinite(ageMs) && ageMs > maxAgeMs) reason = "maximum-age";
     if (!reason) continue;
-    cleanupIsolatedWorkspace(meta);
-    result.cleaned += 1;
-    result.reasons[reason] = (result.reasons[reason] || 0) + 1;
+    const cleanup = cleanupIsolatedWorkspace(meta);
+    if (cleanup.cleaned) {
+      releaseResourceLease(meta.jobId);
+      result.cleaned += 1;
+      result.reasons[reason] = (result.reasons[reason] || 0) + 1;
+    }
   }
   return result;
 }
@@ -276,6 +876,8 @@ module.exports = {
   cleanupIsolatedWorkspace,
   directoryBytes,
   metadataFile,
+  prepareDirectorReadOnlySnapshot,
+  prepareDirectorReadOnlyScratch,
   preparePrimaryWorkspace,
   prepareWorkspaceForContract,
   prepareIsolatedWorkspace,

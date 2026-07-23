@@ -81,9 +81,10 @@ function buildCodexExecArgs(options = {}) {
   const model = safeCodexModel(options.model);
   const effort = safeCodexEffort(options.effort);
   const sandbox = options.readOnly === false ? "workspace-write" : "read-only";
-  return [
+  const args = [
     "-a", "never",
     "exec",
+    "--skip-git-repo-check",
     "--ephemeral",
     "--ignore-user-config",
     "--disable", "plugins",
@@ -99,8 +100,16 @@ function buildCodexExecArgs(options = {}) {
     "--model", model,
     "-c", `model_reasoning_effort=\"${effort}\"`,
     "-C", workspace,
-    "-",
   ];
+  if (options.outputSchema) {
+    const outputSchema = path.resolve(String(options.outputSchema));
+    if (!fs.existsSync(outputSchema) || !fs.statSync(outputSchema).isFile()) {
+      throw new Error("Codex output schema file does not exist: " + outputSchema);
+    }
+    args.push("--output-schema", outputSchema);
+  }
+  args.push("-");
+  return args;
 }
 
 function numberOrNull(value) {
@@ -109,13 +118,16 @@ function numberOrNull(value) {
 }
 
 function parseCodexJsonl(output = "") {
-  const messages = [];
+  const completedMessages = [];
+  const updatedMessages = [];
   const errors = [];
   const diagnostics = [];
   let threadId = "";
   let usage = {};
   let turnFailed = false;
   let parsedEvents = 0;
+  let actualModelId = "";
+  let modelIdentitySource = "";
 
   for (const rawLine of String(output || "").split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -130,9 +142,18 @@ function parseCodexJsonl(output = "") {
     }
     const type = String(event.type || "");
     if (type === "thread.started") threadId = String(event.thread_id || event.threadId || "");
+    if (["thread.started", "turn.started", "turn.completed"].includes(type)) {
+      const reportedModel = String(event.model_id || event.modelId || event.model || event.turn?.model_id || event.turn?.modelId || event.turn?.model || "").trim();
+      if (reportedModel && reportedModel.length <= 240 && SAFE_MODEL.test(reportedModel)) {
+        actualModelId = reportedModel;
+        modelIdentitySource = `codex-jsonl-${type}`;
+      }
+    }
     const item = event.item || {};
-    if ((type === "item.completed" || type === "item.updated") && item.type === "agent_message" && item.text) {
-      messages.push(String(item.text));
+    if (type === "item.completed" && item.type === "agent_message" && item.text) {
+      completedMessages.push(String(item.text));
+    } else if (type === "item.updated" && item.type === "agent_message" && item.text) {
+      updatedMessages.push(String(item.text));
     }
     if (type === "turn.completed") usage = event.usage || usage;
     if (type === "turn.failed" || type === "error") {
@@ -148,10 +169,12 @@ function parseCodexJsonl(output = "") {
   return {
     parsedEvents,
     threadId,
-    resultText: messages.join("\n\n").trim(),
+    resultText: (completedMessages.length ? completedMessages : updatedMessages).join("\n\n").trim(),
     errors,
     diagnostics,
     turnFailed,
+    actualModelId,
+    modelIdentitySource,
     inputTokens: numberOrNull(usage.input_tokens ?? usage.inputTokens),
     cachedInputTokens: numberOrNull(usage.cached_input_tokens ?? usage.cachedInputTokens),
     outputTokens: numberOrNull(usage.output_tokens ?? usage.outputTokens),

@@ -6,6 +6,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { readJson, utcNow, writeJson } = require("./utils");
 const { stateRoot } = require("./state-store");
+const { storageStatus } = require("./workspace-isolation");
 
 const PROVIDER_IDS = ["codex", "claude", "antigravity", "cursor"];
 const POSITIVE_TTL_MS = 5 * 60 * 1000;
@@ -50,8 +51,9 @@ function quotaPools(provider = {}) {
     scope: String(window.scope || "all"),
     period: String(window.period || window.name || ""),
     remainingPercent: Number.isFinite(Number(window.remainingPercent)) ? Number(window.remainingPercent) : null,
-    resetAt: window.resetAt || null,
-    source: provider.capacity?.source || "unknown",
+      resetAt: window.resetAt || null,
+      source: provider.capacity?.source || "unknown",
+      modelIds: Array.isArray(window.modelIds) ? window.modelIds.map(String).filter(Boolean) : [],
   }));
   for (const model of provider.capacity?.models || []) {
     pools.push({
@@ -61,6 +63,7 @@ function quotaPools(provider = {}) {
       remainingPercent: Number.isFinite(Number(model.remainingPercent)) ? Number(model.remainingPercent) : null,
       resetAt: model.resetAt || null,
       source: provider.capacity?.source || "unknown",
+      modelIds: [String(model.id || model.displayName || "").trim()].filter(Boolean),
     });
   }
   return pools;
@@ -112,7 +115,8 @@ async function inventory(options = {}) {
   }
 
   const prober = typeof options.probe === "function" ? options.probe : probeProvider;
-  const rows = await Promise.all(toProbe.map((id) => prober(id, Number(options.timeoutMs || 20000))));
+  const configuredTimeout = Number(options.timeoutMs || 20000);
+  const rows = await Promise.all(toProbe.map((id) => prober(id, id === "claude" ? Math.max(30000, configuredTimeout) : configuredTimeout)));
   const observedAt = utcNow();
   rows.forEach((row, index) => {
     const id = toProbe[index];
@@ -130,6 +134,7 @@ async function inventory(options = {}) {
       freeRamMb: Math.floor(os.freemem() / (1024 * 1024)),
       observedAt: utcNow(),
     },
+    worktreeStorage: storageStatus(),
     providers,
     guidance: "Capacity is evidence, not a promise. Unknown remains unknown. Desktop applications were not opened.",
   };
