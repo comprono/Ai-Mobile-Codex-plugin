@@ -210,6 +210,83 @@ try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
   assert.equal(repairStart.pid ? processAlive(repairStart.pid) : false, false);
+  const receiptRepairWorkPackageId = "wp-receipt-repair-0001";
+  const receiptRepairId = "receipt-receipt-repair-0001";
+  const receiptRepairFence = { fingerprint: "revision-fence-receipt-repair-0001" };
+  const mismatchedWorkPackageId = "wp-receipt-mismatch-0001";
+  const mismatchedReceiptId = "receipt-receipt-mismatch-0001";
+  updateTask(legacy.taskId, (current) => {
+    current.requirements = [...current.requirements, {
+      id: "REQ-099",
+      description: "A mismatched receipt must not satisfy this requirement.",
+      required: true,
+      status: "blocked",
+      minimumEvidenceLevel: "end-to-end",
+      evidence: [],
+      blocker: { owner: "runtime", reason: "Exact receipt evidence is missing." },
+    }];
+    current.program.workPackages = [...current.program.workPackages, {
+      workPackageId: receiptRepairWorkPackageId,
+      state: "completed",
+      acceptanceIds: ["REQ-003"],
+      revisionFence: receiptRepairFence,
+      executionReceiptId: receiptRepairId,
+      completedAt: "2026-07-21T00:00:00Z",
+    }, {
+      workPackageId: mismatchedWorkPackageId,
+      state: "completed",
+      acceptanceIds: ["REQ-099"],
+      revisionFence: { fingerprint: "package-fence-mismatch-0001" },
+      executionReceiptId: mismatchedReceiptId,
+      completedAt: "2026-07-21T00:00:00Z",
+    }];
+    current.program.executionReceipts = [...(current.program.executionReceipts || []), {
+      receiptId: receiptRepairId,
+      workPackageId: receiptRepairWorkPackageId,
+      state: "succeeded",
+      revisionFence: receiptRepairFence,
+      fingerprint: "execution-receipt-fingerprint-0001",
+      completedAt: "2026-07-21T00:00:00Z",
+    }, {
+      receiptId: mismatchedReceiptId,
+      workPackageId: mismatchedWorkPackageId,
+      state: "succeeded",
+      revisionFence: { fingerprint: "receipt-fence-mismatch-0001" },
+      fingerprint: "execution-receipt-fingerprint-mismatch-0001",
+      completedAt: "2026-07-21T00:00:00Z",
+    }];
+    current.workGraph = [...current.workGraph, {
+      id: receiptRepairWorkPackageId,
+      state: "completed",
+      acceptanceRequirementId: "REQ-003",
+      evidenceRefs: [],
+    }, {
+      id: mismatchedWorkPackageId,
+      state: "completed",
+      acceptanceRequirementId: "REQ-099",
+      evidenceRefs: [],
+    }];
+    return current;
+  });
+  const receiptRepaired = repairDirectorLegacyRounds(legacy.taskId);
+  const receiptRepairedRequirement = receiptRepaired.requirements.find((row) => row.id === "REQ-003");
+  assert.equal(receiptRepairedRequirement.status, "failing", "Integration evidence below an end-to-end minimum is progress, not a blocker.");
+  assert.equal(receiptRepairedRequirement.blocker, null);
+  assert.equal(receiptRepairedRequirement.evidence.length, 1);
+  assert.equal(receiptRepairedRequirement.evidence[0].workPackageId, receiptRepairWorkPackageId);
+  assert.equal(receiptRepaired.evidence.filter((row) => row.workPackageId === receiptRepairWorkPackageId).length, 1);
+  assert.equal(receiptRepaired.program.evidenceLedger.entries.filter((row) => row.workPackageId === receiptRepairWorkPackageId).length, 1);
+  assert.equal(receiptRepaired.workGraph.find((row) => row.id === receiptRepairWorkPackageId).evidenceRefs.length, 1);
+  const mismatchedRequirement = receiptRepaired.requirements.find((row) => row.id === "REQ-099");
+  assert.equal(mismatchedRequirement.status, "blocked");
+  assert.equal(mismatchedRequirement.evidence.length, 0);
+  assert.notEqual(mismatchedRequirement.blocker, null);
+  const receiptRepairUpdatedAt = receiptRepaired.program.updatedAt;
+  const receiptRepairIdempotent = repairDirectorLegacyRounds(legacy.taskId);
+  assert.equal(receiptRepairIdempotent.requirements.find((row) => row.id === "REQ-003").evidence.length, 1);
+  assert.equal(receiptRepairIdempotent.evidence.filter((row) => row.workPackageId === receiptRepairWorkPackageId).length, 1);
+  assert.equal(receiptRepairIdempotent.program.evidenceLedger.entries.filter((row) => row.workPackageId === receiptRepairWorkPackageId).length, 1);
+  assert.equal(receiptRepairIdempotent.program.updatedAt, receiptRepairUpdatedAt);
 
 
   const idempotent = migrateLegacyTaskToDirector({ taskId: legacy.taskId, migrateToDirector: true });
@@ -239,7 +316,7 @@ try {
 
   process.stdout.write(JSON.stringify({
     ok: true,
-    assertions: 39,
+    assertions: 53,
     taskIdPreserved: migrated.taskId,
     activeJobsCancelled: migrated.program.migration.cancelledJobIds.length,
     activeRoundsInvalidated: migrated.program.migration.invalidatedRoundIds.length,

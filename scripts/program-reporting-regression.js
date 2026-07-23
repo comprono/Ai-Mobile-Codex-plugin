@@ -60,6 +60,31 @@ assert.equal(initial.acceptedEvidence.some((row) => row.level === "process-healt
 let transition = reportTransition({}, initial);
 assert.equal(transition.emit, true);
 assert.equal(transition.reason, "initial");
+const partialEvidenceTask = clone(base);
+partialEvidenceTask.requirements[1] = {
+  ...partialEvidenceTask.requirements[1],
+  status: "failing",
+  blocker: null,
+  evidence: [{
+    level: "integration",
+    ref: "receipt-partial-2",
+    summary: "A revision-fenced package receipt passed, while end-to-end evidence remains outstanding.",
+    accepted: true,
+    passed: true,
+    workPackageId: "wp-partial-2",
+  }],
+};
+const partialEvidence = buildProgramReport(partialEvidenceTask, {
+  coordinator: { state: "running", executionId: "execution-partial" },
+  events: [],
+  generatedAt: "2026-07-21T00:00:00Z",
+});
+assert.equal(partialEvidence.progress.passing, 1);
+assert.deepEqual(
+  partialEvidence.acceptedEvidence.map((row) => row.ref),
+  ["receipt-1", "receipt-partial-2"],
+  "Accepted package evidence must remain visible even when it is below the requirement's minimum evidence tier.",
+);
 const processHealthOnlyTask = clone(base);
 processHealthOnlyTask.requirements[0].evidence.push({ level: "process-health", ref: "another-healthy-process", accepted: true, passed: true });
 const processHealthOnly = buildProgramReport(processHealthOnlyTask, { coordinator: { state: "running", executionId: "execution-1" }, events: [], generatedAt: "2026-07-21T00:00:01Z" });
@@ -686,6 +711,41 @@ const unrelatedSuccess = buildProgramReport(resolvedEventTask, {
   generatedAt: "2026-07-21T00:03:13Z",
 });
 assert.equal(unrelatedSuccess.blockers.some((row) => row.reason === "unresolved-job-failure"), true);
+const priorExecutionFailure = buildProgramReport(resolvedEventTask, {
+  coordinator: { state: "stopped", executionId: "execution-current", stopReason: "resource-cap-exhausted" },
+  events: [
+    {
+      eventId: "event-prior-execution-failure",
+      type: "round.dispatched",
+      state: "blocked",
+      executionId: "execution-prior",
+      blocker: "prior-execution-dispatch-failure",
+    },
+    {
+      eventId: "event-current-execution-stop",
+      type: "coordinator.stopped",
+      state: "stopped",
+      executionId: "execution-current",
+      blocker: "resource-cap-exhausted",
+    },
+  ],
+  jobStates: {},
+  generatedAt: "2026-07-21T00:03:14Z",
+});
+assert.equal(priorExecutionFailure.blockers.some((row) => row.reason === "prior-execution-dispatch-failure"), false);
+const currentExecutionFailure = buildProgramReport(resolvedEventTask, {
+  coordinator: { state: "running", executionId: "execution-current" },
+  events: [{
+    eventId: "event-current-execution-failure",
+    type: "round.dispatched",
+    state: "blocked",
+    executionId: "execution-current",
+    blocker: "current-execution-dispatch-failure",
+  }],
+  jobStates: {},
+  generatedAt: "2026-07-21T00:03:15Z",
+});
+assert.equal(currentExecutionFailure.blockers.some((row) => row.reason === "current-execution-dispatch-failure"), true);
 
 
 

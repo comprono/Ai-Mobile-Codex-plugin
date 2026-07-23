@@ -78,10 +78,10 @@ function compactBudget(budget = {}, input = {}) {
 function compactEvidence(program = {}, task = {}) {
   const accepted = [];
   for (const requirement of task.requirements || []) {
-    if (requirement.status !== "passing") continue;
     for (const row of requirement.evidence || []) {
       if (["activity", "process-health"].includes(String(row.level || "").toLowerCase())) continue;
       if (row.accepted === false || row.passed === false) continue;
+      if (requirement.status !== "passing" && row.passed !== true) continue;
       accepted.push({
         requirementId: requirement.id || row.requirementId || "",
         level: row.level || "",
@@ -92,20 +92,25 @@ function compactEvidence(program = {}, task = {}) {
       });
     }
   }
-  if (accepted.length) return accepted.slice(-12);
-  const entries = program.evidenceLedger?.entries || task.evidence || [];
-  return entries.filter((row) => (
+  const entries = [...(program.evidenceLedger?.entries || []), ...(task.evidence || [])];
+  accepted.push(...entries.filter((row) => (
     !["activity", "process-health"].includes(String(row.level || "").toLowerCase())
     && row.accepted === true
     && (row.passed === true || row.status === "passing")
-  )).slice(-12).map((row) => ({
+  )).map((row) => ({
     requirementId: row.requirementId || row.id || "",
     level: row.level || "",
     ref: bounded(row.ref, 500),
     summary: bounded(row.summary, 500),
     accepted: true,
     passed: true,
-  }));
+  })));
+  const deduplicated = new Map();
+  for (const row of accepted) {
+    const key = [row.requirementId, row.level, row.ref].join("\u0000");
+    if (!deduplicated.has(key)) deduplicated.set(key, row);
+  }
+  return [...deduplicated.values()].slice(-12);
 }
 
 function compactWorkPackages(program = {}, runtime = {}) {
@@ -497,9 +502,14 @@ function durableStateResolvesRuntimeFailure(failure = {}, coordinator = null, wo
 }
 
 function latestUnresolvedRuntimeFailure(events = [], coordinator = null, workPackages = []) {
+  const currentExecutionIds = identitySet(coordinator?.executionId);
   const failures = events
     .map((event, index) => ({ event, index }))
-    .filter(({ event }) => event?.blocker && ["round.integrated", "round.dispatched", "coordinator.failed"].includes(event.type));
+    .filter(({ event }) => {
+      if (!event?.blocker || !["round.integrated", "round.dispatched", "coordinator.failed"].includes(event.type)) return false;
+      const failureExecutionIds = runtimeEventIdentity(event).executionIds;
+      return !currentExecutionIds.size || !failureExecutionIds.size || identitiesOverlap(failureExecutionIds, currentExecutionIds);
+    });
   return failures.reverse().find(({ event, index }) => (
     !durableStateResolvesRuntimeFailure(event, coordinator, workPackages)
     && !events.slice(index + 1).some((candidate) => eventResolvesRuntimeFailure(event, candidate))

@@ -707,8 +707,9 @@ function compactLegacyMigration(task, cancelledWorkers, invalidatedRoundIds, mig
 }
 
 function repairDirectorLegacyRounds(taskValue) {
-  const task = typeof taskValue === "string" ? readTask(taskValue) : taskValue;
+  let task = typeof taskValue === "string" ? readTask(taskValue) : taskValue;
   if (!isDirectorTask(task) || task.program.migration?.mode !== "legacy-to-director-cfo") return task;
+  task = repairDirectorExecutionEvidence(task);
   const legacyRoundIds = [...new Set((task.program.migration.legacyRounds || []).map((row) => String(row.roundId || "")).filter(Boolean))];
   if (!legacyRoundIds.length) return task;
 
@@ -2586,6 +2587,35 @@ function handoffEvidence(workPackage, handoff, baseIntegration, jobId, packagePr
   return rows;
 }
 
+function executionReceiptEvidence(workPackage, receipt) {
+  const packageFence = String(workPackage?.revisionFence?.fingerprint || "");
+  const receiptFence = String(receipt?.revisionFence?.fingerprint || "");
+  if (
+    workPackage?.state !== "completed"
+    || receipt?.state !== "succeeded"
+    || receipt?.workPackageId !== workPackage.workPackageId
+    || workPackage.executionReceiptId !== receipt.receiptId
+    || !packageFence
+    || packageFence !== receiptFence
+  ) {
+    return [];
+  }
+  const receiptFingerprint = String(receipt.fingerprint || hash(receipt));
+  const ref = `director-execution-receipt:${receipt.receiptId}:${receiptFingerprint}`;
+  return (workPackage.acceptanceIds || []).map((requirementId) => ({
+    requirementId,
+    level: "integration",
+    ref,
+    summary: "The completed revision-fenced execution receipt was accepted by the Director-CFO integration path.",
+    passed: true,
+    accepted: true,
+    workPackageId: workPackage.workPackageId,
+    jobId: workPackage.jobId || "",
+    proofRef: `director-receipt:${receipt.receiptId}:${receiptFingerprint}`,
+    verifiedAt: receipt.completedAt || workPackage.completedAt || utcNow(),
+  }));
+}
+
 function canonicalExecutionReceipt(task, workPackage, canonicalPackage, handoff, jobId) {
   const program = task.program;
   const typed = handoff?.deliverable || handoff?.artifact || {};
@@ -2664,12 +2694,141 @@ function recordAcceptanceEvidence(current, evidenceRows) {
         verifiedAt: evidence.verifiedAt,
       }].slice(-20);
     }
+    const packageProofAccepted = evidence.accepted !== false
+      && evidence.passed === true
+      && Boolean(evidence.workPackageId)
+      && Boolean(evidence.proofRef)
+      && EVIDENCE_RANK[evidence.level] >= EVIDENCE_RANK["focused-test"];
+    if (
+      packageProofAccepted
+      && requirement.status === "blocked"
+      && EVIDENCE_RANK[evidence.level] < EVIDENCE_RANK[requirement.minimumEvidenceLevel]
+    ) {
+      requirement.status = "failing";
+      requirement.blocker = null;
+    }
     if (evidence.accepted !== false && evidence.passed && EVIDENCE_RANK[evidence.level] >= EVIDENCE_RANK[requirement.minimumEvidenceLevel]) {
       requirement.status = "passing";
       requirement.blocker = null;
     }
     current.evidence = [...(current.evidence || []), evidence].slice(-100);
   }
+}
+
+function repairDirectorExecutionEvidence(task) {
+  const receiptsById = new Map((task.program.executionReceipts || []).map((row) => [row.receiptId, row]));
+  const candidates = (task.program.workPackages || []).flatMap((workPackage) => (
+    executionReceiptEvidence(workPackage, receiptsById.get(workPackage.executionReceiptId))
+  ));
+  if (!candidates.length) return task;
+
+  const needsRepair = candidates.some((evidence) => {
+    const requirement = task.requirements.find((row) => row.id === evidence.requirementId);
+    if (!requirement) return false;
+    const requirementProof = (requirement.evidence || []).find((row) => (
+      row.accepted !== false
+      && row.passed === true
+      && row.workPackageId === evidence.workPackageId
+      && EVIDENCE_RANK[row.level] >= EVIDENCE_RANK.integration
+    ));
+    const effectiveEvidence = requirementProof || evidence;
+    const taskHasProof = (task.evidence || []).some((row) => (
+      row.accepted !== false
+      && row.passed === true
+      && row.requirementId === evidence.requirementId
+      && row.workPackageId === evidence.workPackageId
+      && EVIDENCE_RANK[row.level] >= EVIDENCE_RANK.integration
+    ));
+    const ledgerHasProof = (task.program.evidenceLedger?.entries || []).some((row) => (
+      row.accepted !== false
+      && row.passed === true
+      && row.requirementId === evidence.requirementId
+      && row.workPackageId === evidence.workPackageId
+      && EVIDENCE_RANK[row.level] >= EVIDENCE_RANK.integration
+    ));
+    const graphHasProof = (task.workGraph || []).some((node) => (
+      (node.id === evidence.workPackageId || node.programWorkPackageId === evidence.workPackageId)
+      && (node.evidenceRefs || []).includes(effectiveEvidence.ref)
+    ));
+    const satisfiesMinimum = EVIDENCE_RANK[effectiveEvidence.level] >= EVIDENCE_RANK[requirement.minimumEvidenceLevel];
+    const staleStatus = requirement.status === "passing"
+      ? Boolean(requirement.blocker)
+      : satisfiesMinimum || requirement.status === "blocked";
+    return !requirementProof || !taskHasProof || !ledgerHasProof || !graphHasProof || staleStatus;
+  });
+  if (!needsRepair) return task;
+
+  return updateTask(task.taskId, (current) => {
+    const currentReceiptsById = new Map((current.program.executionReceipts || []).map((row) => [row.receiptId, row]));
+    const currentCandidates = (current.program.workPackages || []).flatMap((workPackage) => (
+      executionReceiptEvidence(workPackage, currentReceiptsById.get(workPackage.executionReceiptId))
+    ));
+    let evidenceLedger = current.program.evidenceLedger;
+    const graphRefs = new Map();
+    for (const evidence of currentCandidates) {
+      const requirement = current.requirements.find((row) => row.id === evidence.requirementId);
+      if (!requirement) continue;
+      let requirementProof = (requirement.evidence || []).find((row) => (
+        row.accepted !== false
+        && row.passed === true
+        && row.workPackageId === evidence.workPackageId
+        && EVIDENCE_RANK[row.level] >= EVIDENCE_RANK.integration
+      ));
+      if (!requirementProof) {
+        recordAcceptanceEvidence(current, [evidence]);
+        requirementProof = evidence;
+      }
+      const effectiveEvidence = {
+        ...requirementProof,
+        requirementId: evidence.requirementId,
+        accepted: true,
+        passed: true,
+        workPackageId: evidence.workPackageId,
+        jobId: requirementProof.jobId || evidence.jobId,
+        proofRef: requirementProof.proofRef || evidence.proofRef,
+        verifiedAt: requirementProof.verifiedAt || evidence.verifiedAt,
+      };
+      if (requirement.status !== "passing") {
+        if (EVIDENCE_RANK[effectiveEvidence.level] >= EVIDENCE_RANK[requirement.minimumEvidenceLevel]) {
+          requirement.status = "passing";
+          requirement.blocker = null;
+        } else if (requirement.status === "blocked") {
+          requirement.status = "failing";
+          requirement.blocker = null;
+        }
+      } else if (requirement.blocker) {
+        requirement.blocker = null;
+      }
+
+      const taskHasProof = (current.evidence || []).some((row) => (
+        row.accepted !== false
+        && row.passed === true
+        && row.requirementId === evidence.requirementId
+        && row.workPackageId === evidence.workPackageId
+        && EVIDENCE_RANK[row.level] >= EVIDENCE_RANK.integration
+      ));
+      if (!taskHasProof) current.evidence = [...(current.evidence || []), effectiveEvidence].slice(-100);
+      const ledgerHasProof = (evidenceLedger?.entries || []).some((row) => (
+        row.accepted !== false
+        && row.passed === true
+        && row.requirementId === evidence.requirementId
+        && row.workPackageId === evidence.workPackageId
+        && EVIDENCE_RANK[row.level] >= EVIDENCE_RANK.integration
+      ));
+      if (!ledgerHasProof) evidenceLedger = appendProgramEvidence({ evidenceLedger }, effectiveEvidence);
+      const refs = graphRefs.get(evidence.workPackageId) || [];
+      graphRefs.set(evidence.workPackageId, [...new Set([...refs, effectiveEvidence.ref])]);
+    }
+    current.program = { ...current.program, evidenceLedger, updatedAt: utcNow() };
+    current.workGraph = (current.workGraph || []).map((node) => {
+      const workPackageId = node.id || node.programWorkPackageId;
+      const refs = graphRefs.get(workPackageId);
+      return refs?.length
+        ? { ...node, evidenceRefs: [...new Set([...(node.evidenceRefs || []), ...refs])].slice(-20) }
+        : node;
+    });
+    return current;
+  });
 }
 
 function staleDirectorResult(message) {
@@ -2933,6 +3092,20 @@ function integrateExecutionResult(task, workPackage, handoff, baseIntegration, j
     const receipt = canonicalExecutionReceipt(current, activePackage, ready.canonicalPackage, handoff, jobId);
     assertExecutionReceiptIntegrable(ready.state, ready.canonicalPackage, receipt);
     const evidenceRows = handoffEvidence(activePackage, handoff, baseIntegration, jobId, packageProof);
+    const receiptRows = executionReceiptEvidence(
+      { ...activePackage, state: "completed", executionReceiptId: receipt.receiptId },
+      receipt,
+    );
+    for (const row of receiptRows) {
+      const alreadyRepresented = evidenceRows.some((existing) => (
+        existing.accepted !== false
+        && existing.passed === true
+        && existing.requirementId === row.requirementId
+        && existing.workPackageId === row.workPackageId
+        && EVIDENCE_RANK[existing.level] >= EVIDENCE_RANK.integration
+      ));
+      if (!alreadyRepresented) evidenceRows.push(row);
+    }
     recordAcceptanceEvidence(current, evidenceRows);
     const now = utcNow();
     let workPackages = current.program.workPackages.map((row) => sameDirectorPackage(row, activePackage)
@@ -3667,6 +3840,11 @@ function adoptPreservedOperationResult(input = {}) {
     const integratingPackage = { ...activePackage, state: "running" };
     const executionReceipt = canonicalExecutionReceipt(current, integratingPackage, canonicalPackage, adoptedHandoff, jobId);
     assertExecutionReceiptIntegrable(currentState, canonicalPackage, executionReceipt);
+    const evidenceRows = executionReceiptEvidence(
+      { ...integratingPackage, state: "completed", executionReceiptId: executionReceipt.receiptId },
+      executionReceipt,
+    );
+    recordAcceptanceEvidence(current, evidenceRows);
     const reconciliationIds = new Set(generatedReconciliations.map((row) => row.workPackageId));
     let workPackages = current.program.workPackages
       .filter((row) => !reconciliationIds.has(row.workPackageId))
@@ -3688,6 +3866,10 @@ function adoptPreservedOperationResult(input = {}) {
       workPackages,
       masterPlan: advancePlanState(current.program.masterPlan, workPackages),
       executionReceipts: [...(current.program.executionReceipts || []), executionReceipt].slice(-1000),
+      evidenceLedger: evidenceRows.reduce(
+        (ledger, row) => appendProgramEvidence({ evidenceLedger: ledger }, row),
+        current.program.evidenceLedger,
+      ),
       failureMemory: (current.program.failureMemory || []).filter((row) => !(row.workPackageId === workPackageId && row.attemptId === jobId)),
       resultRecoveries: [...(current.program.resultRecoveries || []), {
         state: "adopted",
@@ -3711,7 +3893,11 @@ function adoptPreservedOperationResult(input = {}) {
           state: "completed",
           owner: null,
           lastFailure: "",
-          evidenceRefs: [...(node.evidenceRefs || []), `director-result-adoption:${jobId}:${validation.fingerprint}`].slice(-20),
+          evidenceRefs: [
+            ...(node.evidenceRefs || []),
+            `director-result-adoption:${jobId}:${validation.fingerprint}`,
+            ...evidenceRows.map((row) => row.ref),
+          ].slice(-20),
         }
         : node);
     return current;
