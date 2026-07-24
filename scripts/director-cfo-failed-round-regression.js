@@ -8,6 +8,7 @@ const path = require("node:path");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "director-cfo-failed-round-"));
 process.env.AI_MOBILE_DATA_ROOT = path.join(root, "state");
+process.env.AI_MOBILE_TEST_ALLOW_DUPLICATE_PROGRAM = "1";
 const workspace = path.join(root, "workspace");
 fs.mkdirSync(path.join(workspace, ".codex"), { recursive: true });
 fs.writeFileSync(path.join(workspace, ".codex", "PROJECT_OUTCOME.md"), "# Outcome\nRecover failed Director workers through strong reconciliation.\n", "utf8");
@@ -128,6 +129,7 @@ function validContextArtifact(task, workPackage) {
 (async () => {
   try {
     const started = startDirectorProgram({
+      allowDuplicateProgramForTest: true,
       workspace,
       outcome: "Recover an all-failed context round without leaving stale ownership.",
       forceProgram: true,
@@ -221,6 +223,7 @@ function validContextArtifact(task, workPackage) {
     assert.equal(replayed.program.workPackages.filter((row) => row.executorKind === "reconciliation").length, 1, "Repeated integration must not duplicate reconciliation work.");
 
     const restartStarted = startDirectorProgram({
+      allowDuplicateProgramForTest: true,
       workspace,
       outcome: "Resume an already-collected pre-plan reconciliation without duplicating its worker or round.",
       forceProgram: true,
@@ -477,6 +480,7 @@ function validContextArtifact(task, workPackage) {
       },
     };
     const semanticStarted = startDirectorProgram({
+      allowDuplicateProgramForTest: true,
       workspace,
       outcome: "Recover a semantic context integration failure on the same provider without poisoning its stronger reconciler.",
       forceProgram: true,
@@ -691,6 +695,7 @@ function validContextArtifact(task, workPackage) {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     delete process.env.AI_MOBILE_DATA_ROOT;
+    delete process.env.AI_MOBILE_TEST_ALLOW_DUPLICATE_PROGRAM;
   }
 })().catch((error) => {
   process.stderr.write((error.stack || error.message) + "\n");

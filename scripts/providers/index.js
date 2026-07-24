@@ -85,11 +85,11 @@ function compareVersions(left, right) {
 function codexCacheCompatibility(cliVersion, options = {}) {
   const codexRoot = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const cacheFile = path.join(codexRoot, "models_cache.json");
-  if (!fs.existsSync(cacheFile)) return { compatible: true, cliVersion: String(cliVersion || ""), cacheVersion: "", reason: "model-cache-absent" };
+  if (!fs.existsSync(cacheFile)) return { compatible: true, cliVersion: String(cliVersion || ""), cacheVersion: "", reason: "model-cache-absent", reasonCode: "cache-absent" };
   let cache;
   try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); }
   catch {
-    return { compatible: false, cliVersion: String(cliVersion || ""), cacheVersion: "invalid", reason: "Codex model cache is not valid JSON." };
+    return { compatible: false, cliVersion: String(cliVersion || ""), cacheVersion: "invalid", reason: "Codex model cache is not valid JSON.", reasonCode: "cache-invalid" };
   }
   const cli = numericVersion(cliVersion);
   const cached = numericVersion(cache.client_version);
@@ -99,15 +99,42 @@ function codexCacheCompatibility(cliVersion, options = {}) {
       cliVersion: cli.join("."),
       cacheVersion: cached.join("."),
       reason: `Codex CLI ${cli.join(".")} is older than local model cache ${cached.join(".")}; update the CLI before worker use.`,
+      reasonCode: "cache-newer",
     };
   }
-  return { compatible: true, cliVersion: cli ? cli.join(".") : String(cliVersion || ""), cacheVersion: cached ? cached.join(".") : "", reason: "compatible" };
+  return { compatible: true, cliVersion: cli ? cli.join(".") : String(cliVersion || ""), cacheVersion: cached ? cached.join(".") : "", reason: "compatible", reasonCode: "compatible" };
+}
+
+function codexNativeCompatibility(cacheCompatibility, native) {
+  if (cacheCompatibility.compatible || cacheCompatibility.reasonCode !== "cache-newer") return cacheCompatibility;
+  const models = native?.models?.data || native?.models?.models || [];
+  if (!Array.isArray(models) || models.length === 0) return cacheCompatibility;
+  return {
+    ...cacheCompatibility,
+    compatible: true,
+    reason: "A fresh native Codex app-server probe returned the current model roster.",
+    reasonCode: "native-probe-verified",
+    nativeProbeVerified: true,
+  };
 }
 
 function discoverCodex() {
   const cli = findCodex();
   if (!cli.found) return provider("codex", false, { reason: "Codex CLI not found." });
-  const compatibility = codexCacheCompatibility(cli.version);
+  const cacheCompatibility = codexCacheCompatibility(cli.version);
+  if (!cacheCompatibility.compatible && cacheCompatibility.reasonCode !== "cache-newer") return provider("codex", false, {
+    installed: true,
+    command: cli.command,
+    version: cli.version,
+    cacheCompatibility,
+    reason: cacheCompatibility.reason,
+  });
+  const login = commandResult(cli.command, ["login", "status"], { timeout: 7000 });
+  const auth = parseCodexLoginStatus(login.stdout, login.stderr);
+  const probe = commandResult(process.execPath, [path.join(__dirname, "codex-app-server-probe.js"), cli.command], { timeout: 9000 });
+  let native = null;
+  try { native = JSON.parse(probe.stdout); } catch { /* native evidence remains unavailable */ }
+  const compatibility = codexNativeCompatibility(cacheCompatibility, native);
   if (!compatibility.compatible) return provider("codex", false, {
     installed: true,
     command: cli.command,
@@ -115,11 +142,6 @@ function discoverCodex() {
     cacheCompatibility: compatibility,
     reason: compatibility.reason,
   });
-  const login = commandResult(cli.command, ["login", "status"], { timeout: 7000 });
-  const auth = parseCodexLoginStatus(login.stdout, login.stderr);
-  const probe = commandResult(process.execPath, [path.join(__dirname, "codex-app-server-probe.js"), cli.command], { timeout: 9000 });
-  let native = null;
-  try { native = JSON.parse(probe.stdout); } catch { /* native evidence remains unavailable */ }
   const snapshots = native?.rateLimits?.rateLimitsByLimitId || (native?.rateLimits?.rateLimits ? { codex: native.rateLimits.rateLimits } : {});
   const windows = [];
   for (const [limitId, snapshot] of Object.entries(snapshots || {})) {
@@ -147,6 +169,7 @@ function discoverCodex() {
   const effectiveWindows = windows.some((item) => item.limitId === "codex") ? windows.filter((item) => item.limitId === "codex") : windows;
   return provider("codex", auth.loggedIn === true, {
     command: cli.command, version: cli.version, authMode: auth.authMode,
+    cacheCompatibility: compatibility,
     confidence: auth.loggedIn === true ? "high" : "medium",
     // Preserve native metadata. The router uses these descriptions and effort
     // capabilities, rather than a stale model-name leaderboard or list order.
@@ -1096,4 +1119,4 @@ function discoverProvider(id) {
   return provider(id || "unknown", false, { reason: "Unknown provider." });
 }
 
-module.exports = { antigravityCliModelArgument, antigravityLimitModels, callableAntigravityModels, antigravityModelIdentityMatch, antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeInvocation, claudeModelIdentityMatch, claudeResultSchema, classifyFailure, codexCacheCompatibility, codexInvocationModelUsage, codexModelIdentityEvidence, codexReadOnlyMode, discoverAll, discoverProvider, enrichModel, inferModelTier, normalizeClaudeUsage, numericOrNull, parseAntigravityResolvedModelLog, prepareAntigravityInvocation, prepareCodexInvocation, providerExecutionAccess, runProvider, typedClaudeSchema };
+module.exports = { antigravityCliModelArgument, antigravityLimitModels, callableAntigravityModels, antigravityModelIdentityMatch, antigravityRemaining, buildAntigravityArgs, buildClaudeArgs, claudeInvocation, claudeModelIdentityMatch, claudeResultSchema, classifyFailure, codexCacheCompatibility, codexNativeCompatibility, codexInvocationModelUsage, codexModelIdentityEvidence, codexReadOnlyMode, discoverAll, discoverProvider, enrichModel, inferModelTier, normalizeClaudeUsage, numericOrNull, parseAntigravityResolvedModelLog, prepareAntigravityInvocation, prepareCodexInvocation, providerExecutionAccess, runProvider, typedClaudeSchema };

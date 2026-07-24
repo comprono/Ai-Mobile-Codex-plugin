@@ -41,7 +41,17 @@ const { normalizeCommands } = require("./verification");
 const { validateTypedDeliverable } = require("./typed-deliverables");
 const { cancelTaskJobs } = require("./job-store");
 const { integrateJob } = require("./patch-integration");
-const { createTaskRecord, jobDirectory, readRound, readTask, updateRound, updateTask } = require("./state-store");
+const {
+  createTaskRecord,
+  jobDirectory,
+  listTaskIds,
+  readRound,
+  readTask,
+  updateRound,
+  updateTask,
+  withWorkspaceLock,
+  workspaceKey,
+} = require("./state-store");
 const { resourceLeaseSnapshot } = require("./resource-leases");
 const { readProfile } = require("../lib/orchestrator-profile");
 const { runtimeFingerprint } = require("../lib/runtime-identity");
@@ -921,6 +931,59 @@ function startDirectorProgram(args = {}, resources = {}) {
   const outcome = clip(args.outcome || args.userRequest || args.request, 10000).trim();
   if (!workspace) throw new Error("start-program requires workspace.");
   if (!outcome) throw new Error("start-program requires outcome or userRequest.");
+  return withWorkspaceLock(workspace, () => startDirectorProgramLocked(args, resources, intake, workspace, outcome));
+}
+
+function startDirectorProgramLocked(args, resources, intake, workspace, outcome) {
+  const duplicateProgramTestBypass = args.allowDuplicateProgramForTest === true
+    && process.env.AI_MOBILE_TEST_ALLOW_DUPLICATE_PROGRAM === "1";
+  if (!duplicateProgramTestBypass) {
+    const active = listTaskIds()
+      .map((taskId) => {
+        try { return readTask(taskId); } catch { return null; }
+      })
+      .filter((task) => task
+        && task.workspaceKey === workspaceKey(workspace)
+        && isDirectorTask(task)
+        && !["cancelled", "completed"].includes(task.state)
+        && !["cancelled", "completed"].includes(task.program.state))
+      .sort((left, right) => Number(right.contractVersion || 0) - Number(left.contractVersion || 0)
+        || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""))
+        || left.taskId.localeCompare(right.taskId));
+    if (active.length > 1) {
+      throw new Error(`Multiple active Director-CFO programs exist for this workspace: ${active.map((task) => task.taskId).join(", ")}. Cancel the accidental duplicate or pass an explicit taskId to reconcile-task.`);
+    }
+    if (active.length === 1) {
+      const task = active[0];
+      const outcomeChanged = outcome !== String(task.outcome || "").trim();
+      return {
+        mode: PROGRAM_MODE,
+        orchestrationStarted: false,
+        reused: true,
+        requestedOutcomeDiffers: outcomeChanged,
+        outcomePreserved: true,
+        reconciliationRequired: false,
+        taskId: task.taskId,
+        programId: task.program.programId,
+        intake,
+        phase: task.program.phase,
+        mission: {
+          missionId: task.program.mission?.missionId || null,
+          outcome: task.outcome,
+        },
+        requestedOutcome: outcome,
+        sources: {
+          authorized: task.program.sourceCatalog?.sources?.length || 0,
+          rejected: task.program.sourceCatalog?.rejectedSources || [],
+        },
+        console: task.currentCodex,
+        correctionAction: outcomeChanged
+          ? `Only if the user explicitly intended to replace the canonical outcome, call reconcile-task with taskId ${task.taskId}.`
+          : null,
+        nextAction: task.program.nextAction,
+      };
+    }
+  }
   const requirements = acceptanceRows(args.acceptanceEvidence || args.requirements, outcome);
   const missionId = cleanId(args.missionId || `mission-${hash({ workspace: path.resolve(workspace), outcome, at: utcNow() }, 20)}`, "mission");
   const mission = normalizeMission({

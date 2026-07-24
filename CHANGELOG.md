@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.11 - 2026-07-24
+
+- Restricts the intentional duplicate-program test bypass to an explicit regression-only process environment so normal MCP and CLI callers cannot disable workspace deduplication.
+- Packages the final workspace-reuse implementation under a new immutable cache version after post-install hardening changed the runtime fingerprint.
+## 1.4.10 - 2026-07-24
+
+- Reuses the one active Director-CFO program already bound to a workspace instead of silently creating a duplicate mission and losing its acceptance history.
+- Serializes Director intake with a workspace lock so simultaneous `start-program` calls cannot race into two durable tasks.
+- Fails closed when historical corruption leaves multiple active Director programs, and requires explicit cancellation or reconciliation before any campaign runs.
+- Preserves and resumes the canonical mission even when a repeated intake paraphrases its outcome; only an explicit `reconcile-task` call may replace it.
+## 1.4.9 - 2026-07-24
+
+- Accepts a newer shared model cache only when a fresh native Codex app-server probe successfully returns a non-empty current model roster.
+- Preserves fail-closed behavior for invalid caches and for newer-cache mismatches when the native probe fails or returns no models.
+- Restores Codex worker availability with GPT-5.6 Sol, Terra, and Codex Auto Review `ultra` effort after updating the standalone CLI to 0.145.0.
+
+## 1.4.8 - 2026-07-24
+
+- Corrects release identity after post-install reporting and Director evidence-replay fixes diverged from the already loaded 1.4.7 cache.
+- Packages the latest Director orchestration and program-reporting runtime in a new side-by-side cache version so Codex does not need to overwrite its locked active plugin directory.
+- Requires exact source, Codex, and Claude runtime fingerprint parity before the release is reported as installed.
+
 ## 1.4.7 - 2026-07-24
 
 - Revises only the failed Job Vibhu operation to the exact confirmed-write command and preserves the accepted context and strategy.

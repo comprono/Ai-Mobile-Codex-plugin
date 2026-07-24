@@ -86,7 +86,7 @@ const SOURCE_DESCRIPTORS_SCHEMA = { type: "object", description: "Authorized sou
 ) };
 
 const TOOLS = [
-  { name: "start-program", description: "Director-CFO intake for AI Mobile. Tasks estimated within one minute return a direct bypass; complex projects create a durable mission, authorized context-scout assignment, and bounded program. Source descriptors or snapshots must be explicitly supplied and authorized; chats are never discovered automatically.", inputSchema: { type: "object", required: ["workspace"], anyOf: [{ required: ["outcome"] }, { required: ["userRequest"] }, { required: ["request"] }], properties: {
+  { name: "start-program", description: "Director-CFO intake for AI Mobile. Tasks estimated within one minute return a direct bypass. Complex projects reuse the one active Director program already bound to the workspace, or create one durable mission when none exists. Different wording still preserves and resumes the canonical outcome; only an explicit reconcile-task call may replace it. Source descriptors or snapshots must be explicitly supplied and authorized; chats are never discovered automatically.", inputSchema: { type: "object", required: ["workspace"], anyOf: [{ required: ["outcome"] }, { required: ["userRequest"] }, { required: ["request"] }], properties: {
     workspace: { type: "string" }, outcome: { type: "string" }, userRequest: { type: "string" }, request: { type: "string" },
     mode: { enum: ["auto", "direct", "program"] }, orchestrationMode: { enum: ["auto", "direct", "program"] }, forceDirect: { type: "boolean" }, forceProgram: { type: "boolean" },
     expectedDurationSeconds: { type: "number", minimum: 0 }, acceptanceEvidence: PROGRAM_ACCEPTANCE_SCHEMA,

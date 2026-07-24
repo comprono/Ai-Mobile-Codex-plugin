@@ -23,7 +23,7 @@ const { classifyFailure: classifyProgramFailure } = require("./core/failure-reco
 const { providerHistory } = require("./core/provider-history");
 const { normalizeRequest, route } = require("./core/router");
 const { writeProfile } = require("./lib/orchestrator-profile");
-const { antigravityCliModelArgument, antigravityLimitModels, buildAntigravityArgs, callableAntigravityModels, classifyFailure, codexCacheCompatibility, enrichModel, inferModelTier, runProvider } = require("./providers");
+const { antigravityCliModelArgument, antigravityLimitModels, buildAntigravityArgs, callableAntigravityModels, classifyFailure, codexCacheCompatibility, codexNativeCompatibility, enrichModel, inferModelTier, runProvider } = require("./providers");
 
 const resetSoon = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 const providers = {
@@ -84,6 +84,13 @@ fs.writeFileSync(path.join(codexCacheRoot, "models_cache.json"), JSON.stringify(
 const incompatibleCodexCache = codexCacheCompatibility("codex-cli 0.144.1", { codexHome: codexCacheRoot });
 assert.equal(incompatibleCodexCache.compatible, false);
 assert.match(incompatibleCodexCache.reason, /older than local model cache/i);
+assert.equal(codexNativeCompatibility(incompatibleCodexCache, { models: { data: [] } }).compatible, false);
+const nativeVerifiedCodexCache = codexNativeCompatibility(incompatibleCodexCache, {
+  models: { data: [{ id: "gpt-5.6-sol", supportedReasoningEfforts: [{ reasoningEffort: "ultra" }] }] },
+});
+assert.equal(nativeVerifiedCodexCache.compatible, true);
+assert.equal(nativeVerifiedCodexCache.nativeProbeVerified, true);
+assert.equal(nativeVerifiedCodexCache.reasonCode, "native-probe-verified");
 assert.equal(codexCacheCompatibility("codex-cli 0.145.0", { codexHome: codexCacheRoot }).compatible, true);
 const fullAntigravityModels = antigravityLimitModels({ Models: [
   { Id: "claude-opus-4-6-thinking", DisplayName: "Claude Opus 4.6 (Thinking)", Disabled: false, Quota: { Status: "available", RemainingPercent: 100, ResetTimeUtc: resetSoon } },

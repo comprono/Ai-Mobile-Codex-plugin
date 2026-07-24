@@ -250,6 +250,7 @@ function deterministicVerification(workPackage) {
 }
 function routingGuardRegression(workspace) {
   const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Build a long-running program whose strategy requires a frontier model.",
     forceProgram: true,
@@ -289,6 +290,7 @@ function routingGuardRegression(workspace) {
 
 function staleCorrectionRegression(workspace) {
   const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Build a long-running feature and preserve user corrections during integration.",
     forceProgram: true,
@@ -348,6 +350,7 @@ function staleCorrectionRegression(workspace) {
 
 function terminalIntegrationFailureRegression(workspace) {
   const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Fail closed when a post-plan reconciliation result loses its canonical revision fence.",
     forceProgram: true,
@@ -487,6 +490,7 @@ function contextFreshnessIntegrationRegression(workspace) {
   fs.writeFileSync(runtimeLog, "tick 1\n", "utf8");
   fs.writeFileSync(runtimeDatabase, "row 1\n", "utf8");
   const dynamicStarted = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Build a long-running program while runtime evidence continues changing.",
     forceProgram: true,
@@ -508,6 +512,7 @@ function contextFreshnessIntegrationRegression(workspace) {
   assert.equal(readTask(task.taskId).program.phase, "strategy");
 
   const staticStarted = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Build a long-running program with a bounded post-worker context refresh.",
     forceProgram: true,
@@ -551,6 +556,7 @@ function contextFreshnessIntegrationRegression(workspace) {
 
 function planRevisionRegression(workspace) {
   const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Recover from an invalid execution plan without retaining stale workers.",
     forceProgram: true,
@@ -715,6 +721,7 @@ function planRevisionRegression(workspace) {
 
 function userDecisionOnlyRegression(workspace) {
   const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Stop only when reconciliation genuinely requires an exact user decision.",
     forceProgram: true,
@@ -769,6 +776,7 @@ function userDecisionOnlyRegression(workspace) {
 
 function executionContextScoutIntegrationRegression(workspace) {
   const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
     workspace,
     outcome: "Use an execution-phase context scout to produce acceptance-linked research evidence.",
     forceProgram: true,
@@ -862,8 +870,38 @@ function run() {
   fs.writeFileSync(path.join(workspace, ".codex", "ACCEPTANCE.json"), JSON.stringify({ requirements: ["build", "visible"] }));
   fs.writeFileSync(path.join(workspace, "src", "existing.js"), "module.exports = {};\n");
   process.env.AI_MOBILE_DATA_ROOT = dataRoot;
+  process.env.AI_MOBILE_TEST_ALLOW_DUPLICATE_PROGRAM = "1";
 
   try {
+    const reuseWorkspace = path.join(temp, "reuse-workspace");
+    fs.mkdirSync(path.join(reuseWorkspace, ".codex"), { recursive: true });
+    fs.writeFileSync(path.join(reuseWorkspace, ".codex", "PROJECT_OUTCOME.md"), "# Outcome\nReuse the durable program.\n");
+    const original = startDirectorProgram({
+      workspace: reuseWorkspace,
+      outcome: "Reuse one durable Director-CFO program for this workspace.",
+      forceProgram: true,
+    }, resources());
+    const reused = startDirectorProgram({
+      workspace: reuseWorkspace,
+      outcome: "Reuse one durable Director-CFO program for this workspace.",
+      forceProgram: true,
+    }, resources());
+    assert.equal(reused.taskId, original.taskId);
+    assert.equal(reused.reused, true);
+    assert.equal(reused.orchestrationStarted, false);
+    assert.equal(reused.reconciliationRequired, false);
+    const changedOutcome = startDirectorProgram({
+      workspace: reuseWorkspace,
+      outcome: "Replace the existing outcome only through explicit reconciliation.",
+      forceProgram: true,
+    }, resources());
+    assert.equal(changedOutcome.taskId, original.taskId);
+    assert.equal(changedOutcome.reused, true);
+    assert.equal(changedOutcome.reconciliationRequired, false);
+    assert.equal(changedOutcome.requestedOutcomeDiffers, true);
+    assert.equal(changedOutcome.outcomePreserved, true);
+    assert.match(changedOutcome.correctionAction, /reconcile-task/);
+
     const contextFreshness = contextFreshnessIntegrationRegression(workspace);
     const terminalIntegrationFailure = terminalIntegrationFailureRegression(workspace);
     const planRevision = planRevisionRegression(workspace);
@@ -874,6 +912,7 @@ function run() {
     assert.equal(direct.orchestrationStarted, false);
 
     const started = startDirectorProgram({
+    allowDuplicateProgramForTest: true,
       workspace,
       outcome: "Build and verify the requested feature across a long-running project.",
       forceProgram: true,
@@ -1089,10 +1128,12 @@ function run() {
       contextFreshness,
       userCorrectionInvalidatedPlan: true,
       reportDeduplicated: true,
+      workspaceProgramReused: reused.taskId === original.taskId,
     }, null, 2));
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
     delete process.env.AI_MOBILE_DATA_ROOT;
+    delete process.env.AI_MOBILE_TEST_ALLOW_DUPLICATE_PROGRAM;
   }
 }
 

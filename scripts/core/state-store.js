@@ -137,6 +137,15 @@ function portfolioLockDirectory(portfolioId) {
 function withPortfolioLock(portfolioId, action) {
   return withDirectoryLock(portfolioLockDirectory(portfolioId), action, { timeoutMs: 5000, staleMs: 30000 });
 }
+
+function workspaceLockDirectory(workspaceValue) {
+  return path.join(stateRoot(), "workspace-locks", `${workspaceKey(workspaceValue)}.lock`);
+}
+
+function withWorkspaceLock(workspaceValue, action) {
+  return withDirectoryLock(workspaceLockDirectory(workspaceValue), action, { timeoutMs: 5000, staleMs: 30000 });
+}
+
 function updateTask(taskId, mutator) {
   return withTaskLock(taskId, () => {
     const record = readTask(taskId);
@@ -288,5 +297,6 @@ module.exports = {
   updatePortfolio,
   updatePortfolioRound,
   updateTask,
+  withWorkspaceLock,
   workspaceKey,
 };
