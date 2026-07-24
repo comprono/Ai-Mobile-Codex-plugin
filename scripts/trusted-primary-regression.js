@@ -279,9 +279,21 @@ const directorHandoff = createRestartHandoff({
 assert.equal(directorHandoff.handoffMode, "resume-program");
 assert.equal(directorHandoff.reconcileContract, null);
 assert.match(directorHandoff.resumePrompt, /Do not call reconcile-task, start-program, start-task/i);
+assert.match(directorHandoff.resumePrompt, /already completed the one permitted resource-inventory runtime proof/i);
 assert.doesNotMatch(directorHandoff.resumePrompt, /"migrateToDirector":true/);
 assert.match(directorHandoff.resumePrompt, /run-program-campaign exactly once/i);
 assert.equal(JSON.stringify(readTask(directorTask.taskId).program), directorBefore);
+assert.throws(() => createRestartHandoff({
+  userAuthorized: true,
+  taskId: directorTask.taskId,
+  threadId: "21234567-89ab-cdef-0123-456789abcdef",
+  workspace,
+  verificationModel: "gpt-5.6-sol",
+  verificationEffort: "ultra",
+  resumeModel: "gpt-5.3-codex-spark",
+  resumeEffort: "medium",
+  nextAction: "Call resource-inventory once, then run the existing program campaign",
+}), /must not repeat resource-inventory/i);
 
 const dryRun = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "restart-codex-handoff.ps1"), "-HandoffFile", handoff.file, "-DryRun"], { encoding: "utf8" });
 assert.equal(dryRun.status, 0, dryRun.stderr);

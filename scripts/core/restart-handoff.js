@@ -70,6 +70,9 @@ function createRestartHandoff(args = {}) {
   }
   const nextAction = String(args.nextAction || task?.currentCodex?.goal || "").trim().slice(0, 4000);
   if (!nextAction) throw new Error("Restart handoff requires the exact next action.");
+  if (/\bresource[\s_-]*inventory\b/i.test(nextAction)) {
+    throw new Error("Restart continuation nextAction must not repeat resource-inventory; the capable verification turn owns the single runtime proof call.");
+  }
   const priorities = (Array.isArray(args.priorities) ? args.priorities : []).slice(0, 12).map((item) => String(item).trim().slice(0, 500)).filter(Boolean);
   const rawCleanup = Array.isArray(args.cleanupPluginIds) ? args.cleanupPluginIds : [];
   const cleanupPluginIds = rawCleanup.slice(0, 5).map((item) => String(item || "").trim()).filter(Boolean);
@@ -138,6 +141,7 @@ function createRestartHandoff(args = {}) {
       resumeModel ? "Visible console model: " + resumeModel + " at " + resumeEffort + " effort." : "",
       "The visible task is a lightweight project console only: invoke coordinator tools, take user direction, and report verified material transitions.",
       "Do not bulk-read repositories, perform heavy planning, edit project files, review patches, create a duplicate Codex task, AI Mobile task, Goal, automation, manager loop, or hidden CLI continuation.",
+      "The immediately preceding capable-model turn already completed the one permitted resource-inventory runtime proof. Do not call resource-inventory again.",
       directorProgram
         ? "Resume durable Director-CFO task " + task.taskId + " in place. Do not call reconcile-task, start-program, start-task, or any legacy orchestration tool."
         : "Migrate durable task " + task.taskId + " exactly once with reconcile-task using this JSON contract; do not create another task: " + JSON.stringify(reconcileContract),

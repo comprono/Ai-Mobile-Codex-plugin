@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.14 - 2026-07-25
+
+- Separates the capable-model restart verification turn from the lightweight continuation turn so the mandatory `resource-inventory` proof cannot be requested twice.
+- Rejects restart handoffs whose continuation action repeats `resource-inventory`, and explicitly tells the resumed console that the single runtime proof has already completed.
+- Adds a regression for the exact production failure that previously made the continuation verifier reject its own duplicated inventory call as unauthorized.
+
 ## 1.4.13 - 2026-07-24
 
 - Lets the deterministic coordinator discard a stale round invalidated by an authoritative contract revision and continue from the revised mission instead of crashing the program supervisor.
