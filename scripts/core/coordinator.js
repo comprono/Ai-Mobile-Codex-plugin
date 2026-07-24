@@ -624,7 +624,11 @@ function budgetSourceRecord(budget = {}) {
 
 function bootstrapResourceBudgetEnvelope(task = {}) {
   const program = task.program || {};
-  if (program.contracts?.masterPlan?.state === "approved") return null;
+  const approvedContractPlan = program.contracts?.masterPlan?.state === "approved"
+    ? program.contracts.masterPlan
+    : null;
+  const recoveryBudget = Boolean(approvedContractPlan && !program.masterPlan);
+  if (approvedContractPlan && !recoveryBudget) return null;
   const durableBudget = program.resourceBudget && typeof program.resourceBudget === "object" ? program.resourceBudget : null;
   const runtimeBudget = program.runtime?.budget && typeof program.runtime.budget === "object" ? program.runtime.budget : null;
   if (!durableBudget && !runtimeBudget) return null;
@@ -648,16 +652,39 @@ function bootstrapResourceBudgetEnvelope(task = {}) {
     const runtimeFingerprint = crypto.createHash("sha256").update(JSON.stringify(runtimeRecord)).digest("hex");
     if (durableFingerprint !== runtimeFingerprint) return null;
   }
+  if (recoveryBudget) {
+    const packages = new Map((program.workPackages || []).map((row) => [String(row.workPackageId || ""), row]));
+    const recoveryKinds = new Set(["context-scout", "strategist", "reconciliation"]);
+    const mutatingPermissions = new Set([
+      "write-files", "write-project", "command", "run-command", "execute-commands", "service-control",
+      "browser", "external-write", "database-write", "git-write",
+    ]);
+    const allocations = record.allocations || [];
+    const eligible = allocations.length > 0 && allocations.every((allocation) => {
+      const workPackage = packages.get(allocation.workPackageId);
+      if (!workPackage || !["pending", "ready"].includes(String(workPackage.state || ""))) return false;
+      if (workPackage.readOnly !== true || !recoveryKinds.has(String(workPackage.executorKind || ""))) return false;
+      if (Number(workPackage.budgetRevision || 0) !== Number(record.revision || 0)) return false;
+      if (String(workPackage.allocation?.allocationId || "") !== allocation.allocationId) return false;
+      const permissions = [
+        ...(workPackage.requiredPermissions || []),
+        ...(workPackage.permissionGrant || []),
+        ...((budget.allocations || []).find((row) => String(row.allocationId || "") === allocation.allocationId)?.permissions || []),
+      ].map((value) => String(value || "").trim());
+      return permissions.every((permission) => !mutatingPermissions.has(permission));
+    });
+    if (!eligible) return null;
+  }
   const sourceFingerprint = crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex");
   return {
     budget,
     source: {
-      kind: "bootstrap-resource-budget",
+      kind: recoveryBudget ? "recovery-resource-budget" : "bootstrap-resource-budget",
       budgetId: record.budgetId,
       revision: record.revision,
       fingerprint: sourceFingerprint,
-      planId: record.planId,
-      planRevision: record.planRevision,
+      planId: recoveryBudget ? String(approvedContractPlan.planId || "") : record.planId,
+      planRevision: recoveryBudget ? Number(approvedContractPlan.revision || 0) : record.planRevision,
       inventoryFingerprint: record.inventoryFingerprint,
       forecastFingerprint: record.forecastFingerprint,
       reserves: budget.reserves || {},
@@ -667,8 +694,15 @@ function bootstrapResourceBudgetEnvelope(task = {}) {
 
 function programBudgetLimitEnvelope(task = {}) {
   const acceptedSource = acceptedProgramBudgetLimitSource(task);
-  if (acceptedSource) return { source: acceptedSource, budget: task.program?.contracts?.resourceBudget || null };
-  return bootstrapResourceBudgetEnvelope(task);
+  const acceptedEnvelope = acceptedSource
+    ? { source: acceptedSource, budget: task.program?.contracts?.resourceBudget || null }
+    : null;
+  const provisionalEnvelope = bootstrapResourceBudgetEnvelope(task);
+  if (!acceptedEnvelope) return provisionalEnvelope;
+  if (!provisionalEnvelope) return acceptedEnvelope;
+  return programBudgetSourceIsNewer(acceptedEnvelope.source, provisionalEnvelope.source)
+    ? provisionalEnvelope
+    : acceptedEnvelope;
 }
 
 function bootstrapProgramLimitSource(limits = {}) {
@@ -890,7 +924,12 @@ function programBudgetCumulativeLimits(task = {}, payload = {}, candidateLimits 
 
 function programBudgetSourceIsNewer(current = {}, next = {}) {
   if (!next?.fingerprint || current?.fingerprint === next.fingerprint) return false;
-  const rank = { bootstrap: 0, "bootstrap-resource-budget": 1, "accepted-resource-budget": 2 };
+  const rank = {
+    bootstrap: 0,
+    "bootstrap-resource-budget": 1,
+    "accepted-resource-budget": 2,
+    "recovery-resource-budget": 2,
+  };
   const currentRank = Number(rank[current?.kind] ?? -1);
   const nextRank = Number(rank[next?.kind] ?? -1);
   if (nextRank > currentRank) return true;
@@ -963,7 +1002,9 @@ function maybeReviseProgramSupervisorLimits(taskId, task, payload, supervisor) {
         baseline: candidateEnvelope.baseline,
         reason: currentLimitSource.kind === "accepted-resource-budget"
           ? "accepted-plan-resource-budget-revision"
-          : "bootstrap-resource-budget-revision",
+          : currentLimitSource.kind === "recovery-resource-budget"
+            ? "recovery-resource-budget-revision"
+            : "bootstrap-resource-budget-revision",
       }].slice(-50),
       updatedAt: utcNow(),
     };

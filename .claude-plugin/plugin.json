@@ -1,6 +1,6 @@
 {
   "name": "ai-mobile",
-  "version": "1.4.14",
+  "version": "1.4.15",
   "description": "A Director-CFO orchestrator for context-backed plans, resource budgets, typed worker teams, finite campaigns, reconciliation, and verified outcomes.",
   "author": {
     "name": "comprono"

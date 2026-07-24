@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.15 - 2026-07-25
+
+- Lets an exhausted accepted-plan allocation transition to a newer, revision-fenced recovery budget when the current plan has been invalidated and one distinct read-only context, strategy, or reconciliation package is already budgeted.
+- Preserves cumulative historical exposure and explicit hard ceilings while rejecting mutating permissions, stale allocation bindings, non-recovery executors, and budget/package revision mismatches.
+- Adds the production-shaped accepted-budget revision 31 to recovery-budget revision 34 regression that previously stopped Job Vibhu at exact attempt-cap equality.
+- Passes all 43 deterministic release gates, including full campaign continuation, resource accounting, hard-cap, retry, cancellation, provider, isolation, and restart coverage.
+
 ## 1.4.14 - 2026-07-25
 
 - Separates the capable-model restart verification turn from the lightweight continuation turn so the mandatory `resource-inventory` proof cannot be requested twice.

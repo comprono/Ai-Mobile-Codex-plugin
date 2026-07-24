@@ -1205,6 +1205,177 @@ async function bootstrapToAcceptedBudgetScenario() {
   };
 }
 
+async function acceptedPlanToRecoveryBudgetScenario() {
+  const label = "accepted-recovery-budget";
+  const fixture = createDirectorFixture(label, 2);
+  const historicalAllocationId = "allocation-accepted-recovery-history";
+  const acceptedAllocationId = "allocation-accepted-recovery-current";
+  const recoveryAllocationId = "allocation-accepted-recovery-strategy";
+  const { plan, budget } = acceptedBudgetRecords(label, 1000, 31, 2);
+  budget.limits.maxAttempts = 1;
+  budget.limits.maxDurationMs = 10000;
+  budget.allocations = [{
+    allocationId: acceptedAllocationId,
+    workPackageId: "work-accepted-recovery-current",
+  }];
+  updateTask(fixture.taskId, (task) => {
+    task.program.phase = "execution";
+    task.program.masterPlan = plan;
+    task.program.contracts = { ...(task.program.contracts || {}), masterPlan: plan, resourceBudget: budget };
+    task.program.resourceBudget = budget;
+    task.program.runtime = { ...(task.program.runtime || {}), budget };
+    task.program.workPackages = [{
+      workPackageId: "work-accepted-recovery-history",
+      executorKind: "implementation",
+      state: "completed",
+      readOnly: false,
+      jobId: "job-accepted-recovery-history",
+      allocation: {
+        allocationId: historicalAllocationId,
+        provider: "codex",
+        model: "gpt-5.3-codex-spark",
+        tokenLimit: 100,
+        durationLimitMs: 1000,
+        maxAttempts: 1,
+      },
+    }, {
+      workPackageId: "work-accepted-recovery-current",
+      executorKind: "implementation",
+      state: "pending",
+      readOnly: false,
+      jobId: null,
+      allocation: {
+        allocationId: acceptedAllocationId,
+        provider: "codex",
+        model: "gpt-5.3-codex-spark",
+        tokenLimit: 100,
+        durationLimitMs: 1000,
+        maxAttempts: 1,
+      },
+    }];
+    return task;
+  });
+  writeResourceJob(fixture.taskId, "job-accepted-recovery-history", {
+    workPackageId: "work-accepted-recovery-history",
+    allocationId: historicalAllocationId,
+    tokenLimit: 100,
+    durationLimitMs: 1000,
+    maxAttempts: 1,
+    state: "completed",
+  });
+  const initialSupervisor = coordinatorTest.ensureProgramSupervisor(fixture.taskId, { config });
+  assert.equal(initialSupervisor.limitSource.kind, "accepted-resource-budget");
+  assert.equal(initialSupervisor.limitSource.revision, 31);
+  assert.equal(initialSupervisor.limits.maxAttempts, 2, "Historical exposure plus the accepted one-attempt budget defines the cumulative ceiling.");
+
+  writeResourceJob(fixture.taskId, "job-accepted-recovery-current", {
+    workPackageId: "work-accepted-recovery-current",
+    allocationId: acceptedAllocationId,
+    tokenLimit: 100,
+    durationLimitMs: 1000,
+    maxAttempts: 1,
+    state: "completed",
+  });
+  updateTask(fixture.taskId, (task) => {
+    task.program.workPackages = task.program.workPackages.map((row) => (
+      row.workPackageId === "work-accepted-recovery-current"
+        ? { ...row, state: "completed", jobId: "job-accepted-recovery-current" }
+        : row
+    ));
+    return task;
+  });
+  seedCoordinator(fixture, "execution-accepted-recovery-exhausted");
+  let exhaustedSlices = 0;
+  const exhausted = await runCampaignSupervisor({
+    taskId: fixture.taskId,
+    executionId: "execution-accepted-recovery-exhausted",
+    config,
+    campaignStartedAt: fixture.startedAt,
+    campaignSupervisor: true,
+  }, path.join(__dirname, "ai-mobile-local-mcp.js"), {
+    campaignSummary: ({ taskId }) => summaryFor(taskId),
+    runSlice: async () => {
+      exhaustedSlices += 1;
+      return { stopReason: "user-decision-required" };
+    },
+  });
+  assert.equal(exhausted.stopReason, "resource-cap-exceeded");
+  assert.equal(exhaustedSlices, 0, "Exact accepted-cap equality stops before a distinct recovery budget exists.");
+
+  const recoveryAllocation = {
+    allocationId: recoveryAllocationId,
+    workPackageId: "strategy-accepted-recovery",
+    provider: "antigravity",
+    model: "gemini-3.1-pro-high",
+    tokenLimit: 100,
+    durationLimitMs: 1000,
+    maxAttempts: 1,
+    permissions: ["read-project", "read-files"],
+  };
+  const recoveryBudget = bootstrapBudgetRecord(label, {
+    revision: 34,
+    maxTokens: 100,
+    maxDurationMs: 1000,
+    maxAttempts: 1,
+    allocations: [recoveryAllocation],
+  });
+  updateTask(fixture.taskId, (task) => {
+    task.program.phase = "strategy";
+    task.program.masterPlan = null;
+    task.program.contracts = { ...(task.program.contracts || {}), masterPlan: plan, resourceBudget: null };
+    persistBootstrapBudget(task, recoveryBudget);
+    task.program.workPackages = [...task.program.workPackages, {
+      workPackageId: "strategy-accepted-recovery",
+      executorKind: "strategist",
+      deliverableKind: "master-plan",
+      state: "ready",
+      readOnly: true,
+      jobId: null,
+      budgetRevision: 34,
+      requiredPermissions: ["read-project", "read-files"],
+      permissionGrant: ["read-project", "read-files"],
+      allocation: recoveryAllocation,
+    }];
+    return task;
+  });
+  seedCoordinator(fixture, "execution-accepted-recovery-revised");
+  let recoverySlices = 0;
+  const recovered = await runCampaignSupervisor({
+    taskId: fixture.taskId,
+    executionId: "execution-accepted-recovery-revised",
+    config,
+    campaignStartedAt: fixture.startedAt,
+    campaignSupervisor: true,
+  }, path.join(__dirname, "ai-mobile-local-mcp.js"), {
+    campaignSummary: ({ taskId }) => summaryFor(taskId),
+    runSlice: async (payload) => {
+      recoverySlices += 1;
+      const current = readTask(fixture.taskId).program.runtime.programSupervisor;
+      assert.equal(current.limitSource.kind, "recovery-resource-budget");
+      assert.equal(current.limitSource.revision, 34);
+      assert.equal(current.limits.maxAttempts, 3);
+      assert.equal(payload.programResourceEnvelope, null, "The revision-fenced recovery budget restores positive authority before dispatch.");
+      return { stopReason: "user-decision-required", blocker: "recovery-authority-observed" };
+    },
+  });
+  const recoveredSupervisor = readTask(fixture.taskId).program.runtime.programSupervisor;
+  const revision = recoveredSupervisor.limitHistory.at(-1);
+  assert.equal(recovered.stopReason, "user-decision-required");
+  assert.equal(recoverySlices, 1);
+  assert.equal(revision.reason, "recovery-resource-budget-revision");
+  assert.equal(revision.baseline.historicalExposure.attempts, 2);
+  assert.equal(revision.baseline.fundedExposure.attempts, 0);
+  assert.equal(revision.baseline.acceptedRemainingBudget.attempts, 1);
+  assert.equal(revision.newLimits.maxAttempts, 3);
+  return {
+    priorSourceRevision: 31,
+    recoverySourceRevision: recoveredSupervisor.limitSource.revision,
+    priorCeiling: 2,
+    revisedCeiling: recoveredSupervisor.limits.maxAttempts,
+    slices: recoverySlices,
+  };
+}
+
 async function conservativeNoBudgetHorizonScenario() {
   const fixture = createDirectorFixture("no-budget-168h", 2);
   const executionId = "execution-no-budget-168h";
@@ -2154,6 +2325,7 @@ async function runSelectedScenario(name, action) {
     const exactCapExhaustion = await runSelectedScenario("exactCapExhaustionScenario", exactCapExhaustionScenario);
     const staleRunningLease = await runSelectedScenario("staleRunningPackageUsesLiveLeaseScenario", staleRunningPackageUsesLiveLeaseScenario);
     const budgetLimitRevision = await runSelectedScenario("bootstrapToAcceptedBudgetScenario", bootstrapToAcceptedBudgetScenario);
+    const acceptedRecoveryBudget = await runSelectedScenario("acceptedPlanToRecoveryBudgetScenario", acceptedPlanToRecoveryBudgetScenario);
     const conservativeNoBudget = await runSelectedScenario("conservativeNoBudgetHorizonScenario", conservativeNoBudgetHorizonScenario);
     const provisionalBootstrapBudget = await runSelectedScenario("provisionalBootstrapBudgetScenario", provisionalBootstrapBudgetScenario);
     const drainRefresh = await runSelectedScenario("drainAndBudgetRefreshScenario", drainAndBudgetRefreshScenario);
@@ -2179,6 +2351,7 @@ async function runSelectedScenario(name, action) {
       exactCapExhaustion,
       staleRunningLease,
       budgetLimitRevision,
+      acceptedRecoveryBudget,
       conservativeNoBudget,
       provisionalBootstrapBudget,
       drainRefresh,
