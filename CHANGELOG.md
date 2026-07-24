@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.12 - 2026-07-24
+
+- Keeps an unattended Director-CFO campaign running when its no-progress boundary has already produced exactly one eligible read-only reconciliation package.
+- Admits that recovery once inside the same host invocation with one worker, one attempt, no external writes, immutable failure identity, and protected accounting.
+- Preserves the original overall-horizon deadline during recovery instead of silently extending the user-authorized run.
+- Retains terminal stops for cancellation, hard resource ceilings, ambiguous writes, genuine user decisions, and unchanged recovery replay.
+
 ## 1.4.11 - 2026-07-24
 
 - Restricts the intentional duplicate-program test bypass to an explicit regression-only process environment so normal MCP and CLI callers cannot disable workspace deduplication.

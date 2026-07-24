@@ -1134,6 +1134,25 @@ function recoveryAdmissionLimits(currentLimits = {}, exposure = {}, admission = 
     required,
   };
 }
+
+function admitInSupervisorRecovery(taskId, payload = {}, stoppedSupervisor = null) {
+  if (stoppedSupervisor?.state !== "stopped") return null;
+  const task = readTask(taskId);
+  let exposure = null;
+  try {
+    exposure = buildProgramResourceSnapshot({ taskId, task, campaignCount: stoppedSupervisor.campaignCount });
+  } catch {
+    return null;
+  }
+  if (!programRecoveryAdmission(task, stoppedSupervisor, exposure)) return null;
+  const renewed = ensureProgramSupervisor(taskId, payload);
+  if (!["active", "waiting"].includes(String(renewed?.state || ""))) return null;
+  if (!renewed.activeRecoveryAdmission?.admissionKey) return null;
+  if (String(renewed.supervisorId || "") === String(stoppedSupervisor.supervisorId || "")) return null;
+  if (Number(renewed.supervisorEpoch || 0) <= Number(stoppedSupervisor.supervisorEpoch || 0)) return null;
+  return renewed;
+}
+
 function programRecoveryFence(task = {}) {
   const program = task.program || {};
   const mission = program.mission || program.contracts?.mission || {};
@@ -1246,6 +1265,7 @@ function ensureProgramSupervisor(taskId, payload = {}) {
         || Boolean(recoveryAdmission)
       );
       const renewedAt = renewable ? utcNow() : null;
+      const preserveRecoveryHorizon = Boolean(recoveryAdmission);
       const supervisorEpoch = Math.max(1, Number(current.supervisorEpoch || 1)) + (renewable ? 1 : 0);
       result = {
         ...current,
@@ -1269,8 +1289,10 @@ function ensureProgramSupervisor(taskId, payload = {}) {
           supervisorId: `program-supervisor-${crypto.createHash("sha256").update(`${taskId}:${renewedAt}:${supervisorEpoch}:${current.supervisorId}`).digest("hex").slice(0, 20)}`,
           priorSupervisorId: current.supervisorId,
           state: "active",
-          startedAt: renewedAt,
-          deadlineAt: new Date(Date.parse(renewedAt) + Number(current.horizonHours || 5) * 60 * 60 * 1000).toISOString(),
+          startedAt: preserveRecoveryHorizon ? current.startedAt : renewedAt,
+          deadlineAt: preserveRecoveryHorizon
+            ? current.deadlineAt
+            : new Date(Date.parse(renewedAt) + Number(current.horizonHours || 5) * 60 * 60 * 1000).toISOString(),
           noProgressCount: 0,
           lifetimeWakeCount: Number(current.lifetimeWakeCount || 0) + Number(current.wakeCount || 0),
           wakeCount: 0,
@@ -2844,13 +2866,38 @@ async function runCampaignSupervisor(payload, entrypoint, dependencies = {}) {
       return supervisorStop(args, readCoordinator(args), reason, recovery, campaignSlices, { blocker: wake.blocker });
     }
 
-    const wakeResult = persistSupervisorWake(args.taskId, wake);
+    let wakeResult = persistSupervisorWake(args.taskId, wake);
     if (wakeResult.supervisor?.state === "stopped") {
-      const reason = wakeResult.supervisor.stopReason === "program-event-cap-exceeded" ? "resource-cap-exceeded" : "no-progress-limit";
-      const recovery = reason === "resource-cap-exceeded"
-        ? supervisorRecovery("fresh-resource-budget", "Start another bounded supervisor only after a fresh event budget is authorized.", "director")
-        : supervisorRecovery("material-plan-or-evidence-change", "Reconcile the recorded blocker before any materially changed retry.", "director");
-      return supervisorStop(args, readCoordinator(args), reason, recovery, campaignSlices);
+      const stoppedSupervisor = wakeResult.supervisor;
+      const renewed = stoppedSupervisor.stopReason === "no-acceptance-progress"
+        ? admitInSupervisorRecovery(args.taskId, slicePayload, stoppedSupervisor)
+        : null;
+      if (renewed) {
+        wakeResult = {
+          ...wakeResult,
+          changed: true,
+          supervisor: renewed,
+          recoveryAdmitted: true,
+        };
+        material(args, readCoordinator(args), {
+          type: "campaign.recovery-admitted",
+          state: "running",
+          summary: "The durable supervisor admitted one protected read-only reconciliation without another host invocation.",
+          nextAction: "Run the admitted reconciliation once, then integrate its material decision before any retry.",
+          data: {
+            supervisorId: renewed.supervisorId,
+            supervisorEpoch: renewed.supervisorEpoch,
+            workPackageId: renewed.activeRecoveryAdmission.workPackageId,
+            admissionKey: renewed.activeRecoveryAdmission.admissionKey,
+          },
+        });
+      } else {
+        const reason = stoppedSupervisor.stopReason === "program-event-cap-exceeded" ? "resource-cap-exceeded" : "no-progress-limit";
+        const recovery = reason === "resource-cap-exceeded"
+          ? supervisorRecovery("fresh-resource-budget", "Start another bounded supervisor only after a fresh event budget is authorized.", "director")
+          : supervisorRecovery("material-plan-or-evidence-change", "Reconcile the recorded blocker before any materially changed retry.", "director");
+        return supervisorStop(args, readCoordinator(args), reason, recovery, campaignSlices);
+      }
     }
     if (!wakeResult.changed) {
       const recovery = supervisorRecovery("new-material-state", "Resume only after a new durable worker, dependency, capacity, or accepted-evidence fingerprint.", "coordinator");

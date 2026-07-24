@@ -56,6 +56,9 @@ jobs:
       - name: Durable event-driven coordinator
         run: node scripts/durable-event-regression.js
 
+      - name: Durable Director-CFO campaign continuation
+        run: node scripts/director-cfo-campaign-continuation-regression.js
+
       - name: Provider capability and quota routing
         run: node scripts/provider-capability-regression.js
 

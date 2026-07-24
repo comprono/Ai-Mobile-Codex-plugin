@@ -1870,6 +1870,99 @@ async function readOnlyRecoveryAdmissionScenario() {
     hardCeilingPreserved: true,
   };
 }
+
+async function inSupervisorRecoveryAdmissionScenario() {
+  const fixture = createDirectorFixture("in-supervisor-recovery", 1, true);
+  updateTask(fixture.taskId, (task) => {
+    task.program.programId = "program-in-supervisor-recovery";
+    task.program.phase = "reconciliation";
+    return task;
+  });
+  const executionId = "execution-in-supervisor-recovery";
+  seedCoordinator(fixture, executionId);
+  let sliceCalls = 0;
+  let initialSupervisor = null;
+  let admittedSupervisor = null;
+  const result = await runCampaignSupervisor({
+    taskId: fixture.taskId,
+    executionId,
+    config: { ...config, noProgressLimit: 1 },
+    campaignStartedAt: fixture.startedAt,
+    campaignSupervisor: true,
+  }, path.join(__dirname, "ai-mobile-local-mcp.js"), {
+    campaignSummary: ({ taskId }) => summaryFor(taskId),
+    runSlice: async () => {
+      sliceCalls += 1;
+      if (sliceCalls === 1) {
+        initialSupervisor = readTask(fixture.taskId).program.runtime.programSupervisor;
+        writeResourceJob(fixture.taskId, "job-in-supervisor-failed", {
+          programId: "program-in-supervisor-recovery",
+          workPackageId: "work-in-supervisor-failed",
+          allocationId: "allocation-in-supervisor-failed",
+          tokenLimit: 100000,
+          durationLimitMs: 900000,
+          totalTokens: 20000,
+          durationMs: 120000,
+          state: "failed",
+        });
+        updateTask(fixture.taskId, (task) => {
+          task.program.phase = "reconciliation";
+          task.program.workPackages = [{
+            workPackageId: "work-in-supervisor-failed",
+            executorKind: "operational-transaction",
+            state: "failed",
+            jobId: "job-in-supervisor-failed",
+            allocation: { allocationId: "allocation-in-supervisor-failed" },
+          }, {
+            workPackageId: "reconcile-in-supervisor-once",
+            executorKind: "reconciliation",
+            deliverableKind: "reconciliation-decision",
+            state: "pending",
+            jobId: null,
+            readOnly: true,
+            failedWorkPackageId: "work-in-supervisor-failed",
+            failurePacket: { failureFingerprint: "failure-in-supervisor-once" },
+            requiredPermissions: ["read-project", "read-files"],
+            permissionGrant: ["read-project", "read-files"],
+            estimatedDirectTokens: 100000,
+            resourceEstimate: { tokens: 100000, wallTimeSeconds: 900 },
+          }];
+          task.workGraph = [
+            { id: "work-in-supervisor-failed", state: "failed", dependsOn: [], priority: 100 },
+            { id: "reconcile-in-supervisor-once", state: "pending", dependsOn: [], priority: 100 },
+          ];
+          return task;
+        });
+        return { taskId: fixture.taskId, stopReason: "worker-deadline", roundsStarted: 1 };
+      }
+      admittedSupervisor = readTask(fixture.taskId).program.runtime.programSupervisor;
+      assert.equal(admittedSupervisor.state, "active");
+      assert.equal(admittedSupervisor.supervisorEpoch, initialSupervisor.supervisorEpoch + 1);
+      assert.equal(admittedSupervisor.activeRecoveryAdmission.workPackageId, "reconcile-in-supervisor-once");
+      assert.equal(admittedSupervisor.activeRecoveryAdmission.grant.maxAttempts, 1);
+      assert.equal(admittedSupervisor.activeRecoveryAdmission.grant.maxWorkers, 1);
+      assert.equal(admittedSupervisor.activeRecoveryAdmission.grant.externalWritesAllowed, false);
+      assert.equal(admittedSupervisor.startedAt, initialSupervisor.startedAt, "Protected recovery must not extend the authorized horizon start.");
+      assert.equal(admittedSupervisor.deadlineAt, initialSupervisor.deadlineAt, "Protected recovery must not extend the authorized horizon deadline.");
+      return { taskId: fixture.taskId, stopReason: "user-decision-required", blocker: "fixture-terminal-after-admission", roundsStarted: 0 };
+    },
+  });
+  const finalTask = readTask(fixture.taskId);
+  const finalSupervisor = finalTask.program.runtime.programSupervisor;
+  const events = readMaterialEvents({ taskId: fixture.taskId, maxEvents: 100 }).events;
+  assert.equal(result.stopReason, "user-decision-required");
+  assert.equal(sliceCalls, 2, "The pending read-only reconciler must run in the same host campaign invocation.");
+  assert.equal(finalSupervisor.recoveryAdmissionHistory.length, 1);
+  assert.equal(events.filter((row) => row.type === "campaign.recovery-admitted").length, 1);
+  return {
+    slices: sliceCalls,
+    supervisorEpoch: admittedSupervisor.supervisorEpoch,
+    admissionHistory: finalSupervisor.recoveryAdmissionHistory.length,
+    originalHorizonPreserved: admittedSupervisor.deadlineAt === initialSupervisor.deadlineAt,
+    anotherHostInvocationRequired: false,
+  };
+}
+
 async function liveExplicitCapReuseScenario() {
   const fixture = createDirectorFixture("live-cap-reuse", 2);
   const executionId = "execution-live-cap-reuse";
@@ -2030,6 +2123,7 @@ async function runSelectedScenario(name, action) {
     const reservedAuthority = await runSelectedScenario("reservedAuthorityEnvelopeScenario", reservedAuthorityEnvelopeScenario);
     const renewal = await runSelectedScenario("stoppedSupervisorRenewalScenario", stoppedSupervisorRenewalScenario);
     const recoveryAdmission = await runSelectedScenario("readOnlyRecoveryAdmissionScenario", readOnlyRecoveryAdmissionScenario);
+    const inSupervisorRecoveryAdmission = await runSelectedScenario("inSupervisorRecoveryAdmissionScenario", inSupervisorRecoveryAdmissionScenario);
     const liveCapReuse = await runSelectedScenario("liveExplicitCapReuseScenario", liveExplicitCapReuseScenario);
     const quotaRecovery = await runSelectedScenario("quotaUnknownRecoveryScenario", quotaUnknownRecoveryScenario);
     process.stdout.write(JSON.stringify({
@@ -2054,6 +2148,7 @@ async function runSelectedScenario(name, action) {
       reservedAuthority,
       renewal,
       recoveryAdmission,
+      inSupervisorRecoveryAdmission,
       liveCapReuse,
       quotaRecovery,
     }, null, 2) + "\n");
