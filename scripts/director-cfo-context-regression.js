@@ -466,6 +466,38 @@ const rejectedCode = assessMasterPlan(unboundedCode, expectedPlan);
 assert.equal(rejectedCode.valid, false);
 assert(rejectedCode.errors.some((row) => row.includes("expectedFiles must bound code output")));
 assert(rejectedCode.errors.some((row) => row.includes("deterministic verification")));
+assert(rejectedCode.errors.some((row) => row.includes("preconditions must define")));
+assert(rejectedCode.errors.some((row) => row.includes("postconditions must define")));
+
+const broadCode = JSON.parse(JSON.stringify(validPlan));
+broadCode.workstreams[1].workType = "code";
+broadCode.workstreams[1].execution.executorKind = "code-change";
+broadCode.workstreams[1].execution.deliverableKind = "patch";
+broadCode.workstreams[1].execution.relevantFiles = [".codex/ACCEPTANCE.json"];
+broadCode.workstreams[1].execution.expectedFiles = [".codex/ACCEPTANCE.json"];
+broadCode.workstreams[1].execution.verificationCommands = [{ command: "node", args: ["scripts/validate-outcome.js"], timeoutSeconds: 120 }];
+broadCode.workstreams[1].execution.preconditions = ["The acceptance revision still matches the strategy context."];
+broadCode.workstreams[1].execution.postconditions = ["The deterministic outcome validation passes."];
+broadCode.workstreams[1].evidenceRequirementIds = ["E1", "E2", "E3"];
+broadCode.evidenceRequirements.push({
+  id: "E3",
+  milestoneId: "M2",
+  description: "A third acceptance outcome passes.",
+  level: "integration",
+  proofType: "test-log",
+  verifierRoleId: "R2",
+  acceptanceRequirementIds: ["REQ-THREE"],
+});
+const broadCodeExpected = {
+  ...expectedPlan,
+  authoritativeRequirements: [
+    ...authoritativeRequirements,
+    { id: "REQ-THREE", description: "A third acceptance outcome passes.", required: true, status: "failing", minimumEvidenceLevel: "integration" },
+  ],
+};
+const rejectedBroadCode = assessMasterPlan(broadCode, broadCodeExpected);
+assert.equal(rejectedBroadCode.valid, false);
+assert(rejectedBroadCode.errors.some((row) => row.includes("split code work into bounded slices covering at most 2")));
 
 const inventedCodeTarget = JSON.parse(JSON.stringify(validPlan));
 inventedCodeTarget.workstreams[1].workType = "code";

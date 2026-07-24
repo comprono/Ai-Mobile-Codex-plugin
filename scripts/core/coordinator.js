@@ -1054,10 +1054,12 @@ const RECOVERY_MUTATING_PERMISSIONS = new Set([
   "write-files", "write-project", "command", "run-command", "service-control", "browser", "external-write", "database-write", "git-write",
 ]);
 
-function programRecoveryAdmission(task = {}, supervisor = {}, exposure = null) {
+function programRecoveryAdmission(task = {}, supervisor = {}, exposure = null, recoveryInvocationId = "") {
   if (supervisor.state !== "stopped" || !RECOVERY_ADMISSION_STOP_REASONS.has(String(supervisor.stopReason || ""))) return null;
   if (!exposure || Number(exposure.concurrency?.programActive || 0) > 0) return null;
   if ((exposure.jobs || []).some((row) => !TERMINAL_STATES.has(String(row.state || "")))) return null;
+  const invocationId = String(recoveryInvocationId || "").trim();
+  if (invocationId && (supervisor.recoveryAdmissionHistory || []).some((row) => row.recoveryInvocationId === invocationId)) return null;
   const candidates = (task.program?.workPackages || []).filter((row) => (
     row.executorKind === "reconciliation"
     && ["pending", "ready"].includes(String(row.state || ""))
@@ -1092,6 +1094,7 @@ function programRecoveryAdmission(task = {}, supervisor = {}, exposure = null) {
   return {
     schemaVersion: RECOVERY_ADMISSION_POLICY_VERSION,
     admissionKey,
+    recoveryInvocationId: invocationId,
     ...identity,
     priorSupervisorId: String(supervisor.supervisorId || ""),
     grant: {
@@ -1144,7 +1147,8 @@ function admitInSupervisorRecovery(taskId, payload = {}, stoppedSupervisor = nul
   } catch {
     return null;
   }
-  if (!programRecoveryAdmission(task, stoppedSupervisor, exposure)) return null;
+  const recoveryInvocationId = payload.campaignSupervisorExecutionId || payload.executionId;
+  if (!programRecoveryAdmission(task, stoppedSupervisor, exposure, recoveryInvocationId)) return null;
   const renewed = ensureProgramSupervisor(taskId, payload);
   if (!["active", "waiting"].includes(String(renewed?.state || ""))) return null;
   if (!renewed.activeRecoveryAdmission?.admissionKey) return null;
@@ -1246,7 +1250,8 @@ function ensureProgramSupervisor(taskId, payload = {}) {
         programSupervisorLimits(task, payload, current.horizonHours, current.limits || {}, exposure),
         hardCeilings,
       );
-      const candidateAdmission = programRecoveryAdmission(task, current, exposure);
+      const recoveryInvocationId = payload.campaignSupervisorExecutionId || payload.executionId;
+      const candidateAdmission = programRecoveryAdmission(task, current, exposure, recoveryInvocationId);
       const admissionEnvelope = recoveryAdmissionLimits(baseLimits, exposure || {}, candidateAdmission, hardCeilings);
       const recoveryAdmission = admissionEnvelope.allowed ? candidateAdmission : null;
       const limits = recoveryAdmission ? clampProgramLimits(admissionEnvelope.limits, hardCeilings) : baseLimits;
@@ -2074,7 +2079,25 @@ async function runCoordinator(payload, entrypoint, dependencies = {}) {
             break;
           }
         }
-        const collected = collectRound({ ...args, roundId: latest.roundId, waitSeconds: 0, detail: "full" });
+        let collected;
+        try {
+          collected = collectRound({ ...args, roundId: latest.roundId, waitSeconds: 0, detail: "full" });
+        } catch (error) {
+          const refreshedRound = roundRecord(args, latest.roundId);
+          const invalidated = refreshedRound?.state === "invalidated"
+            && /invalidated by a (?:task|project) contract revision/i.test(String(error.message || ""));
+          if (!invalidated) throw error;
+          material(args, state, {
+            type: "round.invalidated",
+            state: "superseded",
+            roundId: latest.roundId,
+            summary: "Discarded one stale round after the authoritative task contract changed.",
+            nextAction: "Continue from the revised mission and dispatch only its dependency-ready package.",
+          });
+          summary = taskSummary(args);
+          signature = progressSignature(summary);
+          continue;
+        }
         const belongsToCurrentExecution = executionRoundIds.has(latest.roundId);
         const terminal = (collected.results || []).filter((row) => row.terminal);
         material(args, state, {
@@ -2606,6 +2629,7 @@ async function runCampaignSupervisor(payload, entrypoint, dependencies = {}) {
     campaignSupervisor: true,
     supervisedSlice: true,
     campaignStartedAt,
+    campaignSupervisorExecutionId: payload.campaignSupervisorExecutionId || payload.executionId,
   };
   let campaignSlices = 0;
   writeCoordinator(args, {

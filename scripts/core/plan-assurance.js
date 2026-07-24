@@ -734,6 +734,7 @@ function assessMasterPlan(rawValue, expected = {}) {
   const plannedOutputFiles = new Set(plan.workstreams
     .flatMap((row) => row.execution?.expectedFiles || [])
     .map(normalizedProjectPath));
+  const evidenceById = new Map(plan.evidenceRequirements.map((row) => [row.id, row]));
 
   for (const milestone of plan.milestones) {
     if (!milestone.outcome) errors.push(`Milestone ${milestone.id || "missing"} requires an outcome.`);
@@ -807,6 +808,13 @@ function assessMasterPlan(rawValue, expected = {}) {
     if (codeDelivery) {
       if (!workstream.execution.expectedFiles.length) errors.push(label + ".expectedFiles must bound code output to explicit files.");
       if (!workstream.execution.verificationCommands.length) errors.push(label + ".verificationCommands must define deterministic verification for code work.");
+      if (!workstream.execution.preconditions.length) errors.push(label + ".preconditions must define the revision and source-state gates for code work.");
+      if (!workstream.execution.postconditions.length) errors.push(label + ".postconditions must define deterministic verification and acceptance evidence for code work.");
+      const linkedAcceptanceIds = new Set(workstream.evidenceRequirementIds
+        .flatMap((id) => evidenceById.get(id)?.acceptanceRequirementIds || []));
+      if (linkedAcceptanceIds.size > 2) {
+        errors.push(label + `.evidenceRequirementIds span ${linkedAcceptanceIds.size} acceptance requirements; split code work into bounded slices covering at most 2.`);
+      }
       if (Array.isArray(expected.availableSourceFiles)) {
         const available = new Set(expected.availableSourceFiles.map(normalizedProjectPath));
         const groundedDirectories = new Set(workstream.execution.relevantFiles
@@ -921,9 +929,10 @@ function buildStrategyPrompt(contract) {
     "You are the strong project strategist. Produce the durable program plan; do not execute project work.",
     `Mission ${contract.mission.id} revision ${contract.mission.revision}: ${contract.mission.outcome}`,
     `Use context dossier revision ${contract.context.revision}, fingerprint ${contract.context.fingerprint}.`,
-    "Return one JSON object matching the immutable artifactContract.jsonSchema supplied in the Director worker envelope. Include every required key, including explicit empty arrays and empty strings.",
+    "Return one JSON object matching the immutable artifactContract.jsonSchema supplied in the Director worker envelope. Include every required key. Use empty arrays or strings only where the semantic rules below permit them.",
     "Every workstream must include an execution object: a compatible executorKind/deliverableKind, bounded relevantFiles and expectedFiles, structured verificationCommands and commands (command, args, timeoutSeconds, optional cwd), requiredCapabilities, requiredPermissions, preconditions, postconditions, rollback or recoveryAction, mutatesExternalState, sideEffectKey, observedStateFingerprint, userAuthorizationRef, and successProbability.",
-    "Code delivery requires non-empty, explicit expectedFiles and non-empty deterministic verificationCommands. If exact bounded output files are not yet known, plan a dependency-ready read-only discovery workstream first; never emit a code-change execution contract with empty expectedFiles or verificationCommands. Any operation or external side effect requires preconditions, postconditions, rollback or recovery, a stable sideEffectKey, an observed-state fingerprint, and an exact userAuthorizationRef.",
+    "Code delivery requires non-empty, explicit expectedFiles, non-empty deterministic verificationCommands, and specific non-empty preconditions and postconditions. Each code workstream must be one bounded material slice linked to at most two unresolved acceptance requirements; split broader implementation across dependency-ordered workstreams. If exact bounded output files are not yet known, plan a dependency-ready read-only discovery workstream first; never emit a code-change execution contract with empty expectedFiles or verificationCommands.",
+    "NON-NEGOTIABLE TRANSACTION RULE: when executorKind is operational-transaction OR mutatesExternalState is true, preconditions and postconditions must each contain at least one specific non-empty string. Empty arrays are invalid. Also provide rollback or recoveryAction, a stable non-empty sideEffectKey, a non-empty observedStateFingerprint, and the exact non-empty userAuthorizationRef. Preconditions must cover authorization, observed-state freshness, and idempotency eligibility when applicable; postconditions must cover a typed receipt and authoritative post-state confirmation.",
     "Every workstream must link to its milestones, roles, permissions, evidence, and resource estimate. Protect verification and reconciliation resources. Do not name a provider unless availability evidence requires it; describe capability/model classes.",
     "Every evidenceRequirements entry must use acceptanceRequirementIds from the authoritative requirement list below. Cover every unresolved required ID exactly; never infer or invent a requirement ID from similar wording.",
     "For every unresolved required ID, include at least one linked evidence requirement whose level is equal to or stronger than that requirement's minimumEvidenceLevel. A lower-level planning, process, focused-test, or integration artifact does not satisfy an end-to-end or user-visible floor.",

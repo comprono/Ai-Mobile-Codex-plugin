@@ -6,7 +6,12 @@ const path = require("node:path");
 
 const { decideIntake } = require("./intake-gate");
 const { createSourceCatalog } = require("./source-catalog");
-const { createContextScoutWorkPackage, decideContextRefresh, normalizeContextScoutArtifact } = require("./context-dossier");
+const {
+  createContextScoutWorkPackage,
+  decideContextRefresh,
+  normalizeContextScoutArtifact,
+  sourceSnapshotTarget,
+} = require("./context-dossier");
 const { verifyContextSnapshotFreshness } = require("./context-freshness");
 const { assessMasterPlan, createStrategyWorkPackage } = require("./plan-assurance");
 const { canonicalCapabilityName, dependencyReadyPackages, planWorkPackages } = require("./team-compiler");
@@ -209,12 +214,9 @@ function localSourceFiles(workspace, catalog) {
   const files = [];
   for (const source of catalog.sources || []) {
     if (!["project-outcome", "acceptance", "chat", "file", "log", "database"].includes(source.type)) continue;
-    let relative;
-    try { relative = safeRelativePath(workspace, source.locator); } catch { continue; }
-    if (!relative || relative === ".") continue;
     try {
-      const absolute = path.join(workspace, relative);
-      if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) files.push(relative);
+      const target = sourceSnapshotTarget(workspace, source);
+      if (fs.existsSync(target.absolute) && fs.statSync(target.absolute).isFile()) files.push(target.relative);
     } catch { /* descriptor remains an explicit context limitation */ }
   }
   const unique = [...new Set(files)];
@@ -263,15 +265,16 @@ function availableProjectFiles(workspace, catalog) {
 
 function readOnlySnapshotDiskMb(workspace, relativeFiles = [], catalog = {}) {
   let bytes = 0;
-  const databaseFiles = new Set((catalog.sources || []).filter((row) => row.type === "database").flatMap((row) => {
-    try { return [safeRelativePath(workspace, row.locator).toLowerCase()]; } catch { return []; }
-  }));
-  for (const relative of relativeFiles) {
+  const relevant = new Set(relativeFiles.map((row) => String(row).replace(/\\/g, "/").toLowerCase()));
+  for (const source of catalog.sources || []) {
+    if (!["project-outcome", "acceptance", "chat", "file", "log", "database"].includes(source.type)) continue;
     try {
-      const absolute = path.join(workspace, safeRelativePath(workspace, relative));
+      const target = sourceSnapshotTarget(workspace, source);
+      if (!relevant.has(target.relative.toLowerCase())) continue;
+      const absolute = target.absolute;
       const stat = fs.statSync(absolute);
       if (!stat.isFile()) continue;
-      if (databaseFiles.has(String(relative).toLowerCase())) {
+      if (source.type === "database") {
         let walBytes = 0;
         try { walBytes = fs.statSync(`${absolute}-wal`).size; } catch { /* a checkpointed database may have no WAL */ }
         bytes += 2 * (stat.size + walBytes);
@@ -3273,6 +3276,7 @@ function enrichedReconciliationPackage(task, failedPackage, packet) {
     JSON.stringify(priorAssuranceErrors),
     "Required material delta before retry:",
     "Return machine-actionable fields, not narrative {changed,delta} wrappers. changedContract and changedWorkerRequirements must contain exact work-package fields; changedPermissions must contain exact requiredPermissions and permissionGrant arrays.",
+    "planRevision must be null or a non-empty JSON object of exact machine-actionable plan corrections. Never return planRevision as a number, string, empty object, or narrative wrapper.",
     preserveAcceptedContext
       ? "The accepted context dossier remains current. Set contextRefresh=false and correct the plan or strategist contract directly. Do not spend another context worker."
       : task.program.contextDossier

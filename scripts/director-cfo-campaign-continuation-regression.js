@@ -1944,20 +1944,59 @@ async function inSupervisorRecoveryAdmissionScenario() {
       assert.equal(admittedSupervisor.activeRecoveryAdmission.grant.externalWritesAllowed, false);
       assert.equal(admittedSupervisor.startedAt, initialSupervisor.startedAt, "Protected recovery must not extend the authorized horizon start.");
       assert.equal(admittedSupervisor.deadlineAt, initialSupervisor.deadlineAt, "Protected recovery must not extend the authorized horizon deadline.");
-      return { taskId: fixture.taskId, stopReason: "user-decision-required", blocker: "fixture-terminal-after-admission", roundsStarted: 0 };
+      writeResourceJob(fixture.taskId, "job-in-supervisor-recovery-failed", {
+        programId: "program-in-supervisor-recovery",
+        workPackageId: "reconcile-in-supervisor-once",
+        allocationId: "allocation-in-supervisor-recovery-failed",
+        tokenLimit: 100000,
+        durationLimitMs: 900000,
+        totalTokens: 18000,
+        durationMs: 90000,
+        state: "failed",
+      });
+      updateTask(fixture.taskId, (task) => {
+        const firstRecovery = task.program.workPackages.find((row) => row.workPackageId === "reconcile-in-supervisor-once");
+        firstRecovery.state = "failed";
+        firstRecovery.jobId = "job-in-supervisor-recovery-failed";
+        firstRecovery.allocation = { allocationId: "allocation-in-supervisor-recovery-failed" };
+        task.program.workPackages.push({
+          workPackageId: "reconcile-in-supervisor-second",
+          executorKind: "reconciliation",
+          deliverableKind: "reconciliation-decision",
+          state: "pending",
+          jobId: null,
+          readOnly: true,
+          failedWorkPackageId: "reconcile-in-supervisor-once",
+          failurePacket: { failureFingerprint: "failure-in-supervisor-second" },
+          requiredPermissions: ["read-project", "read-files"],
+          permissionGrant: ["read-project", "read-files"],
+          estimatedDirectTokens: 100000,
+          resourceEstimate: { tokens: 100000, wallTimeSeconds: 900 },
+        });
+        task.workGraph = [
+          { id: "work-in-supervisor-failed", state: "failed", dependsOn: [], priority: 100 },
+          { id: "reconcile-in-supervisor-once", state: "failed", dependsOn: [], priority: 100 },
+          { id: "reconcile-in-supervisor-second", state: "pending", dependsOn: [], priority: 100 },
+        ];
+        return task;
+      });
+      return { taskId: fixture.taskId, stopReason: "worker-deadline", roundsStarted: 1 };
     },
   });
   const finalTask = readTask(fixture.taskId);
   const finalSupervisor = finalTask.program.runtime.programSupervisor;
   const events = readMaterialEvents({ taskId: fixture.taskId, maxEvents: 100 }).events;
-  assert.equal(result.stopReason, "user-decision-required");
-  assert.equal(sliceCalls, 2, "The pending read-only reconciler must run in the same host campaign invocation.");
+  assert.equal(result.stopReason, "no-progress-limit");
+  assert.equal(sliceCalls, 2, "The first pending read-only reconciler must run in the same host campaign invocation.");
   assert.equal(finalSupervisor.recoveryAdmissionHistory.length, 1);
+  assert.equal(finalSupervisor.supervisorEpoch, initialSupervisor.supervisorEpoch + 1, "A distinct second failure must not open another recovery epoch in the same invocation.");
+  assert.equal(finalSupervisor.recoveryAdmissionHistory[0].recoveryInvocationId, executionId);
   assert.equal(events.filter((row) => row.type === "campaign.recovery-admitted").length, 1);
   return {
     slices: sliceCalls,
     supervisorEpoch: admittedSupervisor.supervisorEpoch,
     admissionHistory: finalSupervisor.recoveryAdmissionHistory.length,
+    secondDistinctAdmissionBlocked: true,
     originalHorizonPreserved: admittedSupervisor.deadlineAt === initialSupervisor.deadlineAt,
     anotherHostInvocationRequired: false,
   };

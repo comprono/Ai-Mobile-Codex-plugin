@@ -47,6 +47,9 @@ jobs:
       - name: Same-turn continuation regression
         run: node scripts/continuation-regression.js
 
+      - name: Contract revision continuation regression
+        run: node scripts/contract-revision-continuation-regression.js
+
       - name: Bounded task-cycle regression
         run: node scripts/task-cycle-regression.js
 

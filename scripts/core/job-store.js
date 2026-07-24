@@ -14,7 +14,7 @@ const { buildProgramResourceSnapshot } = require("./program-resource-snapshot");
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "rejected"]);
 const QUEUED_SPAWN_GRACE_MS = 60000;
-const DISPOSABLE_CANARY_PHASES = new Set(["context", "strategy", "reconciliation", "execution", "verification"]);
+const DISPOSABLE_CANARY_PHASES = new Set(["context", "strategy", "reconciliation", "execution", "awaiting-evidence", "verification"]);
 const DISPOSABLE_CANARY_READ_ONLY_EXECUTORS = new Set([
   "context-scout",
   "strategist",

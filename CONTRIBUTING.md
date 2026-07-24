@@ -32,6 +32,7 @@ node .\scripts\app-server-resume-regression.js
 node .\scripts\console-workplane-regression.js
 node .\scripts\context-freshness-regression.js
 node .\scripts\continuation-regression.js
+node .\scripts\contract-revision-continuation-regression.js
 node .\scripts\director-cfo-budget-regression.js
 node .\scripts\director-cfo-campaign-continuation-regression.js
 node .\scripts\director-cfo-context-regression.js
@@ -85,7 +86,7 @@ node .\scripts\installed-provider-canary.js
 node .\scripts\real-provider-portfolio-canary.js
 ```
 
-For a release that changes the Director lifecycle, run the cloned-state canary against an explicitly authorized durable task. Real context and strategy workers send the task's authorized source contents to authenticated model providers. The canary guards static production state, tolerates independently changing runtime logs/databases, and stops before the first execution worker launches:
+For a release that changes the Director lifecycle, run the cloned-state canary against an explicitly authorized durable task. Real workers send only the task's authorized bounded sources to authenticated model providers. The canary guards static production state, confines code changes to isolated worktrees and local operations to the disposable clone, rejects external effects, and requires at least one acceptance-linked result to integrate before it captures the next eligible package without launching it:
 
 ```powershell
 $env:AI_MOBILE_CANARY_TASK_ID = "task-your-durable-id"

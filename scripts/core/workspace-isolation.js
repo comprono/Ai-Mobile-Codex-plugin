@@ -7,7 +7,12 @@ const { commandResult, fileSha256, processAlive, readJson, safeRelativePath, saf
 const { stateRoot } = require("./state-store");
 const { readProfile } = require("../lib/orchestrator-profile");
 const { boundaryAllows } = require("./git-evidence");
-const { buildContextScoutPrompt, contextGitStatusArgs, fingerprintSourceSnapshots } = require("./context-dossier");
+const {
+  buildContextScoutPrompt,
+  contextGitStatusArgs,
+  fingerprintSourceSnapshots,
+  sourceSnapshotTarget,
+} = require("./context-dossier");
 const { assertDirectorWorkerContract, contractFingerprint: directorContractFingerprint } = require("./director-worker-contract");
 const { fingerprint: catalogFingerprint } = require("./source-catalog");
 const { releaseResourceLease } = require("./resource-leases");
@@ -45,6 +50,9 @@ function disposableCanaryWorkspace(workspace, contract) {
   const gitRoot = commandResult("git", ["-C", workspace, "rev-parse", "--show-toplevel"], { timeout: 5000 });
   if (gitRoot.status !== 0 || normalized(String(gitRoot.stdout || "").trim()) !== normalized(root)) {
     throw new Error("Disposable canary workspace must be the root of its isolated Git clone.");
+  }
+  if (contract.executorKind === "code-change") {
+    return null;
   }
   return {
     mode: "disposable-canary-project",
@@ -318,8 +326,8 @@ function rebaseContextWorkerContract(contract, bootstrapValue, workspace, copied
       } : {}),
     };
     try {
-      const relative = safeRelativePath(workspace, source.locator);
-      return { ...source, locator: relative || "." };
+      const target = sourceSnapshotTarget(workspace, source);
+      return { ...source, locator: target.relative };
     } catch {
       return { ...source, locator: `unavailable-source:${source.id}` };
     }
@@ -401,16 +409,20 @@ function plannedSnapshotBytes(contract, workspace, relevantFiles) {
   const direct = Number(contract.resourceEstimate?.diskMb ?? contract.diskMb);
   let bytes = 16 * MB;
   const bootstrap = contextBootstrap(contract);
-  const databaseFiles = new Set((bootstrap?.sourceCatalog?.sources || []).filter((row) => row.type === "database").flatMap((row) => {
-    try { return [safeRelativePath(workspace, row.locator).toLowerCase()]; } catch { return []; }
+  const targets = new Map((bootstrap?.sourceCatalog?.sources || []).flatMap((source) => {
+    try {
+      const target = sourceSnapshotTarget(workspace, source);
+      return [[target.relative.toLowerCase(), { source, target }]];
+    } catch { return []; }
   }));
   for (const relative of relevantFiles) {
     try {
-      const source = path.join(workspace, relative);
-      const sourceBytes = fs.statSync(source).size;
-      if (databaseFiles.has(String(relative).toLowerCase())) {
+      const entry = targets.get(String(relative).replace(/\\/g, "/").toLowerCase());
+      const sourceFile = entry?.target.absolute || path.join(workspace, relative);
+      const sourceBytes = fs.statSync(sourceFile).size;
+      if (entry?.source.type === "database") {
         let walBytes = 0;
-        try { walBytes = fs.statSync(`${source}-wal`).size; } catch { /* a checkpointed database may have no WAL */ }
+        try { walBytes = fs.statSync(`${sourceFile}-wal`).size; } catch { /* a checkpointed database may have no WAL */ }
         bytes += 2 * (sourceBytes + walBytes) + SQLITE_OBSERVATION_RECEIPT_MAX_BYTES;
       } else {
         bytes += sourceBytes;
@@ -455,9 +467,9 @@ function prepareDirectorReadOnlySnapshot(workspaceValue, contract, taskId, jobId
   for (const source of bootstrap.sourceCatalog?.sources || []) {
     if (!CONTEXT_SNAPSHOT_TYPES.has(String(source.type || ""))) continue;
     try {
-      const relative = safeRelativePath(workspace, source.locator);
-      if (relative && relative !== ".") sourcesByPath.set(relative.toLowerCase(), source);
-    } catch { /* the bootstrap manifest already records unavailable out-of-scope sources */ }
+      const target = sourceSnapshotTarget(workspace, source);
+      sourcesByPath.set(target.relative.toLowerCase(), { source, target });
+    } catch { /* the bootstrap manifest already records unavailable sources */ }
   }
   const copied = [];
   let copiedBytes = 0;
@@ -483,9 +495,10 @@ function prepareDirectorReadOnlySnapshot(workspaceValue, contract, taskId, jobId
       copiedBytes += row.size;
     }
     for (const relative of relevantFiles) {
-      const source = sourcesByPath.get(relative.toLowerCase());
-      if (!source) throw new Error(`Read-only context snapshot has no authorized source descriptor for ${relative}.`);
-      const sourceFile = containedRegularFile(workspace, relative, source.id);
+      const entry = sourcesByPath.get(relative.toLowerCase());
+      if (!entry) throw new Error(`Read-only context snapshot has no authorized source descriptor for ${relative}.`);
+      const { source, target: sourceTarget } = entry;
+      const sourceFile = sourceTarget.absolute;
       const destination = path.join(target, relative);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       const sourceObservation = source.type === "database"
@@ -540,7 +553,19 @@ function prepareDirectorReadOnlyScratch(workspaceValue, contract, taskId, jobId,
   const target = path.join(worktreeRoot(), "read-only-snapshots", taskId, jobId);
   const root = normalized(worktreeRoot());
   if (!normalized(target).startsWith(`${root}/`)) throw new Error("Read-only scratch target escaped AI Mobile storage.");
-  const allocation = assertSnapshotAllocation(profile, contract, workspace, []);
+  const declaredRelevantFiles = [...new Set(contract.relevantFiles || [])];
+  if (declaredRelevantFiles.length > 80) {
+    throw new Error(`director-read-source-file-limit-exceeded:${declaredRelevantFiles.length}:maximum=80`);
+  }
+  const relevantFiles = declaredRelevantFiles.map((value) => safeRelativePath(workspace, value));
+  if (relevantFiles.some((relative) => !relative || relative === ".")) {
+    throw new Error("Read-only Director snapshot requires bounded file paths.");
+  }
+  const grantedPermissions = new Set(contract.permissionGrant || []);
+  if (relevantFiles.length && !grantedPermissions.has("read-files")) {
+    throw new Error("Read-only Director snapshot requires an explicit read-files permission grant.");
+  }
+  const allocation = assertSnapshotAllocation(profile, contract, workspace, relevantFiles);
   fs.rmSync(target, { recursive: true, force: true });
   const provisional = {
     mode: "read-only-snapshot",
@@ -557,7 +582,29 @@ function prepareDirectorReadOnlyScratch(workspaceValue, contract, taskId, jobId,
   try {
     writeJson(provisional.metadataFile, provisional);
     fs.mkdirSync(target, { recursive: true });
-    const isolation = { ...provisional, state: "ready", copiedBytes: 0, copied: [], readyAt: utcNow() };
+    const copied = [];
+    let copiedBytes = 0;
+    for (const relative of relevantFiles) {
+      const sourceId = `director-read:${relative}`;
+      const sourceFile = containedRegularFile(workspace, relative, sourceId);
+      const destination = path.join(target, relative);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      const sourceObservation = copyRegularSnapshotWithRetry(sourceFile, destination, sourceId, false);
+      const copiedStat = fs.statSync(destination);
+      copiedBytes += copiedStat.size;
+      copied.push({
+        sourceId,
+        sourceType: "file",
+        relative,
+        size: copiedStat.size,
+        contentHash: fileSha256(destination),
+        sourceSize: sourceObservation.sourceSize,
+        sourceModifiedAt: sourceObservation.sourceModifiedAt,
+        capturedAt: utcNow(),
+      });
+    }
+    contract.relevantFiles = relevantFiles;
+    const isolation = { ...provisional, state: "ready", copiedBytes, copied, readyAt: utcNow() };
     writeJson(isolation.metadataFile, isolation);
     const after = storageStatus(profile);
     if (!after.withinQuota || !after.hasMinimumFree) {
@@ -806,6 +853,7 @@ function cleanupIsolatedWorkspace(isolation = {}) {
   const cleaned = removal.removed && !fs.existsSync(isolation.executionWorkspace);
   if (cleaned) {
     try { fs.rmSync(isolation.metadataFile || metadataFile(isolation.jobId), { force: true }); } catch { /* startup cleanup can remove stale metadata */ }
+    pruneEmptySnapshotParents(isolation.executionWorkspace);
   }
   const warning = [String(result.stderr || result.stdout).trim(), removal.error].filter(Boolean).join(" | ").slice(0, 500);
   return { cleaned, attempts: removal.attempts, ...(warning ? { warning } : {}), ...(cleaned ? {} : { recoveryAction: "Keep the worktree metadata and retry cleanup during startup or cancellation recovery." }) };

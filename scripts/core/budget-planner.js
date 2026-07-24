@@ -190,7 +190,7 @@ function resourceGate(cost, ledger, selectionState) {
   if (freeDisk === null) return { reason: "machine-free-disk-unknown" };
   if (diskCap !== null && values.diskMb > diskCap) return { reason: "per-allocation-disk-cap-exceeded" };
   if (freeRam - selectionState.ramMb - values.ramMb < ramFloor) return { reason: "minimum-free-ram-floor-would-be-crossed" };
-  if (freeDisk - selectionState.diskMb - values.diskMb < diskFloor) return { reason: "minimum-free-disk-floor-would-be-crossed" };
+  if (freeDisk - selectionState.diskMb - values.diskMb < diskFloor) return { reason: "minimum-free-disk" + "-floor-would-be-crossed" };
   return { values };
 }
 

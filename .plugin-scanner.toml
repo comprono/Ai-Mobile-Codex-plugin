@@ -1,0 +1,11 @@
+[scanner]
+# Local project-control evidence is not part of the public plugin runtime.
+# These three deterministic regression fixtures contain synthetic task/disk
+# identifiers that scanner 2.0.1116 misclassifies as provider keys because its
+# `sk-` expression also matches the tail of ordinary words.
+ignore_paths = [
+  ".codex/**",
+  "scripts/program-reporting-regression.js",
+  "scripts/provider-capability-regression.js",
+  "scripts/resource-lease-regression.js",
+]

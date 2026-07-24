@@ -202,6 +202,7 @@ node .\scripts\app-server-resume-regression.js
 node .\scripts\console-workplane-regression.js
 node .\scripts\context-freshness-regression.js
 node .\scripts\continuation-regression.js
+node .\scripts\contract-revision-continuation-regression.js
 node .\scripts\director-cfo-budget-regression.js
 node .\scripts\director-cfo-campaign-continuation-regression.js
 node .\scripts\director-cfo-context-regression.js

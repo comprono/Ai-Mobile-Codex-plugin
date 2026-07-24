@@ -144,6 +144,8 @@ function masterPlan(mission, dossier, requirements = []) {
           verificationCommands: [{ command: "node", args: ["--check", "src/feature.js"], timeoutSeconds: 30, cwd: "" }],
           requiredCapabilities: ["source", "local-files", "tests"],
           requiredPermissions: ["write-files"],
+          preconditions: ["The revision fence and existing source fingerprint still match."],
+          postconditions: ["The bounded patch applies and node --check passes."],
         }),
       },
       {

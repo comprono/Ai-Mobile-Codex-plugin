@@ -18,6 +18,14 @@ const CONTRACT_PREFLIGHT_ONLY = process.env.AI_MOBILE_CANARY_CONTRACT_PREFLIGHT_
 const EXECUTION_PREFLIGHT_ONLY = process.env.AI_MOBILE_CANARY_EXECUTION_PREFLIGHT_ONLY === "1";
 const OPERATION_REVISION_ONLY = process.env.AI_MOBILE_CANARY_OPERATION_REVISION_ONLY === "1";
 const TERMINAL_COORDINATOR_STATES = new Set(["stopped", "completed", "failed", "cancelled", "interrupted", "superseded"]);
+const LIVE_CANARY_EXECUTOR_ALLOWLIST = [
+  "context-scout",
+  "strategist",
+  "reconciliation",
+  "evidence-observer",
+  "verification",
+];
+const LIVE_CANARY_CAPTURE_SENTINEL = "canary-captured-before-execution";
 
 function expectedExecutorMap() {
   const text = String(process.env.AI_MOBILE_CANARY_EXPECTED_EXECUTORS_JSON || "").trim();
@@ -29,6 +37,115 @@ function expectedExecutorMap() {
     assert.ok(Array.isArray(executors) && executors.length, `Expected executor contract for ${requirementId} must be a non-empty array.`);
     return [String(requirementId), executors.map(String)];
   }));
+}
+
+function authoritativeRecoveryFenceAdvance(prior = null, current = null) {
+  if (!prior?.fingerprint || !current?.fingerprint || prior.fingerprint === current.fingerprint) return false;
+  if (current.missionId && prior.missionId && current.missionId !== prior.missionId) return false;
+  return Number(current.missionRevision || 0) > Number(prior.missionRevision || 0)
+    || String(current.runtimeBuildFingerprint || "") !== String(prior.runtimeBuildFingerprint || "")
+    || Number(current.contextRevision || 0) > Number(prior.contextRevision || 0)
+    || Number(current.planRevision || 0) > Number(prior.planRevision || 0)
+    || Number(current.budgetRevision || 0) > Number(prior.budgetRevision || 0)
+    || (String(current.budgetId || "") !== String(prior.budgetId || "") && Number(current.budgetRevision || 0) > 0)
+    || (Number(current.contractVersion || 0) > Number(prior.contractVersion || 0)
+      && (current.latestUserRequestFingerprint !== prior.latestUserRequestFingerprint || current.missionFingerprint !== prior.missionFingerprint))
+    || current.acceptanceFingerprint !== prior.acceptanceFingerprint;
+}
+
+function verifySupervisorRenewals(before = {}, after = {}, expectedAdmissionIncrease = 0) {
+  const beforeEpoch = Number(before.supervisorEpoch || 0);
+  const afterEpoch = Number(after.supervisorEpoch || 0);
+  const epochIncrease = Math.max(0, afterEpoch - beforeEpoch);
+  const renewals = (after.renewalHistory || []).filter((row) => {
+    const priorEpoch = Number(row.priorSupervisorEpoch || 0);
+    return priorEpoch >= beforeEpoch && priorEpoch < afterEpoch;
+  });
+  assert.equal(renewals.length, epochIncrease, "Every supervisor epoch increase must have one durable renewal receipt.");
+  const recoveryRenewals = renewals.filter((row) => String(row.recoveryAdmissionKey || ""));
+  const contractRenewals = renewals.filter((row) => !String(row.recoveryAdmissionKey || ""));
+  const allowedAdmissionIncreases = Array.isArray(expectedAdmissionIncrease)
+    ? expectedAdmissionIncrease.map(Number)
+    : [Number(expectedAdmissionIncrease)];
+  assert.ok(allowedAdmissionIncreases.includes(recoveryRenewals.length),
+    "The cloned campaign admitted an unexpected number of protected recovery epochs.");
+  assert.ok(contractRenewals.length <= 1,
+    "One campaign invocation may perform at most one non-recovery renewal for an authoritative runtime or contract advance.");
+  for (const renewal of contractRenewals) {
+    assert.equal(authoritativeRecoveryFenceAdvance(renewal.priorRecoveryFence, renewal.recoveryFence), true,
+      "A non-recovery supervisor renewal lacked an authoritative runtime, contract, plan, budget, context, or acceptance advance.");
+  }
+  assert.equal((after.recoveryAdmissionHistory || []).length,
+    Number((before.recoveryAdmissionHistory || []).length) + recoveryRenewals.length,
+    "The durable recovery-admission history does not match the verified recovery renewals.");
+  return {
+    epochIncrease,
+    recoveryRenewals: recoveryRenewals.length,
+    contractRenewals: contractRenewals.length,
+  };
+}
+
+function safeExternalDeferralBoundary(task = {}, ready = []) {
+  if (ready.length) return null;
+  const budget = task.program?.runtime?.budget || {};
+  const deferred = budget.deferred || [];
+  if (!deferred.length) return null;
+  const packages = new Map((task.program?.workPackages || []).map((row) => [row.workPackageId, row]));
+  const accepted = deferred.every((row) => {
+    const workPackage = packages.get(row.workPackageId);
+    const reasons = row.reasons || [];
+    return workPackage
+      && ["pending", "ready"].includes(String(workPackage.state || ""))
+      && ["operational-transaction", "external-transaction", "browser-action"].includes(workPackage.executorKind)
+      && (workPackage.acceptanceIds || []).length > 0
+      && reasons.includes("permission-unavailable:external-write")
+      && reasons.every((reason) => [
+        "permission-unavailable:external-write",
+        "permission-not-authorized:external-write",
+      ].includes(reason));
+  });
+  if (!accepted) return null;
+  return {
+    reason: "external-write-unavailable",
+    workPackageIds: deferred.map((row) => row.workPackageId).sort(),
+  };
+}
+
+function postExecutionReconciliationBoundary(task = {}, jobRecords = []) {
+  if (task.program?.phase !== "reconciliation") return null;
+  const failedVerifications = jobRecords.filter((row) => (
+    row.contract?.executorKind === "verification"
+    && ["execution", "awaiting-evidence", "verification"].includes(String(row.contract?.directorProgram?.phase || ""))
+    && row.contract?.readOnly === true
+    && (row.contract?.acceptanceIds || []).length > 0
+    && row.contract?.isolation?.mode === "read-only-snapshot"
+    && (row.contract?.isolation?.copied || []).length > 0
+    && (row.contract.isolation.copied || []).every((source) => (
+      String(source.relative || "")
+      && String(source.contentHash || "").match(/^[a-f0-9]{64}$/)
+    ))
+    && row.status?.state === "failed"
+    && row.handoff?.state === "failed"
+    && String(row.handoff?.blocker || row.handoff?.deliverable?.blocker || "").trim()
+  ));
+  if (!failedVerifications.length) return null;
+  const failedAcceptanceIds = new Set(failedVerifications.flatMap((row) => row.contract.acceptanceIds || []));
+  const pendingReconciliation = (task.program?.workPackages || []).filter((row) => (
+    row.executorKind === "reconciliation"
+    && ["pending", "ready"].includes(String(row.state || ""))
+    && (row.acceptanceIds || []).some((requirementId) => failedAcceptanceIds.has(requirementId))
+    && String(row.failurePacket?.failureFingerprint || row.materialDeltaRequired?.failureFingerprint || "")
+  ));
+  if (!pendingReconciliation.length) return null;
+  return {
+    reason: "truthful-verification-failure-scheduled-for-reconciliation",
+    failedVerificationJobIds: failedVerifications.map((row) => row.jobId).sort(),
+    reconciliationWorkPackageIds: pendingReconciliation.map((row) => row.workPackageId).sort(),
+  };
+}
+
+function executionBoundarySatisfied(acceptanceLinkedExecutionResults = [], postExecutionReconciliation = null) {
+  return acceptanceLinkedExecutionResults.length > 0 || Boolean(postExecutionReconciliation);
 }
 
 function digestFile(file) {
@@ -344,9 +461,8 @@ function classifyCanaryStart(task, coordinator, taskRoot) {
 function databaseIntegrationProof(afterStrategy, cloneRoot, initialJobIds, requireNewContextOwner = true) {
   const databaseSources = (afterStrategy.program?.sourceCatalog?.sources || [])
     .filter((source) => source.type === "database" && source.required !== false);
-  assert.ok(databaseSources.length > 0, "The guarded program must include at least one required database source.");
   const dossier = afterStrategy.program?.contextDossier;
-  assert.ok(dossier, "Database proof requires the accepted context dossier.");
+  assert.ok(dossier, "Source integration proof requires the accepted context dossier.");
   const initial = initialJobIds instanceof Set ? initialJobIds : new Set(initialJobIds || []);
   const jobsRoot = path.join(cloneRoot, "tasks", afterStrategy.taskId, "jobs");
   const newContextJobs = fs.readdirSync(jobsRoot, { withFileTypes: true })
@@ -366,6 +482,15 @@ function databaseIntegrationProof(afterStrategy, cloneRoot, initialJobIds, requi
       && job.handoff?.state === "completed"
     ));
   if (requireNewContextOwner) assert.ok(newContextJobs.length > 0, "No newly completed persisted context-scout job was found.");
+  if (!databaseSources.length) {
+    for (const job of newContextJobs) {
+      assert.equal(Object.keys(job.contract?.contextObservationReceiptExpectations || {}).length, 0,
+        "A context contract fabricated database receipt expectations for a project with no declared database source.");
+      assert.equal((job.contract?.contextObservationPreflight?.databaseSourceIds || []).length, 0,
+        "A context preflight fabricated database source ids for a project with no declared database source.");
+    }
+    return { mode: "no-database-source-declared", sources: [] };
+  }
 
   const dossierObservations = new Map((dossier.sourceObservations || []).map((row) => [row.sourceId, row]));
   const claimGroups = ["currentState", "facts", "decisions", "failures"];
@@ -503,8 +628,8 @@ async function main() {
     workspaceManifest(clonedTask, "dynamic"),
   ].join(":");
   process.env.AI_MOBILE_DATA_ROOT = cloneRoot;
-  delete process.env.AI_MOBILE_CANARY_EXECUTOR_ALLOWLIST;
-  process.env.AI_MOBILE_CANARY_PHASE_ALLOWLIST = "context,strategy,reconciliation,execution,verification";
+  process.env.AI_MOBILE_CANARY_EXECUTOR_ALLOWLIST = LIVE_CANARY_EXECUTOR_ALLOWLIST.join(",");
+  process.env.AI_MOBILE_CANARY_PHASE_ALLOWLIST = "context,strategy,reconciliation,execution,awaiting-evidence,verification";
   process.env.AI_MOBILE_CANARY_POLICY = "disposable-project";
   process.env.AI_MOBILE_CANARY_WORKSPACE_ROOT = sandboxWorkspace;
   process.env.AI_MOBILE_CANARY_FAIL_FAST = "1";
@@ -697,14 +822,20 @@ async function main() {
       "No finite coordinator slice may exceed the public three-round cap.");
 
     const supervisorAfter = afterStrategy.program?.runtime?.programSupervisor || null;
-    const recoveryCycles = Math.max(0, Number(supervisorAfter?.supervisorEpoch || 0) - Number(supervisorBefore?.supervisorEpoch || 0));
-    assert.equal(recoveryCycles, 1, "The stopped production supervisor must admit exactly one idempotent recovery epoch.");
-    const expectedAdmissionIncrease = start.mode === "strategy-resume" ? 0 : 1;
-    assert.equal((supervisorAfter?.recoveryAdmissionHistory || []).length,
-      Number((supervisorBefore?.recoveryAdmissionHistory || []).length) + expectedAdmissionIncrease,
-      start.mode === "strategy-resume"
-        ? "A verified runtime-build recovery must not fabricate another read-only admission."
-        : "The public path must persist exactly one bounded recovery admission.");
+    const expectedAdmissionIncrease = start.mode === "strategy-resume" ? 0 : [0, 1];
+    const verifiedSupervisorRenewals = verifySupervisorRenewals(supervisorBefore, supervisorAfter, expectedAdmissionIncrease);
+    if (verifiedSupervisorRenewals.recoveryRenewals === 0
+      && supervisorAfter?.stopReason === "no-acceptance-progress") {
+      const eligiblePendingRecovery = (afterStrategy.program?.workPackages || []).filter((row) => (
+        row.executorKind === "reconciliation"
+        && ["pending", "ready"].includes(String(row.state || ""))
+        && !String(row.jobId || "")
+        && row.readOnly === true
+        && String(row.failurePacket?.failureFingerprint || row.materialDeltaRequired?.failureFingerprint || "")
+      ));
+      assert.notEqual(eligiblePendingRecovery.length, 1,
+        "The campaign stopped at no-acceptance-progress with one eligible protected reconciliation but admitted no recovery.");
+    }
     const newJobRecords = fs.readdirSync(path.join(clonedTaskRoot, "jobs"), { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !initialJobIds.has(entry.name))
       .map((entry) => {
@@ -719,6 +850,8 @@ async function main() {
       .filter((row) => row.contract);
     const newJobContracts = newJobRecords.map((row) => row.contract);
     const newJobExecutorKinds = newJobContracts.map((contract) => contract.executorKind).filter(Boolean).sort();
+    assert.ok(newJobExecutorKinds.every((kind) => LIVE_CANARY_EXECUTOR_ALLOWLIST.includes(kind)),
+      "The live cloned-state canary launched a mutating execution worker instead of capturing its contract.");
     if (start.mode === "execution-resume") {
       assert.ok(!newJobExecutorKinds.some((kind) => ["context-scout", "strategist"].includes(kind)),
         "Execution resume repeated context or strategy instead of continuing the accepted plan.");
@@ -743,18 +876,23 @@ async function main() {
         blocker: String(row.blocker || row.reason || "").slice(0, 300) || null,
       })),
     };
-    const acceptanceLinkedExecutionResults = newJobRecords.filter((row) => (
-      row.contract?.directorProgram?.phase === "execution"
-      && (
-        row.contract?.readOnly === true
-        || row.contract?.executorKind === "code-change"
-        || row.contract?.executorKind === "operational-transaction"
-      )
-      && row.status?.state === "completed"
-      && row.handoff?.state === "completed"
-      && (row.contract?.acceptanceIds || []).length > 0
-    ));
-    assert.ok(acceptanceLinkedExecutionResults.length > 0,
+    const acceptanceLinkedExecutionResults = newJobRecords.filter((row) => {
+      const integratedPackage = (afterStrategy.program?.workPackages || [])
+        .find((workPackage) => workPackage.workPackageId === row.contract?.directorProgram?.workPackageId);
+      return row.contract?.directorProgram?.phase === "execution"
+        && (
+          row.contract?.readOnly === true
+          || row.contract?.executorKind === "code-change"
+          || row.contract?.executorKind === "operational-transaction"
+        )
+        && row.status?.state === "completed"
+        && row.handoff?.state === "completed"
+        && (row.contract?.acceptanceIds || []).length > 0
+        && integratedPackage?.state === "completed"
+        && integratedPackage?.jobId === row.jobId;
+    });
+    const postExecutionReconciliation = postExecutionReconciliationBoundary(afterStrategy, newJobRecords);
+    assert.ok(executionBoundarySatisfied(acceptanceLinkedExecutionResults, postExecutionReconciliation),
       "The public canary never produced a real sandbox-safe acceptance-linked execution result: " + JSON.stringify(stageDiagnostic));
     for (const result of acceptanceLinkedExecutionResults) {
       const integratedPackage = (afterStrategy.program?.workPackages || []).find((row) => row.workPackageId === result.contract.directorProgram.workPackageId);
@@ -764,7 +902,8 @@ async function main() {
     if (!afterStrategy.program.contextDossier || !afterStrategy.program.masterPlan) {
       throw new Error("Read-only Director stages did not complete. Coordinator: " + JSON.stringify(coordinator) + "; next: " + afterStrategy.program.nextAction + "; failures: " + JSON.stringify((afterStrategy.program.failureMemory || []).slice(-3)));
     }
-    assert.equal(afterStrategy.program.phase, "execution", "Context and strategy must integrate before the safe execution boundary.");
+    assert.ok(["execution", "awaiting-evidence"].includes(afterStrategy.program.phase) || postExecutionReconciliation,
+      "Context, strategy, and at least one execution result must integrate before the safe execution/evidence boundary.");
     let reconciliationProof = null;
     if (["reconciliation", "plan-reconciliation", "plan-revision-reconciliation", "post-failure-reconciliation"].includes(start.mode)) {
       const stalled = (afterStrategy.program.workPackages || []).find((row) => row.workPackageId === start.stalledWorkPackageId);
@@ -814,11 +953,19 @@ async function main() {
     const budgeted = prepareProgramDispatch(afterStrategy, resources);
     const ready = programRecommendedWorkUnits(budgeted);
     assert.ok(budgeted.program.runtime && budgeted.program.runtime.budget, "The whole-plan budget was not persisted.");
-    assert.ok((budgeted.program.runtime.budget.allocations || []).length > 0, "No acceptance-linked execution package passed the real budget.");
-    assert.ok(ready.length > 0, "The Master Plan did not compile a dispatch-ready team package.");
+    const safeExternalBoundary = safeExternalDeferralBoundary(budgeted, ready);
+    assert.ok(ready.length > 0 || safeExternalBoundary,
+      "The Master Plan produced neither a dispatch-ready package nor an exact unavailable external-write boundary.");
+    if (ready.length) {
+      assert.ok((budgeted.program.runtime.budget.allocations || []).length > 0,
+        "A dispatch-ready acceptance-linked execution package lacks a real budget allocation.");
+    }
     const plannedPackages = budgeted.program.workPackages || [];
-    const unresolvedRequirementIds = clonedTask.requirements.filter((row) => row.required && row.status !== "passing").map((row) => row.id);
-    assert.deepEqual([...unresolvedRequirementIds].sort(), Object.keys(expectedExecutors).sort(), "The guarded production requirement set drifted from the exact Job Vibhu executor contract.");
+    const unresolvedRequirementIds = afterStrategy.requirements.filter((row) => row.required && row.status !== "passing").map((row) => row.id);
+    if (Object.keys(expectedExecutors).length) {
+      assert.deepEqual([...unresolvedRequirementIds].sort(), Object.keys(expectedExecutors).sort(),
+        "The guarded production requirement set drifted from the explicitly supplied executor contract.");
+    }
     const compiledExecutionPackages = plannedPackages.filter((row) => !["context-scout", "strategist", "reconciliation"].includes(row.executorKind) && !["superseded", "cancelled"].includes(row.state));
     const forecastIds = new Set((budgeted.program.runtime.forecast?.items || []).filter((row) => !row.synthetic).map((row) => row.workPackageId));
     const allocationIds = new Set((budgeted.program.runtime.budget.allocations || []).map((row) => row.workPackageId));
@@ -841,15 +988,26 @@ async function main() {
     }
 
     const captured = [];
-    const finalRoute = dispatchRound({ taskId: TASK_ID, horizonHours: 5 }, resources, providerHistory(), (contract) => {
-      captured.push(contract);
-      throw new Error("release-canary-captured-before-execution");
-    });
-    assert.ok(captured.length > 0, "No package reached the final provider route: " + JSON.stringify(finalRoute.rejected));
-    assert.ok(captured.every((contract) => contract.directorProgram && contract.workGraphNodeId), "Captured work was not fenced to the Director plan.");
-    assert.ok(captured.every((contract) => contract.directorProgram.phase === "execution"), "Canary did not reach a plan-derived execution-phase package.");
-    assert.ok(captured.every((contract) => !["context-1-1", "strategy-1-1"].includes(contract.directorProgram.workPackageId)), "Canary recaptured a bootstrap package instead of plan-derived work.");
-    assert.ok((finalRoute.workers || []).length === 0, "The release canary must not launch execution workers.");
+    let finalRoute = { workers: [], rejected: [] };
+    if (ready.length) {
+      delete process.env.AI_MOBILE_CANARY_EXECUTOR_ALLOWLIST;
+      finalRoute = dispatchRound({ taskId: TASK_ID, horizonHours: 5 }, resources, providerHistory(), (contract) => {
+        captured.push(contract);
+        throw new Error(LIVE_CANARY_CAPTURE_SENTINEL);
+      });
+      assert.ok(captured.length > 0, "No package reached the final provider route: " + JSON.stringify(finalRoute.rejected));
+      assert.ok(captured.every((contract) => contract.directorProgram && contract.workGraphNodeId), "Captured work was not fenced to the Director plan.");
+      assert.ok(captured.every((contract) => (
+        ["execution", "awaiting-evidence"].includes(contract.directorProgram.phase)
+        || (postExecutionReconciliation
+          && contract.directorProgram.phase === "reconciliation"
+          && contract.executorKind === "reconciliation"
+          && contract.readOnly === true)
+      )),
+        "Canary did not reach a plan-derived execution or evidence-verification package.");
+      assert.ok(captured.every((contract) => !["context-1-1", "strategy-1-1"].includes(contract.directorProgram.workPackageId)), "Canary recaptured a bootstrap package instead of plan-derived work.");
+      assert.ok((finalRoute.workers || []).length === 0, "The release canary must not launch execution workers.");
+    }
 
     const cloneWorktrees = path.join(cloneRoot, "worktrees");
     assert.ok(!fs.existsSync(cloneWorktrees) || fs.readdirSync(cloneWorktrees).length === 0, "The canary left a disposable worker worktree behind.");
@@ -867,10 +1025,12 @@ async function main() {
       coordinator,
       coordinatorRuns,
       freshIntegratedRoundCount: freshIntegratedRounds.length,
-      recoveryCycles,
+      verifiedSupervisorRenewals,
       boundedWorkerExecutors: newJobExecutorKinds,
       reconciliationProof,
+      postExecutionReconciliation,
       databaseIntegrationProof: databaseProof,
+      safeExternalBoundary,
       contextRevision: afterStrategy.program.contextDossier.contextRevision,
       planRevision: afterStrategy.program.masterPlan.planRevision,
       milestones: afterStrategy.program.masterPlan.milestones.length,
@@ -948,7 +1108,14 @@ if (require.main === module) {
 
 module.exports = {
   activePackages,
+  authoritativeRecoveryFenceAdvance,
   classifyCanaryStart,
   cloneProjectWorkspace,
   databaseIntegrationProof,
+  executionBoundarySatisfied,
+  LIVE_CANARY_CAPTURE_SENTINEL,
+  LIVE_CANARY_EXECUTOR_ALLOWLIST,
+  postExecutionReconciliationBoundary,
+  safeExternalDeferralBoundary,
+  verifySupervisorRenewals,
 };

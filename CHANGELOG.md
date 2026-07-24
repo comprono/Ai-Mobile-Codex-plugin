@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.13 - 2026-07-24
+
+- Lets the deterministic coordinator discard a stale round invalidated by an authoritative contract revision and continue from the revised mission instead of crashing the program supervisor.
+- Snapshots explicitly authorized, user-declared read-only files outside the project root into bounded immutable worker storage while withholding the original external path.
+- Refuses symlinks, directories, implicit discovery, non-read access, and non-user-declared external paths; the existing workspace containment boundary remains unchanged for ordinary project sources.
+- Fences protected read-only recovery by the stable campaign-supervisor execution so distinct failure fingerprints cannot open multiple recovery epochs during one host invocation or after that invocation restarts.
+- Strengthens provider-facing reconciliation and plan contracts: `planRevision` corrections must be structured objects, guarded transactions require explicit pre/postconditions, and code work is split into bounded slices covering at most two unresolved acceptance requirements.
+- Classifies cloned-state supervisor renewals by authoritative contract/runtime advance versus protected recovery, allowing zero recovery only when no eligible stopped recovery was skipped.
+- Removes a Job-Vibhu-specific database assumption from the generic release canary and accepts only an exactly accounted external-write deferral when the host has no supported authorized external capability.
+- Copies only explicitly bounded, workspace-contained regular files into immutable snapshots for read-only verification and reconciliation workers; empty scratch workspaces can no longer create false missing-evidence failures.
+- Preserves normal isolated-worktree patch integration for code changes inside a disposable canary while limiting direct cloned-project mutation to locally bounded operational transactions.
+- Counts a live canary execution result only after its exact fenced work package integrates, and recognizes a truthful hashed-source verification failure only when it schedules a fingerprinted reconciliation package.
+- Prunes empty per-task directories after successful Git-worktree cleanup so release validation cannot retain or misclassify disposable worker residue.
+- Keeps the live cloned-state gate read-only through provider execution, then dry-captures the first mutation contract before launch; deterministic policy tests continue to prove isolated code and disposable local-operation boundaries without spending unnecessary provider quota.
+- Adds production-shaped regressions for mid-wait reconciliation, authorized external-source capture, and sequential recovery churn while preserving stale collection refusal, revision fencing, snapshot mutation guards, and finite campaign bounds.
+
 ## 1.4.12 - 2026-07-24
 
 - Keeps an unattended Director-CFO campaign running when its no-progress boundary has already produced exactly one eligible read-only reconciliation package.

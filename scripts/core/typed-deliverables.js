@@ -292,7 +292,7 @@ function promptContractFor(contract = {}) {
     return "Return exactly one JSON Master Plan with milestones, timeline, dependencies, workstreams, team roles, permissions, risks, recovery alternatives, acceptance evidence, and resource estimates. Every work package must advance named acceptance evidence.";
   }
   if (kind === "reconciliation-decision") {
-    return "Return exactly one JSON reconciliation decision with rootCause, failureClass, evidence, contextRefresh, planRevision, budgetRevision, changedContract, changedWorkerRequirements, changedPermissions, retryEligibility, and userDecision. An unchanged retry is forbidden.";
+    return "Return exactly one JSON reconciliation decision with rootCause, failureClass, evidence, contextRefresh, planRevision, budgetRevision, changedContract, changedWorkerRequirements, changedPermissions, retryEligibility, and userDecision. planRevision must be null or a non-empty JSON object containing machine-actionable plan corrections; never return a number, string, empty object, or narrative wrapper. An unchanged retry is forbidden.";
   }
   return "Return exactly one JSON " + kind + " with these exact fields: kind, state, sideEffectKey, observedStateFingerprintBefore, observedStateFingerprintAfter, userAuthorizationRef, idempotency { checked, duplicate, key, evidence }, preconditions [{ name, passed, evidence }], actions [{ name, passed, evidence }], postconditions [{ name, passed, evidence }], rollback { available, executed, evidence }, evidence, acceptanceEvidence [{ requirementId, level, ref, summary, passed }], and blocker. For a successful mutation, state must be applied and every precondition, action, and postcondition must have passed=true. Do not rename fields or return a patch.";
 }

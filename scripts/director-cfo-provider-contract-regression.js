@@ -202,6 +202,9 @@ const completePrompt = promptFor(workerContract);
 assert.ok(completePrompt.includes(sentinel), "Worker prompt lost context beyond the router summary.");
 assert.ok(completePrompt.includes(strategyWorkerContract.contractFingerprint), "Worker prompt omitted the immutable contract fingerprint.");
 assert.ok(completePrompt.includes('"jsonSchema"'), "Worker prompt omitted the strict artifact schema.");
+assert.ok(completePrompt.includes("NON-NEGOTIABLE TRANSACTION RULE"));
+assert.ok(completePrompt.includes("Empty arrays are invalid"));
+assert.ok(completePrompt.includes("at most two unresolved acceptance requirements"));
 
 const providerSchema = JSON.parse(claudeResultSchema(workerContract));
 assert.deepEqual(providerSchema, strategyContract.artifactContract.jsonSchema, "Claude and plan assurance must share the exact Master Plan schema.");
@@ -437,6 +440,7 @@ const reconciliationPrompt = promptFor(reconciliationProviderContract);
 assert.ok(reconciliationPrompt.includes(reconciliationSentinel), "Reconciliation prompt lost failure context beyond the router summary.");
 assert.ok(reconciliationPrompt.includes("failure-fingerprint-9981"));
 assert.ok(reconciliationPrompt.includes("unchanged retry is forbidden"));
+assert.ok(reconciliationPrompt.includes("planRevision must be null or a non-empty JSON object"));
 const reconciliationSchema = JSON.parse(claudeResultSchema(reconciliationProviderContract));
 assert.equal(reconciliationSchema.properties.contextRefresh.const, true, "A pre-context reconciliation schema must reject contextRefresh=false.");
 assert.equal(

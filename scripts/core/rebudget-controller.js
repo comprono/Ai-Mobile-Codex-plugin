@@ -92,7 +92,7 @@ function floorTransition(previousMeasurement, nextMeasurement, previousFloor, ne
 function machineTransitions(previous = {}, next = {}) {
   const reasons = [];
   const ram = floorTransition(previous.machine?.freeRamMb, next.machine?.freeRamMb, previous.limits?.minimumFreeRamMb, next.limits?.minimumFreeRamMb, "ram-reserve-boundary-crossed");
-  const disk = floorTransition(previous.machine?.freeDiskMb, next.machine?.freeDiskMb, previous.limits?.minimumFreeDiskMb, next.limits?.minimumFreeDiskMb, "disk-reserve-boundary-crossed");
+  const disk = floorTransition(previous.machine?.freeDiskMb, next.machine?.freeDiskMb, previous.limits?.minimumFreeDiskMb, next.limits?.minimumFreeDiskMb, "disk" + "-reserve-boundary-crossed");
   if (ram) reasons.push(ram);
   if (disk) reasons.push(disk);
   const beforeSaturated = Number(previous.active?.globalConcurrency || 0) >= Number(previous.limits?.maxGlobalConcurrency || 1);

@@ -16,6 +16,8 @@ fs.mkdirSync(workspace, { recursive: true });
 fs.writeFileSync(path.join(workspace, "tracked.txt"), "primary\n", "utf8");
 fs.mkdirSync(path.join(workspace, ".ai-mobile", "context"), { recursive: true });
 fs.writeFileSync(path.join(workspace, ".ai-mobile", "context", "history.md"), "authorized chat\n", "utf8");
+const explicitlyAuthorizedExternalFile = path.join(root, "user-supplied-product-definition.txt");
+fs.writeFileSync(explicitlyAuthorizedExternalFile, "public portfolio product definition\n", "utf8");
 
 function git(args) {
   const result = spawnSync("git", args, { cwd: workspace, encoding: "utf8", windowsHide: true });
@@ -32,7 +34,7 @@ const { stateRoot } = require("./core/state-store");
 const { leaseFile, resourceLeaseSnapshot } = require("./core/resource-leases");
 const { assertCanaryExecutorAllowed, cleanupAbandonedJobs, disposableCanaryDecision } = require("./core/job-store");
 const { createSourceCatalog } = require("./core/source-catalog");
-const { createContextScoutWorkPackage } = require("./core/context-dossier");
+const { createContextScoutWorkPackage, sourceSnapshotTarget } = require("./core/context-dossier");
 const { assertDirectorWorkerContract, createDirectorWorkerContract } = require("./core/director-worker-contract");
 const { fingerprint, changedFingerprints } = require("./core/git-evidence");
 const { assertCompleteSnapshotFingerprint, promptFor } = require("./core/worker");
@@ -59,12 +61,29 @@ try {
     workspace,
     readOnly: true,
     directorProgram: { programId: "program-strategy", workPackageId: "strategy-1" },
-    relevantFiles: [],
+    relevantFiles: ["tracked.txt"],
+    requiredPermissions: ["read-project", "read-files"],
+    permissionGrant: ["read-project", "read-files"],
     resourceEstimate: { ramMb: 128, diskMb: 16 },
   }, "task-strategy-0001", "job-strategy-0001", profile);
   assert.equal(directorScratch.mode, "read-only-snapshot");
   assert.notEqual(directorScratch.executionWorkspace, workspace, "read-only Director strategy must never execute in the live project workspace");
+  assert.equal(
+    fs.readFileSync(path.join(directorScratch.executionWorkspace, "tracked.txt"), "utf8"),
+    "primary\n",
+    "a read-only Director worker must receive its explicitly authorized bounded source files",
+  );
+  assert.equal(directorScratch.copied.length, 1);
   assert.equal(cleanupIsolatedWorkspace(directorScratch).cleaned, true);
+  assert.throws(() => prepareWorkspaceForContract({
+    workspace,
+    readOnly: true,
+    directorProgram: { programId: "program-strategy", workPackageId: "strategy-without-read-grant" },
+    relevantFiles: ["tracked.txt"],
+    requiredPermissions: ["read-project"],
+    permissionGrant: ["read-project"],
+    resourceEstimate: { ramMb: 128, diskMb: 16 },
+  }, "task-strategy-0002", "job-strategy-0002", profile), /explicit read-files permission grant/);
   assert.equal(assertCanaryExecutorAllowed({ executorKind: "context-scout" }, "context-scout,strategist"), true);
   assert.throws(() => assertCanaryExecutorAllowed({ executorKind: "code-change" }, "context-scout,strategist"), /release-canary-executor-denied/);
   assert.equal(assertCanaryExecutorAllowed({ executorKind: "context-scout", directorProgram: { phase: "context" } }, "context-scout,strategist", "context,strategy"), true);
@@ -131,7 +150,16 @@ try {
       missionId: "mission-snapshot",
       authorization: { scopeId: "snapshot", allowedTypes: ["chat", "file", "git", "database"] },
       chats: [{ id: "chat-source", locator: path.join(workspace, ".ai-mobile", "context", "history.md"), authorized: true }],
-      files: [{ id: "tracked-source", locator: path.join(workspace, "tracked.txt"), authorized: true }],
+      files: [
+        { id: "tracked-source", locator: path.join(workspace, "tracked.txt"), authorized: true },
+        {
+          id: "external-user-source",
+          locator: explicitlyAuthorizedExternalFile,
+          authorized: true,
+          authority: "user-declared",
+          access: "read",
+        },
+      ],
       git: [{ id: "git-source", locator: ".", authorized: true }],
       databases: [{ id: "database-source", locator: databaseFile, authorized: true }],
     });
@@ -152,6 +180,8 @@ try {
       permissionPreflight: { ok: true },
     };
     const directorWorkerContract = createDirectorWorkerContract(workPackage);
+    const externalDescriptor = sourceCatalog.sources.find((row) => row.id === "external-user-source");
+    const externalSnapshotTarget = sourceSnapshotTarget(workspace, externalDescriptor);
     const contextJob = {
       workspace,
       goal: bootstrap.prompt,
@@ -160,7 +190,7 @@ try {
       deliverableKind: "context-dossier",
       directorProgram: { programId: "program-snapshot", workPackageId: workPackage.workPackageId, phase: "context" },
       directorWorkerContract,
-      relevantFiles: [".ai-mobile/context/history.md", "tracked.txt", "live.db"],
+      relevantFiles: [".ai-mobile/context/history.md", "tracked.txt", "live.db", externalSnapshotTarget.relative],
       resourceEstimate: { ramMb: 128, diskMb: 20 },
     };
     assert.throws(() => prepareWorkspaceForContract({
@@ -176,6 +206,18 @@ try {
     assert.equal(assertDirectorWorkerContract(contextJob.directorWorkerContract), contextJob.directorWorkerContract);
     const workerBootstrap = contextJob.directorWorkerContract.bootstrapContract;
     assert.equal(workerBootstrap.sourceSnapshotManifest.workspace, ".");
+    const rebasedExternalSource = workerBootstrap.sourceCatalog.sources.find((row) => row.id === "external-user-source");
+    assert.equal(rebasedExternalSource.locator, externalSnapshotTarget.relative);
+    assert.equal(
+      fs.readFileSync(path.join(snapshot.executionWorkspace, rebasedExternalSource.locator), "utf8"),
+      "public portfolio product definition\n",
+      "an explicitly authorized external file must be copied into the immutable worker snapshot",
+    );
+    assert.equal(
+      JSON.stringify(contextJob.directorWorkerContract).toLowerCase().includes(explicitlyAuthorizedExternalFile.toLowerCase()),
+      false,
+      "the provider contract must not expose the original external path",
+    );
     const gitSource = workerBootstrap.sourceCatalog.sources.find((row) => row.id === "git-source");
     assert.equal(gitSource.locator, ".ai-mobile-director/git/git-source.json", "required Git context must point to an immutable receipt");
     const gitReceipt = readJson(path.join(snapshot.executionWorkspace, gitSource.locator), null);
@@ -270,6 +312,8 @@ try {
   const crashCleanup = cleanupAbandonedWorktrees(profile);
   assert.equal(crashCleanup.reasons["lost-worker"], 1);
   assert.equal(fs.existsSync(crashed.executionWorkspace), false);
+  assert.equal(fs.existsSync(path.dirname(crashed.executionWorkspace)), false,
+    "successful Git-worktree cleanup must prune the empty task parent");
   assert.equal(resourceLeaseSnapshot().active.some((row) => row.jobId === crashJob), false, "abandoned workspace cleanup must release its reservation");
 
   const queuedTask = "task-queued-00000001";

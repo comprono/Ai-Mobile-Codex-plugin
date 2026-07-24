@@ -8,9 +8,56 @@ const { assertCatalog, fingerprint } = require("./source-catalog");
 const OBSERVATION_STATES = new Set(["observed", "unchanged", "unavailable"]);
 const LOCAL_SNAPSHOT_TYPES = new Set(["project-outcome", "acceptance", "chat", "file", "git", "log", "database"]);
 const GIT_DYNAMIC_TYPES = new Set(["log", "database"]);
+const EXPLICIT_EXTERNAL_FILE_TYPES = new Set(["chat", "file", "log", "database"]);
 
 function cleanId(value, fallback) {
   return String(value || fallback || "item").trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-|-$/g, "").slice(0, 100) || fallback || "item";
+}
+
+function normalizedAbsolute(value) {
+  return path.resolve(String(value || "")).replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+}
+
+function sourceSnapshotTarget(workspaceValue, source = {}) {
+  const workspace = safeWorkspace(workspaceValue);
+  let relative;
+  try {
+    relative = safeRelativePath(workspace, source.locator);
+  } catch {
+    const explicitlyAuthorized = source.authorized === true
+      && source.authority === "user-declared"
+      && source.access === "read"
+      && EXPLICIT_EXTERNAL_FILE_TYPES.has(String(source.type || ""))
+      && path.isAbsolute(String(source.locator || ""));
+    if (!explicitlyAuthorized) {
+      throw new Error("source locator is outside the workspace without explicit user-declared read authorization");
+    }
+    const requested = path.resolve(String(source.locator));
+    const linkStat = fs.lstatSync(requested);
+    if (linkStat.isSymbolicLink()) throw new Error(`context-source-link-refused:${source.id}`);
+    if (!linkStat.isFile()) throw new Error(`context-source-not-regular-file:${source.id}`);
+    const real = (fs.realpathSync.native || fs.realpathSync)(requested);
+    if (normalizedAbsolute(real) !== normalizedAbsolute(requested)) {
+      throw new Error(`context-source-realpath-changed:${source.id}`);
+    }
+    const basename = path.basename(requested).replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 100) || "source";
+    return {
+      absolute: real,
+      relative: path.posix.join(".ai-mobile-director", "authorized-sources", `${cleanId(source.id, "source")}-${basename}`),
+      external: true,
+    };
+  }
+  if (!relative || relative === ".") throw new Error(`context-source-path-unbounded:${source.id}`);
+  const absolute = path.join(workspace, relative);
+  const linkStat = fs.lstatSync(absolute);
+  if (linkStat.isSymbolicLink()) throw new Error(`context-source-link-refused:${source.id}`);
+  if (!linkStat.isFile()) throw new Error(`context-source-not-regular-file:${source.id}`);
+  const real = (fs.realpathSync.native || fs.realpathSync)(absolute);
+  const workspaceReal = (fs.realpathSync.native || fs.realpathSync)(workspace);
+  if (!normalizedAbsolute(real).startsWith(`${normalizedAbsolute(workspaceReal)}/`)) {
+    throw new Error(`context-source-realpath-escaped:${source.id}`);
+  }
+  return { absolute: real, relative: relative.replace(/\\/g, "/"), external: false };
 }
 
 function contextGitStatusArgs(workspace, catalog) {
@@ -255,15 +302,9 @@ function collectSourceSnapshots(workspaceValue, catalogValue) {
       }
       continue;
     }
-    let relative;
     try {
-      relative = safeRelativePath(workspace, source.locator);
-    } catch {
-      snapshots.push({ sourceId: source.id, state: "unavailable", error: "source locator is outside the authorized workspace" });
-      continue;
-    }
-    const absolute = path.join(workspace, relative);
-    try {
+      const target = sourceSnapshotTarget(workspace, source);
+      const absolute = target.absolute;
       const stat = fs.statSync(absolute);
       if (!stat.isFile()) throw new Error("source is not a file");
       snapshots.push({
@@ -338,4 +379,5 @@ module.exports = {
   decideContextRefresh,
   fingerprintSourceSnapshots,
   normalizeContextScoutArtifact,
+  sourceSnapshotTarget,
 };
